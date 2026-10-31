@@ -913,7 +913,7 @@ VIPCARGAS con su JWT, y el cliente nunca más necesita conocer su clave del casi
   **#304:** Perfil con avatar (`#pfUserBox`, `openAvatarPicker`/`pickAvatar`; `User.avatar` vía `GET/POST /api/me/avatar`);
   los íconos de nivel se desbloquean por `vipStatus.levelIndex`.
   **#296 → #695:** `playNow` y todo "jugar" con sesión abren SIEMPRE ADENTRO (`openPlatform` → overlay `#casinoOverlay` con Carga rápida,
-  Retirar e Ir a Soporte, también en navegador); `/jugar.html` (pestaña aparte, barra "‹ Volver a cargas") queda sólo para el modo prueba sin app instalada;
+  Retirar y 🎁 Reembolsos (#994: Soporte pasó a la barra de arriba del casino, `#ctSupport`), también en navegador); `/jugar.html` (pestaña aparte, barra "‹ Volver a cargas") queda sólo para el modo prueba sin app instalada;
   `body.is-tester` (username en `TESTER_USERNAMES`, home.js) es lo único que muestra los botones test; `_paintPlatformTexts`
   adapta Info/tarjeta de plataformas a la cantidad de plataformas habilitadas (tilde en COMANDOS → "Plataformas
   ofrecidas"). **#298:** una plataforma habilitada SIN API es "Próximamente": visible (pestaña del Inicio y tarjeta
@@ -1590,7 +1590,9 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
   todas las instancias). La PWA (`VIP.auth.forceBlockedLogout`, socket.js) sale al login con el motivo; además auth.js envuelve `fetch` y cualquier
   `403 USER_BLOCKED` hace lo mismo. El bloqueo manual (`/api/admin/users/:id/block`) usa el mismo `_blockUserAccount`.
   ⚠️ La sesión ya abierta DENTRO del casino de 1girox no la cortamos nosotros (no hay endpoint); no puede retirar ni cargar por la app.
-- **Registro cerrado:** `registrationMode = 'closed'` (Configuración → Registro de clientes → ⛔). `_inviteOnlyBlocks` lo rechaza en
-  `/api/auth/register` y `quick-entry`, y `_landingSignupHandler` también (landing de publicidad, `REGISTRATION_CLOSED`). Texto `/sys_register_closed`.
+- **Registro cerrado (#993 → #994: sólo la página principal):** `registrationMode = 'closed'` (Configuración → Registro de clientes → ⛔).
+  `_inviteOnlyBlocks` lo rechaza en `/api/auth/register` y `quick-entry` y `_landingSignupHandler` también (`REGISTRATION_CLOSED`), SALVO que venga
+  la campaña ACTIVA de un publicista (`_closedAllowsCampaign`: código ≠ INGRESO): la landing `/l/:code` y la app abierta por un link de publicidad
+  (`loginhero.js` `viaAd`) siguen registrando. Los links de referido NO pasan (a diferencia de 'invite'). Texto `/sys_register_closed`.
   Siguen: login, alta desde el panel (`/api/users`, `/api/admin/users`, publisher-admin) y la creación local de un jugador que YA existe en 1girox.
 - Test: `node scripts/test-fraud-auto.js` (10 casos).

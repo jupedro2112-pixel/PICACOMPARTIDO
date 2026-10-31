@@ -6060,7 +6060,7 @@ async function loadRegistrationMode() {
         const schk = document.getElementById('regQuickSmsChk'); if (schk) { schk.checked = j.quickEntrySms !== false; schk.disabled = !j.canEdit; } // #541
         const ochk = document.getElementById('regOrganicGiftsChk'); if (ochk) { ochk.checked = j.organicGifts === true; ochk.disabled = !j.canEdit; } // #975
         if (btn) btn.style.display = j.canEdit ? '' : 'none';
-        if (st) st.textContent = (j.mode === 'closed' ? 'Ahora: ⛔ REGISTRO CERRADO (nadie crea cuentas; login abierto)' : j.mode === 'invite' ? 'Ahora: 🔒 SÓLO CON INVITACIÓN (landing + referidos; login abierto)' : (j.mode === 'quick' ? 'Ahora: ENTRADA RÁPIDA (nombre' + (j.quickEntrySms !== false ? ' + celular verificado' : ', sin SMS') + ')' : 'Ahora: registro con SMS')) + (j.organicGifts ? ' · registro abierto CON regalos' : ' · registro abierto SIN regalos de bienvenida') + (j.entryLogin ? ' · pantalla de ingreso: INICIAR SESIÓN' : '');
+        if (st) st.textContent = (j.mode === 'closed' ? 'Ahora: ⛔ REGISTRO CERRADO en la página principal (la landing de publicidad sí registra; login abierto)' : j.mode === 'invite' ? 'Ahora: 🔒 SÓLO CON INVITACIÓN (landing + referidos; login abierto)' : (j.mode === 'quick' ? 'Ahora: ENTRADA RÁPIDA (nombre' + (j.quickEntrySms !== false ? ' + celular verificado' : ', sin SMS') + ')' : 'Ahora: registro con SMS')) + (j.organicGifts ? ' · registro abierto CON regalos' : ' · registro abierto SIN regalos de bienvenida') + (j.entryLogin ? ' · pantalla de ingreso: INICIAR SESIÓN' : '');
     } catch (_) {}
 }
 async function saveRegistrationMode() {
@@ -6072,7 +6072,7 @@ async function saveRegistrationMode() {
     try {
         const r = await authFetch('/api/admin/registration-mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode, entryLogin, quickEntrySms, organicGifts }) });
         const j = await r.json(); if (!r.ok) { showToast(j.error || 'No se pudo guardar', 'error'); return; }
-        showToast(mode === 'closed' ? '⛔ REGISTRO CERRADO: nadie puede crear cuentas nuevas' : mode === 'invite' ? '🔒 Registro SÓLO CON INVITACIÓN activado (landing y referidos)' : (mode === 'quick' ? 'Registro DESACTIVADO: la app pide sólo el nombre y entra directo' : 'Registro con SMS activado'), 'success');
+        showToast(mode === 'closed' ? '⛔ REGISTRO CERRADO en la página principal: sólo la landing de publicidad crea cuentas' : mode === 'invite' ? '🔒 Registro SÓLO CON INVITACIÓN activado (landing y referidos)' : (mode === 'quick' ? 'Registro DESACTIVADO: la app pide sólo el nombre y entra directo' : 'Registro con SMS activado'), 'success');
         loadRegistrationMode();
     } catch (_) { showToast('Error de conexión', 'error'); }
 }

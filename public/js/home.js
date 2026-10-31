@@ -2466,7 +2466,7 @@
         p.innerHTML =
             // #711 (owner): "–" minimiza (queda sólo el logo de PICA ROJA como burbuja movible); "✕" cierra y la burbuja vuelve a logo + texto.
             '<div class="cl-head"><span>💳 Carga rápida</span><button type="button" class="cl-close" onclick="VIP.home.casinoQuickClose()" title="Cerrar">✕</button></div>' + // #723: sólo ✕
-            (cbu ? row('Alias', cbu.alias) + row('CBU', cbu.number) + row('Titular', cbu.titular) : (_cqCbuTries >= 3 ? '<div class="cl-meta">No pudimos traer los datos de la cuenta. Tocá "Ir a Soporte" y te los pasamos.</div>' : '<div class="cl-meta">cargando datos…</div>')) +
+            (cbu ? row('Alias', cbu.alias) + row('CBU', cbu.number) + row('Titular', cbu.titular) : (_cqCbuTries >= 3 ? '<div class="cl-meta">No pudimos traer los datos de la cuenta. Tocá Soporte (arriba) y te los pasamos.</div>' : '<div class="cl-meta">cargando datos…</div>')) +
             // (#631: si los datos todavía no llegaron, se vuelve a pintar en 1,5 s)
             _fdNoteHtml() + // #626
             // #684 (owner): carga mínima clara también acá
@@ -2475,9 +2475,9 @@
             (function () { const md = '$' + (Number(_platforms && _platforms.minDepositArs) || 2000).toLocaleString('es-AR'); const first = document.body.classList.contains('nodep'); return '<button type="button" class="cl-btn cl-attach' + (first ? ' cl-first' : '') + '" onclick="VIP.autoload.sendReceipt()">' + (first ? '⚡ PRIMERA CARGA · adjuntá tu comprobante' : '📎 Adjuntar comprobante') + _sbTagHtml() + '<small class="min-tag min-always">' + (first ? '⚠️ Aviso importante: carga mínima ' + md : 'Carga mínima ' + md + ' · con menos no se acredita') + '</small></button><div class="rcpt-note cl-rcpt">📸 Con todos los datos visibles: si no se ven, se rechaza</div>' + ((Number(_platforms && _platforms.depositRolloverX) || 0) > 0 ? '<div class="rcpt-note cl-rcpt cl-rx">🛡️ Antifraude: cada carga se juega ×' + Number(_platforms.depositRolloverX) + ' antes de retirarla</div>' : ''); })() + // #885 // #742: + bono de historia · #766: PRIMERA CARGA · #808
             // #670 (owner): Retirar desde adentro del casino (mismo flujo que el botón de afuera: datos + SMS + pago automático)
             '<button type="button" class="cl-btn cl-wd" onclick="VIP.home.casinoWithdraw()">💸 Retirar premio</button>' +
-            // #687 (owner): botón para ir DIRECTO a Soporte desde adentro del casino
-            '<button type="button" class="cl-btn cl-sup" onclick="VIP.home.casinoSupport()">💬 Ir a Soporte</button>' +
-            _igQuickBtnHtml(); // #722 (owner): "instalar después" vive acá, abajo de Soporte
+            // #994 (owner 2026-10-31): "sacá Soporte de adentro y meté Reembolsos; Soporte queda arriba en el menú superior" (antes #687: Ir a Soporte)
+            '<button type="button" class="cl-btn cl-sup" onclick="VIP.home.svcRefund()">🎁 Reembolsos</button>' +
+            _igQuickBtnHtml(); // #722 (owner): "instalar después" vive acá, abajo de Reembolsos
         p.style.display = '';
         _fdNotesPaint();
         // #839: sin datos ⇒ se PIDEN (antes sólo se re-pintaba esperando que otra pantalla los cargara); hasta 3 intentos.
@@ -2509,6 +2509,8 @@
                     // cierran (–), queda la píldora "Sorteo mensual" en el medio, que lo vuelve a abrir. sorteos.js (paintCasino) maneja los dos.
                     '<span class="casino-brand" id="casinoBrand" aria-label="PICA ROJA oficial"><span class="cb-box"><img src="/icons/icon-192x192.png" alt=""><span class="cb-txt"><b>PICA ROJA</b><small>OFICIAL</small></span></span></span>' +
                     '<button type="button" class="casino-brand casino-srt" id="casinoSrtBtn" hidden onclick="VIP.sorteos.casinoBar(true)" aria-label="Sorteo mensual"><span class="cb-box"><span class="cb-ico" data-srt-brand-ico>🏆</span><span class="cb-txt"><b data-srt-brand-title>Sorteo mensual</b><small data-srt-brand-sub>NOVEDAD</small></span></span></button>' +
+                    // #994 (owner): Soporte vive ARRIBA en la barra del casino (salió del panel de Carga rápida)
+                    '<button type="button" class="tn-btn" id="ctSupport" onclick="VIP.home.casinoSupport()" title="Soporte: hablá con una persona"><span class="tn-ico"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12.5a7.5 7.5 0 0 1-11 6.6L4 20l1.2-4.4A7.5 7.5 0 1 1 20 12.5z"/><path d="M8.5 11.5h7M8.5 14.5h4.5"/></svg></span><span class="tn-lbl">Soporte</span></button>' +
                     '<button type="button" class="tn-btn tn-stories" id="ctStories" onclick="VIP.stories.open()" title="Historias"><span class="tn-ico st-ring"><span class="st-core">▶</span><span class="st-badge" id="ctStoriesBadge" style="display:none">1</span></span><span class="tn-lbl">Historias</span></button>' +
                     '<button type="button" class="tn-btn" onclick="VIP.home.casinoInfo()" title="Información del servicio"><span class="tn-ico"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.2"/><path d="M12 11v5.5M12 7.6v.2"/></svg></span><span class="tn-lbl">Info</span></button>' +
                     '<button type="button" class="tn-btn" onclick="VIP.home.openProfile()" title="Tu perfil"><span class="tn-ico"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8.5" r="3.8"/><path d="M4.5 20.5c.8-4 3.9-6 7.5-6s6.7 2 7.5 6"/></svg></span><span class="tn-lbl">Perfil</span></button>' +

@@ -35,7 +35,7 @@
             const _isAd = (c) => !!c && String(c).toUpperCase() !== 'INGRESO';
             try { const inj = window.__VIP_CAMPAIGN_CODE__; if (inj && typeof inj === 'string' && inj.indexOf('__VIP_CAMPAIGN') === -1 && _isAd(inj)) viaAd = true; } catch (_) {}
             try { if (!viaAd && VIP.campaign && VIP.campaign.getActive) { const a = VIP.campaign.getActive(); viaAd = !!(a && _isAd(a.code)); } } catch (_) {}
-            const closed = info.registrationMode === 'closed'; // #993: REGISTRO CERRADO a todos (también por link de publicidad o de referido)
+            const closed = info.registrationMode === 'closed' && !viaAd; // #993: REGISTRO CERRADO en la página principal (también referidos) · #994: el link de publicidad sí registra
             document.body.classList.toggle('reg-quick', (info.registrationMode === 'quick' || viaAd) && !closed);
             // #538: tilde del panel "Pantalla de ingreso = Iniciar sesión": usuario + clave + olvidé mi contraseña, sin bono.
             // Un link de publicidad o de referido SIEMPRE muestra el registro (si no, el cliente nuevo no sabría qué hacer).

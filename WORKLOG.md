@@ -4,7 +4,20 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-10-30**
+> **Última actualización: 2026-10-31**
+
+## Sesión 2026-10-31
+
+### 994. ⛔ Registro cerrado SÓLO en la página principal (la landing sí registra) + 🎁 Reembolsos en vez de Soporte dentro de Girox — SW v651 · admin SW v210
+**Pedido (owner):** "tema registro no quiero que esté habilitado sólo para la página principal, para landing sí quiero que se registren; tema soporte es
+sacarlo de adentro y meter reembolsos en vez de soporte, que soporte quede arriba nomás en el menú superior".
+- **Registro:** `'closed'` ahora deja pasar la campaña ACTIVA de un publicista (`_closedAllowsCampaign` en server.js: código ≠ INGRESO, `Campaign.isActive`)
+  en `_inviteOnlyBlocks` y `_landingSignupHandler`. Cortados: registro de la app, entrada rápida (INGRESO) y links de referido. `loginhero.js`: con
+  `viaAd` no se muestra el aviso de cerrado. Textos del panel (tilde ⛔, estado y toast) actualizados. Probado con base simulada (9 casos).
+- **Girox (casino embebido):** en el panel Carga rápida el botón "💬 Ir a Soporte" pasó a "🎁 Reembolsos" (`VIP.home.svcRefund`, modal unificado;
+  los modales van encima del casino por `body.casino-open`). Soporte quedó ARRIBA en la barra del casino (`#ctSupport`, entre la marca y Historias,
+  mismo `casinoSupport()`).
+- **Ojo al deploy:** si el registro estaba en ⛔, desde ahora las landings de publicistas activos vuelven a crear cuentas (era lo pedido).
 
 ## Sesión 2026-10-30
 

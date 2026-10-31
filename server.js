@@ -5073,8 +5073,8 @@ async function _landingSignupHandler(req, res) {
     if (String(process.env.LANDING_SIGNUP_DISABLED || '').toLowerCase() === 'true') {
       return res.status(410).json({ error: 'El registro rápido no está disponible en este momento.' });
     }
-    // #993: REGISTRO CERRADO también corta la landing de publicidad (antes sólo el modo invitación miraba la app).
-    if ((await getRegistrationMode()) === 'closed') return res.status(403).json({ error: await renderSystemCommand('/sys_register_closed', REGISTER_CLOSED_DEFAULT, {}), code: 'REGISTRATION_CLOSED' });
+    // #993/#994: REGISTRO CERRADO corta todo salvo la landing de un publicista (campaña activa; la entrada rápida entra acá con INGRESO).
+    if ((await getRegistrationMode()) === 'closed' && !(await _closedAllowsCampaign(req.body && req.body.campaignCode))) return res.status(403).json({ error: await renderSystemCommand('/sys_register_closed', REGISTER_CLOSED_DEFAULT, {}), code: 'REGISTRATION_CLOSED' });
 
     const { name, campaignCode, utm, fbc, fbp, landingUrl, referralCode } = req.body || {};
     // #532 (seguridad/#529): el link de referido (/?ref=CODE) llega hasta acá también en el registro rápido y en la landing.
@@ -5365,7 +5365,9 @@ async function getRegistrationMode() {
   // #425 (owner): default 'quick' — la entrada con el nombre ES la forma de registro; 'sms' queda como opción del tilde.
   // #748 (owner): 'invite' = SÓLO CON INVITACIÓN: nadie se registra desde la app; sólo entra quien llega por la landing (campaña
   // activa) o por un link de referido de un cliente. Iniciar sesión sigue abierto para los que ya son clientes.
-  // #993 (owner 2026-10-30): 'closed' = REGISTRO CERRADO a todos (ni la app, ni la landing, ni referidos); sólo el panel crea cuentas. Login abierto.
+  // #993 (owner 2026-10-30): 'closed' = REGISTRO CERRADO en la página principal (app, entrada rápida, referidos). Login abierto.
+  // #994 (owner 2026-10-31): "no quiero que esté habilitado sólo para la página principal; para landing sí quiero que se registren" ⇒
+  // la landing de publicidad (campaña ACTIVA distinta de INGRESO) sigue creando cuentas (_closedAllowsCampaign).
   try { const v = await getConfig('registrationMode', 'quick'); return v === 'sms' ? 'sms' : (v === 'invite' ? 'invite' : (v === 'closed' ? 'closed' : 'quick')); } catch (_) { return 'quick'; }
 }
 const ACCOUNT_BLOCKED_DEFAULT = '🔒 Tu cuenta fue bloqueada por seguridad y se cerró la sesión. Si creés que es un error, escribinos desde Soporte (pantalla de ingreso).';
@@ -5374,10 +5376,16 @@ const REGISTER_INVITE_DEFAULT = '🔒 El registro es sólo con invitación, por 
 // #975: ¿el registro abierto (sin publicidad ni referido) lleva regalos de bienvenida? Default NO (owner: "sin ningún beneficio para que no
 // llegue gente a querer estafar; sí promocionar instalar la app para recibir notificaciones, el reembolso y el servicio, pero no regalos").
 async function _organicGiftsAllowed() { try { return (await getConfig('organicWelcomeGifts', false)) === true; } catch (_) { return false; } }
+// #994: con el registro CERRADO sólo pasa el link de un publicista (campaña activa; INGRESO es la orgánica de la página principal).
+async function _closedAllowsCampaign(campaignCode) {
+  const camp = String(campaignCode || '').toUpperCase().trim();
+  if (!camp || camp === 'INGRESO') return false;
+  try { return !!(await Campaign.exists({ code: camp, isActive: { $ne: false } })); } catch (_) { return false; }
+}
 async function _inviteOnlyBlocks(referralCode, campaignCode) {
   try {
     const mode = await getRegistrationMode();
-    if (mode === 'closed') return await renderSystemCommand('/sys_register_closed', REGISTER_CLOSED_DEFAULT, {}); // #993
+    if (mode === 'closed') return (await _closedAllowsCampaign(campaignCode)) ? null : await renderSystemCommand('/sys_register_closed', REGISTER_CLOSED_DEFAULT, {}); // #993 · #994: la landing sí
     if (mode !== 'invite') return null;
     const ref = String(referralCode || '').toUpperCase().trim(); const camp = String(campaignCode || '').toUpperCase().trim();
     if (ref && await User.exists({ referralCode: ref })) return null;
