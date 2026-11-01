@@ -1597,6 +1597,12 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
   Siguen: login, alta desde el panel (`/api/users`, `/api/admin/users`, publisher-admin) y la creación local de un jugador que YA existe en 1girox.
 - Test: `node scripts/test-fraud-auto.js` (10 casos).
 
+### Cruce comprobante ↔ banco por COELSA / CBU / CUIT #999 (2026-11-01)
+- La IA extrae `coelsa_id` y `cuit_origen` además del N° de operación. `_comprobanteMatchesMovement` (lo usan las DOS direcciones: comprobante
+  que llega y movimiento que llega) prueba en orden: N° de operación vs coelsaCode/externalId → COELSA del comprobante (exacto, en externalId o
+  `_coelsaNear`) → CBU/CVU de origen (22 dígitos) vs `fromCBU` → CUIT vs `fromCUIT` → nombre. Todo exige el mismo monto; los de origen exigen
+  además `_destConsistentOk`. Más de un movimiento ⇒ ambiguo, no carga sola.
+
 ### Mediciones guardadas de la Revisión semanal #998 (2026-11-01)
 - `_weeklyReviewTick` además de pisar `Config['weeklyReview']` (informe completo vigente) agrega `_weeklySnapshot(rep)` a `Config['weeklyReviewLog']`
   (array, la más nueva primero, máx. 100). `GET /api/admin/inicio/weekly-review` devuelve `log`; el panel lo dibuja con `_wrLogHtml` (compara

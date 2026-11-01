@@ -2342,7 +2342,7 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
     )) {
       opKey = '';
     }
-    let dedupeKey = opKey || null;
+    let dedupeKey = opKey || (result.coelsaId ? 'coelsa' + _normComprobanteKey(result.coelsaId) : null); // #999: el COELSA es único por transferencia
     // Fallback: combo que incluye el NOMBRE de origen (más único que el CBU repetido).
     if (!dedupeKey && result.amount && (result.originHolder || result.originCbu || result.paymentDate)) {
       dedupeKey = _normComprobanteKey(`${result.amount}|${result.originHolder || ''}|${result.originCbu || ''}|${result.paymentDate || ''}`);
@@ -2352,6 +2352,7 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
       id: uuidv4(), userId, username, messageId,
       isComprobante: true, aiConfidence: result.confidence || 0,
       operationNumber: result.operationNumber || null,
+      coelsaId: result.coelsaId || null, originCuit: result.originCuit || null, // #999
       amount: result.amount, originHolder: result.originHolder || null,
       originCbu: result.originCbu || null,
       destHolder: result.destHolder || null, destCbu: result.destCbu || null,
@@ -2363,9 +2364,9 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
     // #808: comprobante reconocido pero con datos clave ilegibles (sin monto, o sin titular y sin N° de operación) ⇒ pedir reenvío.
     // Sigue el flujo igual (queda en la cola para revisión manual), así no se pierde si el agente lo puede leer.
     // #825: también sin fecha/hora (se usa para ubicar la transferencia).
-    if (!(Number(result.amount) > 0) || (!result.originHolder && !result.operationNumber) || !result.paymentDate) _askReceiptResend(userId, username, 'incomplete', base.id);
+    if (!(Number(result.amount) > 0) || (!result.originHolder && !result.operationNumber && !result.coelsaId) || !result.paymentDate) _askReceiptResend(userId, username, 'incomplete', base.id);
     const montoStr = result.amount ? `$${Number(result.amount).toLocaleString('es-AR')}` : 's/monto';
-    const opStr = result.operationNumber ? `op. N°${result.operationNumber}` : 's/N° operación';
+    const opStr = (result.operationNumber ? `op. N°${result.operationNumber}` : 's/N° operación') + (result.coelsaId ? ` · COELSA ${result.coelsaId}` : '');
     const dataDesc = `${opStr} · ${montoStr}${result.paymentDate ? ' · ' + result.paymentDate : ''}`;
 
     // Buscar un comprobante ANTERIOR duplicado: por IMAGEN idéntica (imageHash) O por
@@ -2543,6 +2544,19 @@ function _destConsistentOk(comprobante, movement, cfg) {
 //       Es DEFINITIVO y funciona para cualquier banco (no necesita el nombre del que envía).
 //   (2) Nombre de ORIGEN del comprobante == fromName del movimiento, con destino consistente.
 // Si no se cumple ninguno → no es match (queda manual).
+// #999: dos COELSA "casi iguales": mismo largo y a lo sumo 2 caracteres distintos, todos entre letras que la lectura confunde (0/O/D/Q, 1/I/L,
+// 5/S, 8/B, 2/Z, 6/G). Sólo se usa junto con el MISMO monto.
+const _COELSA_LOOK = ['0ODQ', '1IL', '5S', '8B', '2Z', '6G'];
+function _coelsaNear(a, b) {
+  a = String(a || '').toUpperCase(); b = String(b || '').toUpperCase();
+  if (a.length < 16 || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === b[i]) continue;
+    if (++diff > 2 || !_COELSA_LOOK.some((g) => g.includes(a[i]) && g.includes(b[i]))) return false;
+  }
+  return true;
+}
 function _comprobanteMatchesMovement(comprobante, movement, cfg) {
   if (!_amountsEqual(comprobante.amount, movement.amount)) return false;
 
@@ -2554,6 +2568,21 @@ function _comprobanteMatchesMovement(comprobante, movement, cfg) {
     if (coelsa && coelsa === opKey) return true;
     if (ext && opKey.length >= 8 && ext.includes(opKey)) return true;
   }
+
+  // (1b) #999: COELSA ID leído del comprobante (las billeteras como Naranja X / Fiwind lo muestran aparte del código interno).
+  const cKey = _normComprobanteKey(comprobante.coelsaId);
+  if (cKey && cKey.length >= 12) {
+    const coelsa = _normComprobanteKey(movement.coelsaCode), ext = _normComprobanteKey(movement.externalId);
+    if ((coelsa && coelsa === cKey) || (ext && ext.includes(cKey))) return true;
+    if (coelsa && _coelsaNear(coelsa, cKey)) return true; // la IA confundió 0/O, 1/I… (mismo monto igual)
+  }
+
+  // (1c) #999: misma cuenta de ORIGEN (CBU/CVU de 22 dígitos) o mismo CUIT/CUIL que el movimiento, con el mismo monto y destino coherente.
+  // (Si hay dos transferencias iguales en la ventana, el llamador lo ve AMBIGUO y no carga sola.)
+  const oCbu = _digits(comprobante.originCbu), mCbu = _digits(movement.fromCBU);
+  if (oCbu.length === 22 && mCbu.length === 22 && oCbu === mCbu && _destConsistentOk(comprobante, movement, cfg)) return true;
+  const oCuit = _digits(comprobante.originCuit), mCuit = _digits(movement.fromCUIT);
+  if (oCuit.length === 11 && mCuit.length === 11 && oCuit === mCuit && _destConsistentOk(comprobante, movement, cfg)) return true;
 
   // (2) Fallback por nombre de origen + destino consistente.
   if (comprobante.originHolder && movement.fromName &&

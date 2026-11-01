@@ -8,6 +8,17 @@
 
 ## Sesión 2026-11-01
 
+### 999. 🧾 Comprobantes de billeteras (Fiwind, Naranja X…) que no entraban solos: COELSA ID + CBU/CUIT de origen
+**Pedido (owner):** dos comprobantes (uno de Fiwind, otro de Naranja X) no se leían para la carga automática.
+**Causa:** la IA sólo extraía un "número de operación" genérico. Esas billeteras muestran su código interno (un UUID en Naranja X) y el
+**COELSA ID** aparte ("Identificación de la transferencia" en Fiwind), que es lo que trae el banco en cada movimiento ⇒ no cruzaba por número y
+quedaba sólo el nombre, que con billeteras puede venir distinto en el banco.
+**Hecho:** `comprobanteAiService` pide `coelsa_id` y `cuit_origen` (⇒ `Comprobante.coelsaId` / `originCuit`). `_comprobanteMatchesMovement`
+cruza además por COELSA (exacto, dentro del externalID, o "casi igual" con ≤ 2 letras confundibles 0/O, 1/I…: `_coelsaNear`), por CBU/CVU de
+origen de 22 dígitos y por CUIT de origen — siempre con el MISMO monto y destino coherente; si dos movimientos coinciden queda AMBIGUO (a mano).
+El COELSA también sirve de huella anti-duplicado si no hay N° de operación. Test `scripts/test-receipt-match.js` (datos inventados: repo público).
+**Ojo:** los comprobantes viejos no se re-leen solos; si no se acreditaron, se cargan a mano desde Comprobantes a verificar.
+
 ### 998. 🗂️ Revisión semanal: cada medición queda guardada y se compara con la anterior — admin SW v213
 **Pedido (owner):** "Medir ahora siempre borra el que estaba; quiero que cada vez quede guardado abajo con el resumen, para ir viendo cómo
 avanza y comparar fecha a fecha si vamos bien o mal".

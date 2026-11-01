@@ -26,6 +26,8 @@ const comprobanteSchema = new mongoose.Schema({
 
   // Datos extraídos del comprobante (los que la IA pudo leer)
   operationNumber: { type: String, default: null, trim: true },
+  coelsaId: { type: String, default: null, trim: true, index: true }, // #999: ID COELSA de la transferencia (cruce exacto con el banco)
+  originCuit: { type: String, default: null, trim: true },          // #999: CUIT/CUIL de quien envía (sólo dígitos)
   amount: { type: Number, default: null },
   originHolder: { type: String, default: null, trim: true }, // titular / origen
   originCbu: { type: String, default: null, trim: true },    // CBU/CVU/alias origen
