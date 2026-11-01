@@ -314,6 +314,10 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`). Git user: j
   totales del panel de 1girox que carga el owner (`DailyClose.giroxPanel`). Un flujo NUEVO que mueva fichas tiene que dejar Transaction con
   `platform` y el `type` correcto (si no, el cierre con 1girox no cuadra). **AGENTES (#889):** depositor/withdrawer ven 8 secciones
   (`AGENT_SECTIONS` en admin.js). (La clave temporal del panel de #889 se revirtió en #892.)
+- **FRAUDE CON BONOS + BLOQUEO MANUAL (#996):** reglas `bonus_flat_play` / `sports_flat` / `mirror_group` / `bonus_hunter` en `fraudRadar.bonusRules`
+  (test `scripts/test-bonus-fraud.js`; 1girox NO da apuesta por apuesta: se detecta el rastro y cada señal dice QUÉ VERIFICAR en admin.1girox.com).
+  El antifraude NO bloquea solo salvo `Config['fraudAuto'].autoBlock` (owner: "que sea manual"): deja observación PRIORIDAD ALTA + `PendingPayout.fraudEvidence`.
+  Todo bloqueo / desbloqueo / rechazo de retiro queda en `BlockEvent` (sólo admin, sin borrado) y pide MOTIVO. Pedido a 1girox: `docs/PEDIDO-1GIROX-BONOS.md`.
 - **CUENTA SECUNDARIA (#992):** mismo teléfono / celular / notificaciones / CBU que envía que una cuenta más vieja ⇒ `User.duplicateOf` + fraudFlag
   `dup_account` (`_dupAccountCheck`; la IP NO cuenta). Sin NINGÚN regalo: guard central `girox.setGiftGuard` en `creditGift`/`creditUserBalance` (un regalo
   NUEVO tiene que pasar por esas funciones; sólo devoluciones de plata propia o la Bonificación manual van con `noGiftGuard`) y `resolveAutoBonus` sin bono.

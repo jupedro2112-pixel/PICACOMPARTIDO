@@ -2989,10 +2989,12 @@ async function _payoutPost(id, action, body) {
     return r;
 }
 async function cancelPayout(id) {
-    if (!confirm('¿Rechazar este pago? NO se paga. Como las fichas se descuentan recién al pagar, acá no hay nada que devolver: solo se cancela la solicitud.')) return;
+    const _rr = prompt('¿Rechazar este pago? NO se paga (las fichas se descuentan recién al pagar: no hay nada que devolver).\n\nMotivo (obligatorio, queda en el historial):', '');
+    if (_rr === null) return;
+    if (_rr.trim().length < 5) { showToast('El motivo es obligatorio (mínimo 5 caracteres)', 'error'); return; } // #996
     const el = document.getElementById('chatPayoutBanner');
     try {
-        const r = await _payoutPost(id, 'cancel'); // #995
+        const r = await _payoutPost(id, 'cancel', { reason: _rr.trim() }); // #995 · #996: con motivo
         const j = await r.json();
         if (r.ok && j.success) {
             // Flujo nuevo: noDeduction = no se había descontado nada (caso normal).
@@ -4607,15 +4609,23 @@ async function handleBlockUser() {
 }
 
 // Handles unblocking a user directly (with a simple confirm dialog).
+// #996: desbloquear pide MOTIVO (queda en el historial de bloqueos).
+function _askUnblockReason(username) {
+    const r = prompt('Motivo para desbloquear a ' + username + ' (obligatorio, queda en el historial):', '');
+    if (r === null) return null;
+    if (r.trim().length < 5) { showToast('El motivo es obligatorio (mínimo 5 caracteres)', 'error'); return null; }
+    return r.trim();
+}
 async function handleUnblockUser(userId, username) {
-    if (!confirm(`¿Desbloquear a ${username}?`)) return;
+    const _ur = _askUnblockReason(username); if (!_ur) return;
     try {
         const response = await fetch(`${API_URL}/api/admin/users/${encodeURIComponent(userId)}/unblock`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${currentToken}`
-            }
+            },
+            body: JSON.stringify({ reason: _ur }) // #996
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Error al desbloquear usuario');
@@ -4941,7 +4951,7 @@ async function handleUnblockFromChat() {
         showToast('Seleccioná un chat primero', 'error');
         return;
     }
-    if (!confirm(`¿Desbloquear a ${selectedUsername}?`)) return;
+    const _ur = _askUnblockReason(selectedUsername); if (!_ur) return;
     const userId = selectedUserId;
     const username = selectedUsername;
     try {
@@ -4950,7 +4960,8 @@ async function handleUnblockFromChat() {
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${currentToken}`
-            }
+            },
+            body: JSON.stringify({ reason: _ur }) // #996
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Error al desbloquear usuario');
@@ -6317,6 +6328,7 @@ async function loadPayReview() {
             return '<div style="padding:12px;border-radius:10px;background:rgba(255,255,255,0.04);border-left:4px solid ' + color + ';font-size:12.5px;line-height:1.6;">' +
                 '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline;"><div><b style="font-size:16px;">' + fmtARS(p.amount) + '</b> · <b>' + escapeHtml(p.username) + '</b> · ' + escapeHtml(p.platform || 'girox') + (p.status === 'failed' ? ' · <span style="color:#ff8080;">FALLÓ: ' + escapeHtml(p.error || '') + '</span>' : (p.reviewRequired ? ' · <span style="color:#ffb347;">en revisión</span>' : ' · <span style="color:#aaa;">pago automático pendiente</span>')) + '</div><div style="color:#888;font-size:11px;">' + fmtFechaHoraAR(p.createdAt) + '</div></div>' +
                 (p.reviewReason ? '<div style="color:#ffb347;">🛡️ ' + escapeHtml(p.reviewReason) + '</div>' : '') + // #881
+                _prEvidenceHtml(p.fraudEvidence) + // #996: detalle de lo que detectó el antifraude
                 '<div style="color:#aaa;">CBU/alias: <code>' + escapeHtml(p.cbu || p.alias || '—') + '</code> · titular: ' + escapeHtml(p.titular || '—') + ' · saldo al pedir: ' + fmtARS(p.balanceBefore || 0) + '</div>' +
                 '<div style="color:#aaa;">Cliente: ' + (rk.daysOld !== null && rk.daysOld !== undefined ? rk.daysOld + ' días' : '—') + ' · cargó ' + rk.deposits + ' veces (' + fmtARS(rk.depositsTotal) + ') · retiró ' + rk.withdrawalsPaid + ' veces (' + fmtARS(rk.withdrawalsTotal) + ') · celular ' + (rk.phoneVerified ? '✅' : '❌') + (rk.acquisitionSource ? ' · origen ' + escapeHtml(rk.acquisitionSource) : '') + '</div>' +
                 (warn.length ? '<div style="color:' + color + ';font-weight:700;">⚠️ ' + warn.map(escapeHtml).join(' · ') + '</div>' : '<div style="color:#66ff99;">✅ Sin señales de alerta</div>') +
@@ -6325,6 +6337,7 @@ async function loadPayReview() {
                 '<button type="button" class="btn-primary btn-small" onclick="payReviewApprove(\'' + p.id + '\')">✅ Confirmar y pagar</button>' +
                 '<button type="button" class="btn-secondary btn-small" onclick="payReviewOtherBank(\'' + p.id + '\')" title="Ya lo pagaste desde otra cuenta: descuenta las fichas y lo marca pagado (no sale por el banco automático)">🏦 Pagado por banco externo</button>' + // #904
                 '<button type="button" class="btn-secondary btn-small" onclick="payReviewReject(\'' + p.id + '\')" style="color:#ff8080;">⛔ Rechazar</button>' +
+                '<button type="button" class="btn-secondary btn-small" onclick="payReviewRejectBlock(\'' + p.id + '\')" style="color:#fff;background:#b3001b;border-color:#b3001b;" title="Rechaza el retiro y bloquea la cuenta (cierra la sesión). Queda en el historial con tu usuario y el motivo.">🚫 Rechazar y bloquear</button>' + // #996
                 '<button type="button" class="btn-secondary btn-small" onclick="try{viewUserChat(\'' + p.userId + '\')}catch(e){showSection(\'chats\')}">💬 Ver chat</button>' +
                 '</div></div>';
         }).join('');
@@ -6332,6 +6345,29 @@ async function loadPayReview() {
 }
 // #904 (owner): "en pagos pendientes, aceptar el pago descontando fichas pero que diga que se pagó de banco externo". Usa la misma ruta que
 // el botón del chat (/pay-other-bank: descuenta las fichas si no estaban descontadas; si el cliente ya se las jugó, no paga y avisa).
+// #996: lo que detectó el antifraude, regla por regla, con la evidencia (montos, cuentas vinculadas, horarios).
+function _prEvidenceHtml(ev) {
+    if (!ev || !ev.reasons || !ev.reasons.length) return '';
+    return '<details open style="margin:6px 0;padding:8px 10px;border-radius:8px;background:rgba(230,0,35,0.08);border:1px solid rgba(230,0,35,0.35);">' +
+        '<summary style="cursor:pointer;font-weight:800;color:#ff5050;">🚨 Antifraude: ' + escapeHtml(String(ev.score || 0)) + ' puntos · ' + ev.reasons.length + ' señal(es)' + (ev.group && ev.group.length ? ' · grupo: ' + ev.group.map(escapeHtml).join(', ') : '') + '</summary>' +
+        (ev.window && ev.window.from ? '<div style="color:#9ab;font-size:11.5px;margin-top:3px;">🕒 Ventana revisada: ' + escapeHtml(new Date(ev.window.from).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })) + ' → ' + escapeHtml(new Date(ev.window.to).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })) + '</div>' : '') +
+        ev.reasons.map(function (r) { return '<div style="margin-top:5px;"><b>+' + escapeHtml(String(r.pts || 0)) + ' · ' + escapeHtml(r.label || r.key || '') + '</b><div style="color:#bbb;font-size:11.5px;">' + escapeHtml(r.evidence || '') + '</div>' + (r.check ? '<div style="margin-top:2px;padding:4px 6px;border-radius:6px;background:rgba(255,200,0,0.10);color:#ffd36b;font-size:11.5px;">🔍 Qué verificar: ' + escapeHtml(r.check) + '</div>' : '') + '</div>'; }).join('') +
+        '<div style="margin-top:6px;color:#9ab;font-size:11px;">El bloqueo es manual: verificá y decidí (🚫 Rechazar y bloquear queda en el historial con tu usuario y el motivo).</div>' +
+        '</details>';
+}
+async function payReviewRejectBlock(id) {
+    const p = _prItems.find(function (x) { return x.id === id; });
+    const reason = prompt('RECHAZAR y BLOQUEAR ' + (p ? fmtARS(p.amount) + ' de ' + p.username : '') + '.\n\nMotivo (obligatorio, queda en el historial de bloqueos con tu usuario):', '');
+    if (reason === null) return;
+    if (reason.trim().length < 5) { showToast('El motivo es obligatorio (mínimo 5 caracteres)', 'error'); return; }
+    if (!confirm('¿Seguro? Se rechaza el retiro, se BLOQUEA la cuenta y se le cierra la sesión.')) return;
+    try {
+        const r = await _payoutPost(id, 'reject-block', { reason: reason.trim() }); const j = await r.json().catch(function () { return {}; });
+        if (!r.ok) showToast(j.error || 'No se pudo', 'error'); else showToast('🚫 Retiro rechazado' + (j.blocked ? ' y cuenta bloqueada' : ' (la cuenta ya estaba bloqueada)'), 'success');
+        loadPayReview();
+    } catch (_) { showToast('Error de conexión', 'error'); }
+}
+window.payReviewRejectBlock = payReviewRejectBlock;
 async function payReviewOtherBank(id) {
     const p = _prItems.find(function (x) { return x.id === id; });
     if (!confirm('¿Marcar ' + (p ? fmtARS(p.amount) + ' de ' + p.username : 'este retiro') + ' como PAGADO DESDE UN BANCO EXTERNO?\n\nConfirmá sólo si YA hiciste la transferencia por fuera. Se descuentan las fichas del cliente y no sale nada por el banco automático.')) return;
@@ -6364,7 +6400,8 @@ async function payReviewApprove(id) {
 }
 async function payReviewReject(id) {
     const p = _prItems.find(function (x) { return x.id === id; });
-    const reason = prompt('Motivo del rechazo (se guarda en el caso):', 'Revisión anti-estafa'); if (reason === null) return;
+    const reason = prompt('Motivo del rechazo (obligatorio, queda en el historial):', ''); if (reason === null) return;
+    if (reason.trim().length < 5) { showToast('El motivo es obligatorio (mínimo 5 caracteres)', 'error'); return; } // #996
     if (!confirm('¿RECHAZAR el retiro de ' + (p ? fmtARS(p.amount) + ' de ' + p.username : '') + '? No se paga.')) return;
     try {
         const r = await _payoutPost(id, 'cancel', { reason }); // #995 const j = await r.json().catch(function () { return {}; });
@@ -17623,12 +17660,15 @@ async function loadFraud(fresh) {
         _frData = j; renderFraud();
     } catch (e) { box.innerHTML = '<span style="color:#f87171">No se pudo cargar: ' + escHtml(e.message) + '</span>'; }
     loadFraudAuto();
+    try { loadFraudBonus(); } catch (_) {} // #996
+    try { const hc = document.getElementById('frHistCard'); if (hc) hc.style.display = currentAdmin && currentAdmin.role === 'admin' ? '' : 'none'; } catch (_) {} // #996: el historial es sólo del admin
 }
 // #993 ANTIFRAUDE AUTOMÁTICO (config + última pasada)
 async function loadFraudAuto() {
     try {
         const r = await authFetch('/api/admin/fraud/auto-config'); const j = await r.json(); if (!r.ok) return;
         const c = j.config || {}; const on = document.getElementById('frAutoOn'), b = document.getElementById('frAutoBlock'), v = document.getElementById('frAutoReview'), btn = document.getElementById('frAutoSave');
+        const ab = document.getElementById('frAutoBlockOn'); if (ab) { ab.checked = c.autoBlock === true; ab.disabled = !j.canEdit; } // #996
         if (on) { on.checked = c.enabled !== false; on.disabled = !j.canEdit; } if (b) { b.value = c.blockScore; b.disabled = !j.canEdit; } if (v) { v.value = c.reviewScore; v.disabled = !j.canEdit; } if (btn) btn.style.display = j.canEdit ? '' : 'none';
         const l = document.getElementById('frAutoLast'); const x = j.last;
         if (l) l.innerHTML = x ? 'Última pasada: ' + escHtml(new Date(x.at).toLocaleString('es-AR')) + ' · ' + (x.scanned || 0) + ' revisados · <b style="color:#f87171">' + (x.blocked || []).length + ' bloqueados</b>' + ((x.blocked || []).length ? ' (' + escHtml(x.blocked.join(', ')) + ')' : '') + ' · <b style="color:#f59e0b">' + (x.review || []).length + ' en observación</b>' + ((x.review || []).length ? ' (' + escHtml(x.review.join(', ')) + ')' : '') : 'Todavía no corrió ninguna pasada.';
@@ -17637,13 +17677,73 @@ async function loadFraudAuto() {
 async function saveFraudAuto() {
     const enabled = !!(document.getElementById('frAutoOn') || {}).checked;
     const blockScore = Number((document.getElementById('frAutoBlock') || {}).value); const reviewScore = Number((document.getElementById('frAutoReview') || {}).value);
+    const autoBlock = !!(document.getElementById('frAutoBlockOn') || {}).checked; // #996
+    if (autoBlock && !confirm('¿Activar el BLOQUEO AUTOMÁTICO? El sistema va a bloquear y cerrar la sesión sin que un agente lo revise.')) return;
     try {
-        const r = await authFetch('/api/admin/fraud/auto-config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, blockScore, reviewScore }) });
+        const r = await authFetch('/api/admin/fraud/auto-config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, blockScore, reviewScore, autoBlock }) });
         const j = await r.json(); if (!r.ok) { showToast(j.error || 'No se pudo guardar', 'error'); return; }
-        showToast(enabled ? '🤖 Antifraude automático: bloquea desde ' + j.config.blockScore + ' pts, observa desde ' + j.config.reviewScore : 'Antifraude automático APAGADO', 'success'); loadFraudAuto();
+        showToast(!enabled ? 'Antifraude automático APAGADO' : (j.config.autoBlock ? '🤖 Antifraude: BLOQUEA SOLO desde ' + j.config.blockScore + ' pts, observa desde ' + j.config.reviewScore : '🤖 Antifraude: alerta y frena retiros (prioridad alta desde ' + j.config.blockScore + ', observación desde ' + j.config.reviewScore + '); el bloqueo es manual'), 'success'); loadFraudAuto();
     } catch (_) { showToast('Error de conexión', 'error'); }
 }
 window.loadFraudAuto = loadFraudAuto; window.saveFraudAuto = saveFraudAuto;
+// #996: FRAUDE CON BONOS — umbrales (GET/POST /api/admin/fraud/bonus-rules).
+const _FB_FIELDS = [['fbWindow', 'windowHours'], ['fbFlatMin', 'flatMinWagered'], ['fbAvgBet', 'flatMinAvgBet'], ['fbMaxZ', 'flatMaxZ'], ['fbSportsMin', 'sportsMinWagered'], ['fbSportsZ', 'sportsMaxZ'], ['fbGroupMin', 'groupMinWagered'], ['fbGroupWin', 'groupMinWin'], ['fbHuntN', 'hunterCycles'], ['fbHuntH', 'hunterHours']];
+async function loadFraudBonus() {
+    try {
+        const r = await authFetch('/api/admin/fraud/bonus-rules'); const j = await r.json(); if (!r.ok) return;
+        const c = j.config || {}; const el = (id) => document.getElementById(id);
+        if (el('fbOn')) el('fbOn').checked = c.enabled !== false;
+        for (const [id, k] of _FB_FIELDS) if (el(id)) el(id).value = c[k];
+        if (el('fbGroupPct')) el('fbGroupPct').value = Math.round((c.groupMaxNetPct || 0) * 1000) / 10;
+        const h = c.holdAfterBonus || {}; if (el('fbHoldOn')) el('fbHoldOn').checked = h.enabled !== false; if (el('fbHoldH')) el('fbHoldH').value = h.hours; if (el('fbHoldMin')) el('fbHoldMin').value = h.minArs;
+        document.querySelectorAll('#frBonusCard input').forEach(function (i) { i.disabled = !j.canEdit; }); if (el('fbSave')) el('fbSave').style.display = j.canEdit ? '' : 'none';
+        if (el('frBonusState')) el('frBonusState').textContent = c.enabled !== false ? '· encendido' : '· APAGADO';
+    } catch (_) {}
+}
+async function saveFraudBonus(reset) {
+    const el = (id) => document.getElementById(id); let body = {};
+    if (!reset) {
+        body.enabled = !!(el('fbOn') && el('fbOn').checked);
+        for (const [id, k] of _FB_FIELDS) if (el(id) && el(id).value !== '') body[k] = Number(el(id).value);
+        if (el('fbGroupPct') && el('fbGroupPct').value !== '') body.groupMaxNetPct = Number(el('fbGroupPct').value) / 100;
+        body.holdAfterBonus = { enabled: !!(el('fbHoldOn') && el('fbHoldOn').checked), hours: Number(el('fbHoldH') && el('fbHoldH').value), minArs: Number(el('fbHoldMin') && el('fbHoldMin').value) };
+    } else if (!confirm('¿Volver a los valores recomendados del fraude con bonos?')) return;
+    try {
+        const r = await authFetch('/api/admin/fraud/bonus-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'error'); showToast('🎰 Reglas de fraude con bonos guardadas', 'success'); loadFraudBonus();
+    } catch (e) { showToast('No se pudo: ' + e.message, 'error'); }
+}
+window.loadFraudBonus = loadFraudBonus; window.saveFraudBonus = saveFraudBonus;
+// #996: HISTORIAL DE BLOQUEOS (sólo admin general).
+const _BH_ACT = { block: '⛔ Bloqueó', auto_block: '🤖 Bloqueo automático', payout_reject_block: '🚫 Rechazó el retiro y bloqueó', payout_reject: '✋ Rechazó el retiro', unblock: '🔓 Desbloqueó', auto_watch: '🤖 Observación automática', watch: '👁 Puso en observación', legit: '✅ Marcó legítimo' };
+let _bhBefore = null;
+async function loadBlockHistory(more) {
+    const box = document.getElementById('bhList'); if (!box) return;
+    const el = (id) => document.getElementById(id);
+    const qs = new URLSearchParams({ limit: '50' });
+    if (el('bhQ') && el('bhQ').value.trim()) qs.set('q', el('bhQ').value.trim());
+    if (el('bhAction') && el('bhAction').value) qs.set('action', el('bhAction').value);
+    if (el('bhBy') && el('bhBy').value.trim()) qs.set('by', el('bhBy').value.trim());
+    if (more && _bhBefore) qs.set('before', _bhBefore);
+    if (!more) box.innerHTML = 'Cargando…';
+    try {
+        const r = await authFetch('/api/admin/block-history?' + qs.toString()); const j = await r.json();
+        if (!r.ok) { box.innerHTML = '<span style="color:#ff8080;">' + escapeHtml(j.error || 'Error') + '</span>'; return; }
+        const t = j.last30 || {}; const sm = el('bhSummary');
+        if (sm) sm.textContent = 'Últimos 30 días: ' + Object.keys(_BH_ACT).filter(function (k) { return t[k]; }).map(function (k) { return _BH_ACT[k] + ' ' + t[k]; }).join(' · ');
+        const html = (j.items || []).map(function (e) {
+            const ev = e.evidence || {};
+            const evHtml = ev.reasons && ev.reasons.length ? _prEvidenceHtml(ev) : (ev.reviewReason ? '<div style="color:#ffb347;">🛡️ ' + escapeHtml(ev.reviewReason) + '</div>' : (ev.previousBlockReason ? '<div style="color:#9ab;">Estaba bloqueado por: ' + escapeHtml(ev.previousBlockReason) + (ev.wasAuto ? ' (automático)' : '') + '</div>' : ''));
+            return '<div style="padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.04);margin-bottom:6px;line-height:1.5;">' +
+                '<div><b>' + escapeHtml(_BH_ACT[e.action] || e.action) + '</b> · <b>' + escapeHtml(e.username || e.userId) + '</b>' + (e.amount != null ? ' · ' + fmtARS(e.amount) : '') +
+                ' <span style="color:#9ab;">— por ' + escapeHtml(e.by || '?') + (e.role ? ' (' + escapeHtml(e.role) + ')' : '') + ' · ' + escapeHtml(new Date(e.at).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })) + '</span></div>' +
+                '<div>📝 ' + escapeHtml(e.reason || '') + '</div>' + evHtml + '</div>';
+        }).join('');
+        if (more) box.insertAdjacentHTML('beforeend', html); else box.innerHTML = html || '<span style="color:#aaa;">Sin registros.</span>';
+        _bhBefore = j.nextBefore || null; if (el('bhMore')) el('bhMore').style.display = _bhBefore ? '' : 'none';
+    } catch (_) { box.innerHTML = '<span style="color:#ff8080;">Error de conexión</span>'; }
+}
+window.loadBlockHistory = loadBlockHistory;
 function _frMoney(n) { return '$' + Math.round(Number(n) || 0).toLocaleString('es-AR'); }
 function renderFraud() {
     const box = document.getElementById('frList'); if (!box || !_frData) return;
@@ -17671,7 +17771,7 @@ function renderFraud() {
                 '<button class="btn btn-secondary btn-sm" onclick="fraudReview(\'' + escHtml(a.userId) + '\',\'watch\')">👁 Observar</button>' +
                 '<button class="btn btn-secondary btn-sm" onclick="fraudReview(\'' + escHtml(a.userId) + '\',\'legit\')">✅ Es legítimo</button>' +
               '</div></div>' +
-            '<ul style="margin:.5rem 0 0 1rem;padding:0;font-size:.8rem">' + a.reasons.map((r) => '<li style="margin:2px 0"><b>+' + r.pts + '</b> ' + escHtml(r.label) + '<div style="color:#9ca3af;font-size:.75rem">' + escHtml(r.evidence || '') + '</div></li>').join('') + '</ul></div>';
+            '<ul style="margin:.5rem 0 0 1rem;padding:0;font-size:.8rem">' + a.reasons.map((r) => '<li style="margin:2px 0"><b>+' + r.pts + '</b> ' + escHtml(r.label) + '<div style="color:#9ca3af;font-size:.75rem">' + escHtml(r.evidence || '') + '</div>' + (r.check ? '<div style="color:#fbbf24;font-size:.75rem">🔍 Qué verificar: ' + escHtml(r.check) + '</div>' : '') + '</li>').join('') + '</ul></div>'; // #996
     }).join('');
 }
 async function openFraudCase(userId) {
@@ -17684,7 +17784,7 @@ async function openFraudCase(userId) {
         const tbl = (head, rows) => rows.length ? '<div style="overflow:auto"><table class="cron-tbl" style="width:100%;font-size:.76rem"><thead><tr>' + head.map((x) => '<th>' + x + '</th>').join('') + '</tr></thead><tbody>' + rows.join('') + '</tbody></table></div>' : '<div style="color:#888;font-size:.78rem">Sin datos.</div>';
         const users = (arr) => arr && arr.length ? arr.map((x) => '<span style="display:inline-block;margin:2px;padding:1px 8px;border-radius:999px;background:' + (x.isBlocked ? '#7f1d1d' : '#1f2937') + '">' + escHtml(x.username || x) + (x.isBlocked ? ' ⛔' : '') + '</span>').join('') : '<span style="color:#888">ninguna</span>';
         b.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-wrap:wrap"><h2 style="margin:0">🔍 Caso: ' + escHtml(u.username) + '</h2><button class="btn btn-secondary" onclick="document.getElementById(\'frCaseModal\').classList.add(\'hidden\')">Cerrar</button></div>' +
-            (al ? '<div style="margin:.5rem 0;padding:.5rem .7rem;border-radius:8px;background:#7f1d1d33;font-size:.82rem"><b>Riesgo ' + al.level + ' · ' + al.score + ' pts</b><ul style="margin:.3rem 0 0 1rem;padding:0">' + al.reasons.map((r) => '<li>' + escHtml(r.label) + ' — <span style="color:#d1d5db">' + escHtml(r.evidence || '') + '</span></li>').join('') + '</ul></div>' : '') +
+            (al ? '<div style="margin:.5rem 0;padding:.5rem .7rem;border-radius:8px;background:#7f1d1d33;font-size:.82rem"><b>Riesgo ' + al.level + ' · ' + al.score + ' pts</b><ul style="margin:.3rem 0 0 1rem;padding:0">' + al.reasons.map((r) => '<li>' + escHtml(r.label) + ' — <span style="color:#d1d5db">' + escHtml(r.evidence || '') + '</span>' + (r.check ? '<div style="color:#fbbf24;font-size:.78rem">🔍 Qué verificar: ' + escHtml(r.check) + '</div>' : '') + '</li>').join('') + '</ul></div>' : '') +
             '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.4rem;font-size:.8rem;margin:.5rem 0">' +
               '<div>🆔 Creada: <b>' + fd(u.createdAt) + '</b></div><div>🕒 Último ingreso: <b>' + fd(u.lastLogin) + '</b></div><div>📱 Teléfono: <b>' + (u.phoneVerified ? 'verificado ' + escHtml(u.phone || '') : 'sin verificar') + '</b></div>' +
               '<div>🌐 IP de alta: <b>' + escHtml(u.registrationIp || '—') + '</b></div><div>📲 Celulares (avisos): <b>' + u.devices + '</b></div><div>📣 Origen: <b>' + escHtml((u.source || '') + (u.campaign ? ' · ' + u.campaign : '')) + '</b></div>' +
@@ -17715,12 +17815,13 @@ async function fraudDupClear(userId, username) {
 }
 window.fraudDupClear = fraudDupClear;
 async function fraudUnblock(userId, username) {
-    if (!window.confirm('¿Desbloquear a ' + username + '?')) return;
-    try { const r = await authFetch('/api/admin/users/' + encodeURIComponent(userId) + '/unblock', { method: 'POST' }); const j = await r.json(); if (!r.ok) throw new Error(j.error || 'error'); showToast('🔓 ' + username + ' desbloqueado', 'success'); loadFraud(true); } catch (e) { showToast('No se pudo: ' + e.message, 'error'); }
+    const _ur = _askUnblockReason(username); if (!_ur) return;
+    try { const r = await authFetch('/api/admin/users/' + encodeURIComponent(userId) + '/unblock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: _ur }) }); const j = await r.json(); if (!r.ok) throw new Error(j.error || 'error'); showToast('🔓 ' + username + ' desbloqueado', 'success'); loadFraud(true); } catch (e) { showToast('No se pudo: ' + e.message, 'error'); }
 }
 async function fraudReview(userId, status) {
-    const note = window.prompt(status === 'legit' ? 'Nota (opcional): ¿por qué es legítimo?' : 'Nota (opcional): ¿qué hay que vigilar?', '') ;
+    const note = window.prompt(status === 'legit' ? 'Motivo (obligatorio, queda en el historial): ¿por qué es legítimo?' : 'Nota (opcional): ¿qué hay que vigilar?', '') ;
     if (note === null) return;
+    if (status === 'legit' && note.trim().length < 5) { showToast('El motivo es obligatorio (mínimo 5 caracteres)', 'error'); return; } // #996
     try { const r = await authFetch('/api/admin/fraud/review/' + encodeURIComponent(userId), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status, note }) }); const j = await r.json(); if (!r.ok) throw new Error(j.error || 'error'); showToast(status === 'legit' ? '✅ Marcado como legítimo (no se vuelve a mostrar)' : '👁 En observación', 'success'); loadFraud(true); } catch (e) { showToast('No se pudo: ' + e.message, 'error'); }
 }
 

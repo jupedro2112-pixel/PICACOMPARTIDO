@@ -2910,13 +2910,48 @@ Responder 2xx. Con 5xx / timeout se reintenta; con 4xx no.</pre>
                     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
                         <b>🤖 Antifraude automático</b>
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin:0"><input type="checkbox" id="frAutoOn" style="width:auto"> Encendido</label>
-                        <label style="margin:0">Bloquear desde <input type="number" id="frAutoBlock" class="form-input" style="width:80px;display:inline-block" min="40" max="500"> pts</label>
+                        <label style="margin:0">Prioridad ALTA desde <input type="number" id="frAutoBlock" class="form-input" style="width:80px;display:inline-block" min="40" max="500"> pts</label>
                         <label style="margin:0">En observación desde <input type="number" id="frAutoReview" class="form-input" style="width:80px;display:inline-block" min="30" max="500"> pts</label>
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin:0" title="Apagado (recomendado): el sistema NUNCA bloquea solo; deja la alerta y frena los retiros para que un agente verifique y decida."><input type="checkbox" id="frAutoBlockOn" style="width:auto"> Bloquear solo (automático)</label>
                         <button class="btn btn-primary btn-small" id="frAutoSave" onclick="saveFraudAuto()">Guardar</button>
                     </div>
-                    <div style="color:#9ab;margin-top:6px;line-height:1.5">Revisa a todos cada 30 min y a cada cliente cuando pide un retiro. <b>Bloqueo</b> (además del puntaje tiene que haber una conducta: retirar sin jugar, abuso de bonos, retirar a nombre de otro o a un CBU de otros, pasar plata; compartir celular/teléfono solo = cuenta secundaria, no se bloquea): se le cierra la sesión al instante, no puede volver a entrar y sus retiros pendientes quedan para revisión. <b>En observación</b>: puede jugar, pero sus retiros no salen solos (Confirmación de pagos). Si desbloqueás o marcás como legítimo a alguien, el sistema ya no lo vuelve a tocar solo.</div>
+                    <div style="color:#9ab;margin-top:6px;line-height:1.5">Revisa a todos cada 30 min y a cada cliente cuando pide un retiro. <b>El bloqueo es MANUAL</b> (#996): el sistema deja la alerta con la evidencia y <b>qué verificar</b> (por ejemplo, comparar en 1girox las apuestas de dos cuentas en un horario), frena los retiros y un agente decide desde Confirmación de pagos (🚫 Rechazar y bloquear) — todo queda en el 📜 Historial con su usuario y el motivo. <b>Prioridad ALTA</b> (puntaje alto + una conducta: retirar sin jugar, abuso o fraude con bonos, retirar a nombre de otro, pasar plata): revisar primero. <b>En observación</b>: puede jugar, pero sus retiros no salen solos. Si tildás "Bloquear solo", desde la prioridad alta bloquea y cierra la sesión sin esperar a nadie. Si desbloqueás o marcás como legítimo a alguien, el sistema ya no lo vuelve a tocar solo.</div>
                     <div id="frAutoLast" style="color:#9ab;margin-top:4px"></div>
                 </div>
+                <!-- #996 (owner): FRAUDE CON BONOS (baccarat / ruleta / deportes cubriendo los dos lados, grupos que juegan en contra, cazadores de bonos) -->
+                <details class="card" id="frBonusCard" style="margin-bottom:1rem;font-size:.82rem">
+                    <summary style="cursor:pointer"><b>🎰 Fraude con bonos</b> <span id="frBonusState" style="color:#9ab"></span></summary>
+                    <div style="color:#9ab;margin:6px 0;line-height:1.5">1girox no da apuesta por apuesta: se detecta el RASTRO en los números de las últimas horas de quien pide retirar. <b>Juega el bono al ras</b> (cubre Banca y Jugador / rojo y negro: el resultado queda demasiado parejo para lo que apostó) · <b>Deportes al ras</b> · <b>Grupo espejo</b> (cuentas vinculadas que juegan en contra: se marcan todas) · <b>Cazador de bonos</b> (ciclos bono → retiro). Cualquiera de estas frena el retiro para que una persona lo mire; sumadas a otras señales llegan al bloqueo automático.</div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:6px 12px">
+                        <label style="margin:0;display:flex;align-items:center;gap:6px"><input type="checkbox" id="fbOn" style="width:auto"> Reglas encendidas</label>
+                        <label style="margin:0">Ventana a revisar <input type="number" id="fbWindow" class="form-input" style="width:80px;display:inline-block" min="6" max="336"> h</label>
+                        <label style="margin:0">Al ras: apostado desde $<input type="number" id="fbFlatMin" class="form-input" style="width:110px;display:inline-block" min="1000"></label>
+                        <label style="margin:0">Apuesta promedio desde $<input type="number" id="fbAvgBet" class="form-input" style="width:90px;display:inline-block" min="0"></label>
+                        <label style="margin:0">Desvío máximo <input type="number" id="fbMaxZ" class="form-input" style="width:80px;display:inline-block" min="0.01" max="1" step="0.01"></label>
+                        <label style="margin:0">Deportes: apostado desde $<input type="number" id="fbSportsMin" class="form-input" style="width:110px;display:inline-block" min="1000"></label>
+                        <label style="margin:0">Deportes: desvío máximo <input type="number" id="fbSportsZ" class="form-input" style="width:80px;display:inline-block" min="0.01" max="1" step="0.01"></label>
+                        <label style="margin:0">Grupo: apostado desde $<input type="number" id="fbGroupMin" class="form-input" style="width:110px;display:inline-block" min="1000"></label>
+                        <label style="margin:0">Grupo: resultado conjunto ≤ <input type="number" id="fbGroupPct" class="form-input" style="width:70px;display:inline-block" min="0.5" max="50" step="0.5"> %</label>
+                        <label style="margin:0">Grupo: ganó desde $<input type="number" id="fbGroupWin" class="form-input" style="width:100px;display:inline-block" min="0"></label>
+                        <label style="margin:0">Cazador: <input type="number" id="fbHuntN" class="form-input" style="width:60px;display:inline-block" min="2" max="50"> ciclos a ≤ <input type="number" id="fbHuntH" class="form-input" style="width:60px;display:inline-block" min="1" max="336"> h</label>
+                        <label style="margin:0;display:flex;align-items:center;gap:6px"><input type="checkbox" id="fbHoldOn" style="width:auto"> Retiro tras un regalo → revisión</label>
+                        <label style="margin:0">…si llega a ≤ <input type="number" id="fbHoldH" class="form-input" style="width:60px;display:inline-block" min="1" max="336"> h del regalo y es ≥ $<input type="number" id="fbHoldMin" class="form-input" style="width:100px;display:inline-block" min="0"></label>
+                    </div>
+                    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary btn-small" id="fbSave" onclick="saveFraudBonus()">Guardar</button><button class="btn btn-secondary btn-small" onclick="saveFraudBonus(true)">Volver a los valores recomendados</button></div>
+                </details>
+                <!-- #996 (owner): HISTORIAL DE BLOQUEOS — quién bloqueó / desbloqueó / rechazó, cuándo, motivo y evidencia. Sólo el admin general. -->
+                <details class="card" id="frHistCard" style="margin-bottom:1rem;font-size:.82rem" ontoggle="if(this.open)loadBlockHistory()">
+                    <summary style="cursor:pointer"><b>📜 Historial de bloqueos</b> <span style="color:#9ab">(quién, cuándo, motivo y lo que detectó el sistema — no se puede borrar)</span></summary>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">
+                        <input type="text" id="bhQ" class="form-input" placeholder="Usuario" style="width:150px">
+                        <select id="bhAction" class="form-input" style="width:auto"><option value="">Todo</option><option value="block">Bloqueos (persona)</option><option value="auto_block">Bloqueos automáticos</option><option value="payout_reject_block">Retiro rechazado + bloqueo</option><option value="payout_reject">Retiros rechazados</option><option value="unblock">Desbloqueos</option><option value="auto_watch">Observación automática</option><option value="watch">Observación (persona)</option><option value="legit">Marcado legítimo</option></select>
+                        <input type="text" id="bhBy" class="form-input" placeholder="Hecho por (agente)" style="width:150px">
+                        <button class="btn btn-secondary btn-small" onclick="loadBlockHistory()">Buscar</button>
+                    </div>
+                    <div id="bhSummary" style="color:#9ab;margin-bottom:6px"></div>
+                    <div id="bhList">Abrilo para cargar…</div>
+                    <button class="btn btn-secondary btn-small" id="bhMore" style="display:none;margin-top:6px" onclick="loadBlockHistory(true)">Ver más</button>
+                </details>
                 <div id="frSummary" style="margin-bottom:.6rem;font-size:.85rem"></div>
                 <div id="frList">Cargando…</div>
             </section>

@@ -8,6 +8,28 @@
 
 ## Sesión 2026-11-01
 
+### 996. 🎰 Fraude con bonos (cubrir los dos lados, grupos espejo, cazadores) + bloqueo MANUAL con historial — admin SW v212
+**Pedido (owner):** detectar clientes que estafan con los bonos (baccarat, ruleta, deportes), ver si gente vinculada repite la apuesta en el
+mismo horario, que no puedan retirar, que en el retiro diga lo detectado para rechazar y bloquear, que todo quede en un historial de
+bloqueados con motivo (un agente no puede bloquear sin que quede registrado) y —después— "lo de bloquear que sea MANUAL: que mis agentes
+verifiquen el caso con los datos que deja el sistema, no bloquear por bloquear, pero siempre dejar la alerta lo más completa posible".
+**Límite real:** 1girox NO da apuesta por apuesta (sólo totales por rango, casino/deportes). Se detecta el RASTRO en los números y se le dice
+al agente QUÉ mirar en admin.1girox.com (usuarios + ventana horaria). Pedido formal a 1girox: `docs/PEDIDO-1GIROX-BONOS.md`.
+**Hecho:**
+- `fraudRadar.bonusRules` (pura): **bonus_flat_play** (casino al ras con bono: desvío z ≤ 0,15 sobre 98,5 %), **sports_flat** (deportes al ras,
+  centro 95,5 %, z ≤ 0,10), **mirror_group** (cuentas vinculadas por celular/teléfono/CBU/referido —sin IP— que pierden lo que gana el que
+  retira, neto conjunto ≤ 6 % de lo apostado; se marca a TODO el grupo), **bonus_hunter** (≥ 3 retiros a < 48 h de un regalo). Medido con
+  simulaciones (`scripts/test-bonus-fraud.js`): Banca+Jugador cae 100 %, rojo+negro ~65 %, deportes cubiertos ~89 %; falsos positivos
+  baccarat un lado ~10 %, tragamonedas ~1,5 %, deportes ~6 % — por eso sola NO llega a observación, frena ESE retiro (`level:'bonus'`).
+- Cada señal trae `check` = **qué verificar** (con usuarios y ventana en hora argentina) y el retiro guarda `PendingPayout.fraudEvidence`.
+- **Bloqueo MANUAL por defecto:** `Config['fraudAuto'].autoBlock=false` ⇒ desde el puntaje de bloqueo queda en observación **PRIORIDAD ALTA**
+  (`fraudReview.priority:'high'`), retiros frenados con evidencia. Tilde "Bloquear solo" en Alertas de estafa para volver al automático.
+- Retiro tras un regalo (≤ 24 h, ≥ $50.000) ⇒ revisión (`holdAfterBonus`). Umbrales en `Config['fraudBonusRules']` (panel → Alertas → 🎰).
+- **Historial `BlockEvent`** (permanente, sin ruta de borrado, sólo admin: Alertas → 📜): bloqueo, desbloqueo, automáticos, retiro rechazado,
+  rechazar+bloquear, observación, legítimo — con quién, rol, IP, motivo y evidencia. Desbloquear, rechazar un retiro y marcar legítimo
+  piden MOTIVO (≥ 5 letras). Nuevo `POST /api/admin/payouts/:id/reject-block` (botón 🚫 Rechazar y bloquear en Confirmación de pagos).
+**Pendiente owner:** mandar `docs/PEDIDO-1GIROX-BONOS.md` a 1girox; deploy AWS de #993–#996.
+
 ### 995. 🔐 Revisión de seguridad a fondo (permisos, plata, XSS, dependencias) — admin SW v211
 **Pedido (owner):** "revisá seguridad y todo a tope" + "que funcione bien viendo el archivo anterior, hasta lo que habíamos trabajado".
 - **Contra el zip anterior (`ultimo28.zip`):** es idéntico al commit bdc6713 (#992). De ahí a hoy sólo entraron #993 y #994; nada se perdió.

@@ -40,11 +40,11 @@ function coll(rows) {
     updateMany: async (q, u) => { const rs = rows.filter((x) => match(x, q)); rs.forEach((r) => apply(r, u)); return { modifiedCount: rs.length }; }
   };
 }
-let User, PendingPayout, CONFIG, NOTES, EMITS, KICKS, ALERTS, SCAN_HANGS;
+let User, PendingPayout, CONFIG, NOTES, EMITS, KICKS, ALERTS, SCAN_HANGS, LOGS;
 function reset(users, payouts = [], cfg = {}) {
   User = coll(users.map((u) => Object.assign({ role: 'user', isBlocked: false, tokenVersion: 0, fraudNotes: [], fraudReview: { status: null }, fraudAutoSkip: false }, u)));
   PendingPayout = coll(payouts.map((p) => Object.assign({ status: 'pending_review', reviewRequired: false, autoPay: true }, p)));
-  CONFIG = Object.assign({}, cfg); NOTES = []; EMITS = []; KICKS = []; ALERTS = []; SCAN_HANGS = false;
+  CONFIG = Object.assign({}, cfg); NOTES = []; EMITS = []; KICKS = []; ALERTS = []; SCAN_HANGS = false; LOGS = [];
 }
 
 // ---------- funciones reales extraídas de server.js ----------
@@ -55,14 +55,17 @@ const src = [
   line(/^const ACCOUNT_BLOCKED_DEFAULT = .*;$/m), line(/^const MAX_BLOCK_REASON_LENGTH = .*;$/m),
   line(/^const FRAUD_AUTO_DEFAULT = .*;$/m), line(/^const FRAUD_AUTO_ACTOR = .*;$/m), line(/^const FRAUD_BEHAVIOR_RULES = .*;$/m),
   'let _fraudCache = { at: 0, days: 0, data: null }; const _fraudStats = null;',
-  extract(/^async function getFraudAutoConfig\(/m), extract(/^async function _kickUserSessions\(/m), extract(/^async function _blockUserAccount\(/m),
+  extract(/^async function getFraudAutoConfig\(/m), extract(/^async function getFraudBonusConfig\(/m), extract(/^function _fraudEvidenceOf\(/m), extract(/^function _blockLog\(/m), // #996
+  extract(/^async function _kickUserSessions\(/m), extract(/^async function _blockUserAccount\(/m),
   extract(/^async function _fraudAutoApply\(/m), extract(/^async function _fraudCheckUser\(/m),
   'return { getFraudAutoConfig, _blockUserAccount, _fraudAutoApply, _fraudCheckUser };'
 ].join('\n');
 const fakeIo = { to: (room) => ({ emit: (ev, d) => EMITS.push({ room, ev, d }) }), in: (room) => ({ disconnectSockets: () => KICKS.push(room) }) };
-const fakeRadar = { scan: (deps, opts) => (SCAN_HANGS ? new Promise(() => {}) : Promise.resolve({ alerts: ALERTS.filter((a) => !opts.userIds || opts.userIds.includes(a.userId)) })) };
-const env = () => new Function('User', 'PendingPayout', 'Transaction', 'logger', 'require', 'io', 'fraudRadar', 'getConfig', 'renderSystemCommand', '_emitAdminOnlyChatNote', 'setTimeout', src)(
-  User, PendingPayout, {}, { info() {}, warn() {}, error() {} }, () => ({}), fakeIo, fakeRadar,
+const realRadar = require(path.join(ROOT, 'src', 'services', 'fraudRadar.js'));
+const fakeBlockEvent = { create: async (d) => { LOGS.push(d); return d; } }; // #996: historial de bloqueos
+const fakeRadar = { normalizeBonusCfg: realRadar.normalizeBonusCfg, GIFT_TX: realRadar.GIFT_TX, CHECKS: realRadar.CHECKS, scan: (deps, opts) => (SCAN_HANGS ? new Promise(() => {}) : Promise.resolve({ alerts: ALERTS.filter((a) => !opts.userIds || opts.userIds.includes(a.userId)) })) };
+const env = () => new Function('User', 'PendingPayout', 'Transaction', 'logger', 'require', 'io', 'fraudRadar', 'BlockEvent', 'uuidv4', 'getConfig', 'renderSystemCommand', '_emitAdminOnlyChatNote', 'setTimeout', src)(
+  User, PendingPayout, {}, { info() {}, warn() {}, error() {} }, () => ({}), fakeIo, fakeRadar, fakeBlockEvent, () => 'ev-' + Math.random().toString(36).slice(2),
   async (k, d) => (k in CONFIG ? CONFIG[k] : d), async (n, d) => d, async (id, un, t) => { NOTES.push({ un, t }); },
   (fn, ms) => (ms >= 6000 ? setTimeout(fn, 50) : fn())); // los 6 s del chequeo del retiro se acortan; el corte de sockets corre al toque
 
@@ -72,8 +75,20 @@ const u = (id) => User.rows.find((x) => x.id === id);
 
 const casos = []; const caso = (n, fn) => casos.push({ n, fn });
 
-caso('≥ 90 con conducta ⇒ BLOQUEO: sesión revocada, aviso por socket y corte, retiros frenados, nota interna', async () => {
-  reset([{ id: 'u1', username: 'estafa1' }], [{ id: 'p1', userId: 'u1' }, { id: 'p2', userId: 'u1', status: 'paid' }]);
+// #996 (owner): por defecto el bloqueo es MANUAL ⇒ ≥ 90 con conducta queda en observación con PRIORIDAD ALTA, evidencia y qué verificar.
+caso('por defecto (bloqueo manual) ≥ 90 con conducta ⇒ NO bloquea: observación PRIORIDAD ALTA, retiros frenados con evidencia y qué verificar, historial', async () => {
+  reset([{ id: 'u1', username: 'estafa1' }], [{ id: 'p1', userId: 'u1' }]);
+  const r = await env()._fraudAutoApply([alert('u1', 'estafa1', [R('cbu_wd_shared', 35), R('no_play_withdraw', 35), R('fast_cycle', 15), R('no_phone', 5)])], 'escaneo');
+  assert.deepStrictEqual(r, { blocked: [], review: ['estafa1'] });
+  const x = u('u1'); assert.strictEqual(x.isBlocked, false); assert.strictEqual(x.tokenVersion, 0); assert.strictEqual(KICKS.length, 0);
+  assert.strictEqual(x.fraudReview.status, 'watch'); assert.strictEqual(x.fraudReview.priority, 'high');
+  const p1 = PendingPayout.rows[0]; assert.strictEqual(p1.reviewRequired, true); assert.strictEqual(p1.autoPay, false); assert.ok(/PRIORIDAD ALTA/.test(p1.reviewReason));
+  assert.strictEqual(p1.fraudEvidence.reasons.length, 4); assert.ok(p1.fraudEvidence.reasons.every((q) => q.check), 'cada señal trae qué verificar');
+  assert.ok(LOGS.some((l) => l.action === 'auto_watch' && /PRIORIDAD ALTA/.test(l.reason)));
+});
+
+caso('con "Bloquear solo" tildado ≥ 90 con conducta ⇒ BLOQUEO: sesión revocada, aviso por socket y corte, retiros frenados, nota interna', async () => {
+  reset([{ id: 'u1', username: 'estafa1' }], [{ id: 'p1', userId: 'u1' }, { id: 'p2', userId: 'u1', status: 'paid' }], { fraudAuto: { autoBlock: true } });
   const r = await env()._fraudAutoApply([alert('u1', 'estafa1', [R('cbu_wd_shared', 35), R('no_play_withdraw', 35), R('fast_cycle', 15), R('no_phone', 5)])], 'escaneo');
   assert.deepStrictEqual(r, { blocked: ['estafa1'], review: [] });
   const x = u('u1'); assert.strictEqual(x.isBlocked, true); assert.strictEqual(x.blockedBy, 'antifraude'); assert.strictEqual(x.tokenVersion, 1);
@@ -83,6 +98,7 @@ caso('≥ 90 con conducta ⇒ BLOQUEO: sesión revocada, aviso por socket y cort
   const p1 = PendingPayout.rows.find((p) => p.id === 'p1'), p2 = PendingPayout.rows.find((p) => p.id === 'p2');
   assert.strictEqual(p1.reviewRequired, true); assert.strictEqual(p1.autoPay, false); assert.strictEqual(p2.reviewRequired, false, 'un retiro ya pagado no se toca');
   assert.ok(NOTES.some((n) => /BLOQUEO AUTOMÁTICO/.test(n.t)));
+  assert.ok(LOGS.some((l) => l.action === 'auto_block' && l.by === 'antifraude' && l.reason), 'queda en el historial de bloqueos');
 });
 
 caso('≥ 90 sólo por compartir celular/teléfono (cuenta secundaria #992) ⇒ NO bloquea, queda en observación', async () => {
@@ -113,7 +129,7 @@ caso('desbloqueado / revisado por una persona (fraudAutoSkip) o legítimo ⇒ el
 });
 
 caso('ya bloqueado ⇒ no se bloquea dos veces (tokenVersion no sube de nuevo)', async () => {
-  reset([{ id: 'u7', username: 'yabloq', isBlocked: true, tokenVersion: 3 }]);
+  reset([{ id: 'u7', username: 'yabloq', isBlocked: true, tokenVersion: 3 }], [], { fraudAuto: { autoBlock: true } });
   const e = env(); const big = [R('no_play_withdraw', 35), R('cbu_wd_shared', 35), R('wd_other_person', 30)];
   await e._fraudAutoApply([alert('u7', 'yabloq', big)], 'escaneo');
   assert.strictEqual(await e._blockUserAccount('u7', 'otra vez', 'x'), null);
@@ -131,14 +147,17 @@ caso('apagado desde el panel o con umbrales propios', async () => {
   const big = [R('no_play_withdraw', 35), R('cbu_wd_shared', 35), R('wd_other_person', 30)];
   assert.deepStrictEqual(await env()._fraudAutoApply([alert('u9', 'a', big)], 'escaneo'), { blocked: [], review: [] });
   reset([{ id: 'u9', username: 'a' }], [], { fraudAuto: { enabled: true, blockScore: 120, reviewScore: 70 } });
-  const e = env(); assert.deepStrictEqual(await e.getFraudAutoConfig(), { enabled: true, blockScore: 120, reviewScore: 70 });
+  const e = env(); assert.deepStrictEqual(await e.getFraudAutoConfig(), { enabled: true, blockScore: 120, reviewScore: 70, autoBlock: false });
   assert.deepStrictEqual(await e._fraudAutoApply([alert('u9', 'a', big)], 'escaneo'), { blocked: [], review: ['a'] }, '100 pts con bloqueo en 120 = observación');
   reset([], [], { fraudAuto: { blockScore: 'x', reviewScore: 999 } });
-  assert.deepStrictEqual(await env().getFraudAutoConfig(), { enabled: true, blockScore: 90, reviewScore: 90 }, 'basura ⇒ defaults; observación nunca arriba del bloqueo');
+  assert.deepStrictEqual(await env().getFraudAutoConfig(), { enabled: true, blockScore: 90, reviewScore: 90, autoBlock: false }, 'basura ⇒ defaults; observación nunca arriba del bloqueo');
 });
 
-caso('al pedir un retiro: bloquea / observa / deja pasar según el cliente', async () => {
-  reset([{ id: 'b', username: 'malo' }, { id: 'w', username: 'mirado', fraudReview: { status: 'watch', by: 'agente1' } }, { id: 'c', username: 'limpio' }]);
+caso('al pedir un retiro: bloquea (si "Bloquear solo") / observa / deja pasar según el cliente; manual ⇒ revisión', async () => {
+  reset([{ id: 'b', username: 'malo' }], []);
+  ALERTS = [alert('b', 'malo', [R('no_play_withdraw', 35), R('cbu_wd_shared', 35), R('wd_other_person', 30)])];
+  const rm = await env()._fraudCheckUser('b', 'retiro'); assert.strictEqual(rm.level, 'review'); assert.strictEqual(u('b').isBlocked, false); assert.ok(rm.evidence && rm.evidence.reasons.length === 3);
+  reset([{ id: 'b', username: 'malo' }, { id: 'w', username: 'mirado', fraudReview: { status: 'watch', by: 'agente1' } }, { id: 'c', username: 'limpio' }], [], { fraudAuto: { autoBlock: true } });
   const e = env();
   ALERTS = [alert('b', 'malo', [R('no_play_withdraw', 35), R('cbu_wd_shared', 35), R('wd_other_person', 30)]), alert('w', 'mirado', [R('no_phone', 5)], { review: { status: 'watch' } }), alert('c', 'limpio', [])];
   const rb = await e._fraudCheckUser('b', 'retiro'); assert.strictEqual(rb.level, 'block'); assert.strictEqual(u('b').isBlocked, true);

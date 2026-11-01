@@ -1597,6 +1597,22 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
   Siguen: login, alta desde el panel (`/api/users`, `/api/admin/users`, publisher-admin) y la creación local de un jugador que YA existe en 1girox.
 - Test: `node scripts/test-fraud-auto.js` (10 casos).
 
+### Fraude con bonos y bloqueo manual #996 (2026-11-01)
+- **Reglas** en `src/services/fraudRadar.js → bonusRules(ctx, cfg)` (pura, testeada en `scripts/test-bonus-fraud.js`): `bonus_flat_play`,
+  `sports_flat`, `mirror_group`, `bonus_hunter`. Están en `FRAUD_BEHAVIOR_RULES` (server.js). Datos: `stats` batch de 1girox de la ventana
+  corta (`windowHours`, 72) para quien pidió retiro + hasta 6 vinculados cada uno (máx. 200 usernames, lotes de 100).
+  "Al ras" = `z = |pagado − centro·apostado| / (apuesta prom. × √jugadas)` (centro 0,985 casino / 0,955 deportes).
+- **Qué verificar:** cada razón lleva `check` (`fraudRadar.CHECKS` o el texto con usuarios + ventana ART de la regla de bonos); `alert.window`.
+  `_fraudEvidenceOf(a)` lo guarda en `PendingPayout.fraudEvidence` y el panel lo muestra (`_prEvidenceHtml`).
+- **Bloqueo MANUAL por defecto** (`Config['fraudAuto'].autoBlock`, default false): `_fraudAutoApply` con puntaje ≥ blockScore + conducta
+  ⇒ observación `fraudReview.priority:'high'`; con `autoBlock:true` vuelve al bloqueo automático de #993. `_fraudCheckUser` puede devolver
+  `level:'bonus'` (regla de bonos sola ⇒ ese retiro a revisión).
+- **Historial `BlockEvent`** (`src/models/BlockEvent.js`) vía `_blockLog` (nunca tira). Toda acción de bloqueo/desbloqueo/rechazo/observación
+  lo escribe; `GET /api/admin/block-history` sólo admin. Una acción NUEVA que bloquee o rechace tiene que pasar por `_blockUserAccount` /
+  `_payoutCancelHandler` o llamar `_blockLog`. Motivo obligatorio (≥ 5) en unblock, cancel, reject-block y legit.
+- `Config['fraudBonusRules']` (GET/POST `/api/admin/fraud/bonus-rules`, POST sólo admin, `normalizeBonusCfg` acota). `holdAfterBonus` frena
+  el retiro ≥ minArs a ≤ hours de un regalo (`fraudRadar.GIFT_TX`).
+
 ### Revisión de seguridad #995 (2026-11-01)
 - **Lista de mutaciones de sólo-admin (`STAFF_DENY_MUTATIONS`):** `adminMiddleware` compara la ruta SIN las barras del final (Express no es
   estricto: `/api/users/<id>/` llega al mismo handler y una regla con `$` no la veía). Una regla nueva puede terminar en `$` tranquila.

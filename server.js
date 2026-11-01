@@ -70,6 +70,7 @@ const InfluencerStory = require('./src/models/InfluencerStory');
 const Story = require('./src/models/Story'); // #361: historias de la app (las publica el admin)
 const ChatDelay = require('./src/models/ChatDelay');
 const Comprobante = require('./src/models/Comprobante');
+const BlockEvent = require('./src/models/BlockEvent'); // #996: historial de bloqueos (permanente)
 const comprobanteAi = require('./src/services/comprobanteAiService');
 const BankMovement = require('./src/models/BankMovement');
 const HgcashCharge = require('./src/models/HgcashCharge');
@@ -14417,11 +14418,13 @@ async function _withdrawalRequestHandler(req, res) {
       // #881: además, sólo clientes de CONFIANZA cobran solos (se puede apagar en Confirmación de pagos → Regla).
       let trustWhy = null;
       // #993: antifraude en el momento (sólo este cliente): ≥ 90 pts lo bloquea y le cierra la sesión; ≥ 60 deja el retiro para revisión.
-      let fraudWhy = null;
-      try { const fr = await _fraudCheckUser(user.id, 'retiro'); if (fr && fr.level) { needsReview = true; fraudWhy = (fr.level === 'block' ? 'cuenta BLOQUEADA por el antifraude' : (fr.level === 'unchecked' ? 'el chequeo antifraude no terminó a tiempo (revisalo a mano)' : 'en observación del antifraude')) + (fr.why ? ' (' + fr.why + ')' : ''); } } catch (e) { logger.warn('[antifraude] retiro: ' + e.message); needsReview = true; fraudWhy = 'el chequeo antifraude falló (revisalo a mano)'; } // #995: falla ⇒ revisión, nunca pago automático
+      let fraudWhy = null; let fraudEv = null;
+      try { const fr = await _fraudCheckUser(user.id, 'retiro'); if (fr && fr.evidence) fraudEv = fr.evidence; if (fr && fr.level) { needsReview = true; fraudWhy = (fr.level === 'block' ? 'cuenta BLOQUEADA por el antifraude' : (fr.level === 'unchecked' ? 'el chequeo antifraude no terminó a tiempo (revisalo a mano)' : (fr.level === 'bonus' ? 'posible FRAUDE CON BONOS' : 'en observación del antifraude'))) + (fr.why ? ' (' + fr.why + ')' : ''); } } catch (e) { logger.warn('[antifraude] retiro: ' + e.message); needsReview = true; fraudWhy = 'el chequeo antifraude falló (revisalo a mano)'; } // #995: falla ⇒ revisión, nunca pago automático
+      // #996: retiro grande a pocas horas de recibir un regalo ⇒ revisión (práctica de las casas grandes: el primer retiro tras un bono lo mira una persona).
+      if (!fraudWhy) { try { const hb = (await getFraudBonusConfig()).holdAfterBonus; if (hb.enabled && amountNum >= hb.minArs) { const g = await Transaction.findOne({ userId: user.id, type: { $in: fraudRadar.GIFT_TX }, createdAt: { $gte: new Date(Date.now() - hb.hours * 3600000) } }).sort({ createdAt: -1 }).select('type amount createdAt').lean(); if (g) { needsReview = true; fraudWhy = `retiro a ${Math.max(1, Math.round((Date.now() - new Date(g.createdAt).getTime()) / 3600000))} h de recibir un regalo de $${Math.round(g.amount || 0).toLocaleString('es-AR')} (${g.type}) — revisá que lo haya jugado de verdad`; } } } catch (_) {} }
       if (!needsReview && prCfg.trustedOnly) { const t = await _payoutTrust(user.id, prCfg); if (!t.trusted) { needsReview = true; trustWhy = t.why; } }
       // #820: por id (antes por usuario+monto: podía marcar un retiro VIEJO del mismo monto).
-      await PendingPayout.updateOne({ id: _newPayoutId }, { $set: Object.assign({ reviewRequired: needsReview, autoPay: !needsReview }, fraudWhy ? { reviewReason: 'antifraude: ' + fraudWhy } : (trustWhy ? { reviewReason: 'no es cliente de confianza: ' + trustWhy.join(' · ') } : {})) });
+      await PendingPayout.updateOne({ id: _newPayoutId }, { $set: Object.assign({ reviewRequired: needsReview, autoPay: !needsReview }, fraudEv && (fraudEv.reasons || []).length ? { fraudEvidence: fraudEv } : {}, fraudWhy ? { reviewReason: 'antifraude: ' + fraudWhy } : (trustWhy ? { reviewReason: 'no es cliente de confianza: ' + trustWhy.join(' · ') } : {})) });
       if (needsReview) {
         await _emitAdminOnlyChatNote(user.id, user.username, fraudWhy
           ? `🔎 RETIRO EN REVISIÓN: $${amountNum.toLocaleString('es-AR')} — ${fraudWhy}. Confirmalo o rechazalo en Panel → Confirmación de pagos.`
@@ -19807,7 +19810,7 @@ app.get('/api/admin/fraud/alerts', authMiddleware, adminMiddleware, async (req, 
     // #877: 5 min de memoria (las stats del juego usan el cupo de 1girox que comparten cargas y retiros); 'fresh' fuerza, pero no más de 1 por minuto.
     if (_fraudCache.data && _fraudCache.days === days && Date.now() - _fraudCache.at < (req.query.fresh ? 60 * 1000 : 5 * 60 * 1000)) return res.json(Object.assign({ cached: true }, _fraudCache.data));
     const PendingPayout = require('./src/models/PendingPayout'); const BankMovement = require('./src/models/BankMovement');
-    const data = await fraudRadar.scan({ User, Transaction, PendingPayout, BankMovement, stats: _fraudStats }, { days });
+    const data = await fraudRadar.scan({ User, Transaction, PendingPayout, BankMovement, stats: _fraudStats }, { days, bonusCfg: await getFraudBonusConfig() });
     data.rules = fraudRadar.RULES; data.generatedAt = new Date().toISOString();
     _fraudCache = { at: Date.now(), days, data };
     res.json(data);
@@ -19838,12 +19841,15 @@ app.post('/api/admin/fraud/review/:id', authMiddleware, adminMiddleware, async (
     if (!['admin', 'depositor', 'withdrawer'].includes(req.user.role)) return res.status(403).json({ error: 'Sin permiso.' });
     const st = String((req.body && req.body.status) || ''); if (!['legit', 'watch', 'clear'].includes(st)) return res.status(400).json({ error: 'Estado inválido.' });
     const note = String((req.body && req.body.note) || '').slice(0, 300);
+    // #996: marcarlo LEGÍTIMO libera sus retiros y apaga el antifraude automático para él ⇒ motivo obligatorio y queda en el historial.
+    if (st === 'legit' && note.trim().length < 5) return res.status(400).json({ error: 'Escribí el motivo (mínimo 5 caracteres): queda en el historial de bloqueos.' });
     const set = st === 'clear' ? { fraudReview: { status: null, by: req.user.username, at: new Date(), note } } : { fraudReview: { status: st, by: req.user.username, at: new Date(), note } };
     if (st !== 'watch') set.fraudAutoSkip = true; // #993: lo revisó una persona ⇒ el antifraude automático no lo vuelve a frenar solo
     const r = await User.updateOne({ id: String(req.params.id) }, { $set: set, $push: { fraudNotes: { at: new Date(), note: `[${req.user.username}] ${st === 'legit' ? 'revisado: legítimo' : (st === 'watch' ? 'en observación' : 'revisión borrada')}${note ? ' — ' + note : ''}` } } });
     if (!(r.matchedCount || r.n)) return res.status(404).json({ error: 'Cliente no encontrado' });
     _fraudCache = { at: 0, days: 0, data: null };
     logger.info(`[fraude] ${req.user.username} marcó ${req.params.id} como ${st}`);
+    if (st !== 'clear') { const uu = await User.findOne({ id: String(req.params.id) }).select('username').lean().catch(() => null); _blockLog({ userId: req.params.id, username: uu && uu.username, action: st, by: req.user.username, role: req.user.role, reason: note || (st === 'watch' ? 'en observación' : 'legítimo'), ip: req.ip }); }
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
 });
@@ -19854,18 +19860,26 @@ app.post('/api/admin/fraud/review/:id', authMiddleware, adminMiddleware, async (
 // Corre cada 30 min (escaneo de 30 días) y en cada pedido de retiro (sólo ese cliente, antes de decidir si se paga solo).
 // Si una persona lo desbloquea o lo revisa (legítimo / borrar) queda `fraudAutoSkip` y el motor no lo vuelve a tocar.
 // Config['fraudAuto'] = { enabled, blockScore, reviewScore } (panel → Alertas de estafa → 🤖). Sólo clientes (role 'user').
-const FRAUD_AUTO_DEFAULT = { enabled: true, blockScore: 90, reviewScore: 60 };
+// #996 (owner 2026-11-01): "lo de bloquear que sea MANUAL: que mis agentes verifiquen el caso con los datos que deja el sistema; no bloquear por
+// bloquear, pero siempre dejar la alerta con la información más completa". autoBlock=false (default) ⇒ desde blockScore queda en observación con
+// prioridad ALTA (retiros frenados + qué verificar); bloquea una persona desde Confirmación de pagos / Alertas (queda en el historial).
+const FRAUD_AUTO_DEFAULT = { enabled: true, blockScore: 90, reviewScore: 60, autoBlock: false };
 const FRAUD_AUTO_ACTOR = 'antifraude';
 // Para BLOQUEAR solo hace falta además una CONDUCTA (cómo mueve la plata). Compartir celular / teléfono / CBU de carga con otra cuenta por sí
 // solo es la CUENTA SECUNDARIA de #992 (carga sin bonos): con eso solo queda, como mucho, en observación.
-const FRAUD_BEHAVIOR_RULES = new Set(['cbu_wd_shared', 'third_party_payers', 'wd_other_person', 'bonus_abuse', 'no_play_withdraw', 'new_big_wd', 'fast_cycle', 'referral_farm']);
+// #996: + fraude con bonos (fraudRadar.bonusRules): bonus_flat_play, sports_flat, mirror_group, bonus_hunter.
+const FRAUD_BEHAVIOR_RULES = new Set(['cbu_wd_shared', 'third_party_payers', 'wd_other_person', 'bonus_abuse', 'no_play_withdraw', 'new_big_wd', 'fast_cycle', 'referral_farm', 'bonus_flat_play', 'sports_flat', 'mirror_group', 'bonus_hunter']);
+// #996: umbrales del fraude con bonos (panel → Alertas de estafa → 🎰). fraudRadar.normalizeBonusCfg acota cada valor.
+async function getFraudBonusConfig() { try { return fraudRadar.normalizeBonusCfg(await getConfig('fraudBonusRules', null)); } catch (_) { return fraudRadar.normalizeBonusCfg(null); } }
+// Evidencia que viaja al retiro (Confirmación de pagos la muestra entera para decidir rechazar / bloquear).
+function _fraudEvidenceOf(a) { return a ? { score: a.score, at: new Date(), reasons: (a.reasons || []).map((r) => ({ key: r.key, label: r.label, pts: r.pts, evidence: String(r.evidence || '').slice(0, 600), check: r.check ? String(r.check).slice(0, 600) : (fraudRadar.CHECKS[r.key] || null) })).slice(0, 12), window: a.window || null, group: (a.group || []).map((g) => g.username).slice(0, 10) } : null; }
 async function getFraudAutoConfig() {
   try {
     const r = (await getConfig('fraudAuto', null)) || {};
     const b = Number(r.blockScore), v = Number(r.reviewScore);
     const blockScore = Number.isFinite(b) && b >= 40 ? Math.min(500, Math.round(b)) : FRAUD_AUTO_DEFAULT.blockScore;
     const reviewScore = Number.isFinite(v) && v >= 30 ? Math.min(blockScore, Math.round(v)) : Math.min(blockScore, FRAUD_AUTO_DEFAULT.reviewScore);
-    return { enabled: r.enabled !== false, blockScore, reviewScore };
+    return { enabled: r.enabled !== false, blockScore, reviewScore, autoBlock: r.autoBlock === true };
   } catch (_) { return Object.assign({}, FRAUD_AUTO_DEFAULT); }
 }
 // Cierra TODAS las sesiones abiertas del cliente: el aviso por socket hace que la app muestre el motivo y vuelva al login; después se cortan
@@ -19878,13 +19892,24 @@ async function _kickUserSessions(userId) {
   } catch (e) { logger.warn('[antifraude] no se pudo cortar la sesión: ' + e.message); }
 }
 // Bloqueo (manual o automático): atómico (no bloquea dos veces), revoca sesiones y deja los retiros pendientes para revisión humana.
-async function _blockUserAccount(userId, reason, by) {
+// #996: HISTORIAL DE BLOQUEOS — todo bloqueo / desbloqueo / rechazo / observación queda acá con quién, rol, motivo y evidencia. Nunca falla
+// el flujo que lo llama (si la escritura falla, queda en el log).
+function _blockLog(ev) {
+  try {
+    return BlockEvent.create({ id: uuidv4(), userId: String(ev.userId), username: ev.username || null, action: ev.action, by: ev.by || '?', role: ev.role || null,
+      reason: String(ev.reason || '(sin motivo)').slice(0, 1000), evidence: ev.evidence || null, payoutId: ev.payoutId || null,
+      amount: ev.amount != null ? Number(ev.amount) : null, ip: ev.ip || null }).catch((e) => logger.error(`[block-log] ${ev.action} ${ev.username}: ${e.message}`));
+  } catch (e) { logger.error(`[block-log] ${e.message}`); return Promise.resolve(); }
+}
+async function _blockUserAccount(userId, reason, by, extra) {
   const why = String(reason || '').slice(0, MAX_BLOCK_REASON_LENGTH);
+  const ex = extra || {};
   const u = await User.findOneAndUpdate({ id: String(userId), isBlocked: { $ne: true } },
     { $set: { isBlocked: true, blockReason: why, blockedAt: new Date(), blockedBy: by }, $inc: { tokenVersion: 1 }, $push: { fraudNotes: { at: new Date(), note: `Bloqueado por ${by}: ${why}` } } },
     { new: true }).select('id username').lean();
   if (!u) return null;
-  await PendingPayout.updateMany({ userId: u.id, status: { $in: ['pending_review', 'failed'] } }, { $set: { reviewRequired: true, autoPay: false, reviewReason: 'cuenta BLOQUEADA: ' + why.slice(0, 200) } }).catch(() => {});
+  await PendingPayout.updateMany({ userId: u.id, status: { $in: ['pending_review', 'failed'] } }, { $set: Object.assign({ reviewRequired: true, autoPay: false, reviewReason: 'cuenta BLOQUEADA: ' + why.slice(0, 200) }, ex.evidence ? { fraudEvidence: ex.evidence } : {}) }).catch(() => {});
+  await _blockLog({ userId: u.id, username: u.username, action: ex.action || 'block', by, role: ex.role || (by === FRAUD_AUTO_ACTOR ? 'sistema' : null), reason: why, evidence: ex.evidence || null, payoutId: ex.payoutId || null, amount: ex.amount, ip: ex.ip || null });
   await _kickUserSessions(u.id);
   _fraudCache = { at: 0, days: 0, data: null };
   return u;
@@ -19896,20 +19921,38 @@ async function _fraudAutoApply(alerts, source) {
   for (const a of alerts || []) {
     if (!a || a.isBlocked || a.autoSkip || (a.review && a.review.status === 'legit')) continue;
     const why = `${a.score} pts — ` + (a.reasons || []).map((r) => r.label).slice(0, 4).join(' · ');
-    if (a.score >= cfg.blockScore && (a.reasons || []).some((r) => FRAUD_BEHAVIOR_RULES.has(r.key))) {
-      const u = await _blockUserAccount(a.userId, `Antifraude automático (${source}): ${why}`, FRAUD_AUTO_ACTOR).catch((e) => { logger.warn('[antifraude] ' + e.message); return null; });
+    const _hi = a.score >= cfg.blockScore && (a.reasons || []).some((r) => FRAUD_BEHAVIOR_RULES.has(r.key));
+    if (_hi && cfg.autoBlock) {
+      const u = await _blockUserAccount(a.userId, `Antifraude automático (${source}): ${why}`, FRAUD_AUTO_ACTOR, { evidence: _fraudEvidenceOf(a), action: 'auto_block' }).catch((e) => { logger.warn('[antifraude] ' + e.message); return null; });
       if (u) {
         out.blocked.push(u.username);
         logger.warn(`[antifraude] BLOQUEADO ${u.username} (${source}): ${why}`);
         _emitAdminOnlyChatNote(u.id, u.username, `⛔ BLOQUEO AUTOMÁTICO del antifraude (${why}). Se le cerró la sesión y sus retiros pendientes quedaron para revisión. Si es un cliente legítimo, desbloquealo desde Alertas de estafa / Usuarios.`).catch(() => {});
       }
     } else if (a.score >= cfg.reviewScore && !(a.review && a.review.status)) {
+      // #996: con puntaje de bloqueo (y bloqueo automático apagado) queda en observación con prioridad ALTA: una persona verifica y decide.
+      const pri = _hi ? '🚨 PRIORIDAD ALTA — verificar y decidir si se bloquea' : 'en observación';
       const r = await User.updateOne({ id: a.userId, isBlocked: { $ne: true }, fraudAutoSkip: { $ne: true }, 'fraudReview.status': { $nin: ['watch', 'legit'] } },
-        { $set: { fraudReview: { status: 'watch', by: FRAUD_AUTO_ACTOR, at: new Date(), note: why.slice(0, 300) } }, $push: { fraudNotes: { at: new Date(), note: `En observación automática (${source}): ${why}` } } }).catch(() => null);
+        { $set: { fraudReview: { status: 'watch', by: FRAUD_AUTO_ACTOR, at: new Date(), note: (_hi ? '🚨 ' : '') + why.slice(0, 300), priority: _hi ? 'high' : 'normal' } }, $push: { fraudNotes: { at: new Date(), note: `En observación automática (${source})${_hi ? ' · PRIORIDAD ALTA' : ''}: ${why}` } } }).catch(() => null);
       if (r && (r.modifiedCount || r.nModified)) {
         out.review.push(a.username);
-        await PendingPayout.updateMany({ userId: a.userId, status: { $in: ['pending_review', 'failed'] } }, { $set: { reviewRequired: true, autoPay: false, reviewReason: 'antifraude: en observación (' + why.slice(0, 180) + ')' } }).catch(() => {});
-        _emitAdminOnlyChatNote(a.userId, a.username, `🔎 EN OBSERVACIÓN automática del antifraude (${why}). Sus retiros no salen solos: revisalos en Confirmación de pagos.`).catch(() => {});
+        await PendingPayout.updateMany({ userId: a.userId, status: { $in: ['pending_review', 'failed'] } }, { $set: { reviewRequired: true, autoPay: false, reviewReason: 'antifraude: ' + pri + ' (' + why.slice(0, 180) + ')', fraudEvidence: _fraudEvidenceOf(a) } }).catch(() => {});
+        _emitAdminOnlyChatNote(a.userId, a.username, `🔎 ${_hi ? '🚨 PRIORIDAD ALTA · ' : ''}EN OBSERVACIÓN automática del antifraude (${why}). Sus retiros no salen solos: revisá el caso (qué verificar) en Confirmación de pagos / Alertas de estafa y decidí.`).catch(() => {});
+        _blockLog({ userId: a.userId, username: a.username, action: 'auto_watch', by: FRAUD_AUTO_ACTOR, role: 'sistema', reason: `Observación automática (${source})${_hi ? ' · PRIORIDAD ALTA (puntaje de bloqueo; el bloqueo es manual)' : ''}: ${why}`, evidence: _fraudEvidenceOf(a) });
+      }
+    }
+    // #996: GRUPO ESPEJO ⇒ las cuentas vinculadas que jugaron en contra también quedan en observación (sus retiros no salen solos).
+    if (a.group && a.group.length && a.score >= cfg.reviewScore) {
+      for (const g of a.group) {
+        const gw = `grupo espejo con ${a.username} (${a.score} pts)`;
+        const r2 = await User.updateOne({ id: g.userId, role: 'user', isBlocked: { $ne: true }, fraudAutoSkip: { $ne: true }, 'fraudReview.status': { $nin: ['watch', 'legit'] } },
+          { $set: { fraudReview: { status: 'watch', by: FRAUD_AUTO_ACTOR, at: new Date(), note: gw } }, $push: { fraudNotes: { at: new Date(), note: `En observación automática (${source}): ${gw}` } } }).catch(() => null);
+        if (r2 && (r2.modifiedCount || r2.nModified)) {
+          out.review.push(g.username);
+          await PendingPayout.updateMany({ userId: g.userId, status: { $in: ['pending_review', 'failed'] } }, { $set: { reviewRequired: true, autoPay: false, reviewReason: 'antifraude: ' + gw, fraudEvidence: _fraudEvidenceOf(a) } }).catch(() => {});
+          _emitAdminOnlyChatNote(g.userId, g.username, `🔎 EN OBSERVACIÓN automática: ${gw}. Sus retiros no salen solos.`).catch(() => {});
+          _blockLog({ userId: g.userId, username: g.username, action: 'auto_watch', by: FRAUD_AUTO_ACTOR, role: 'sistema', reason: `Observación automática (${source}): ${gw}`, evidence: _fraudEvidenceOf(a) });
+        }
       }
     }
   }
@@ -19921,7 +19964,7 @@ async function _fraudAutoApply(alerts, source) {
 async function _fraudCheckUser(userId, source) {
   const cfg = await getFraudAutoConfig(); if (!cfg.enabled) return { level: null };
   const BankMovement = require('./src/models/BankMovement');
-  const scan = fraudRadar.scan({ User, Transaction, PendingPayout, BankMovement, stats: _fraudStats }, { days: 30, userIds: [String(userId)], minScore: 0 });
+  const scan = fraudRadar.scan({ User, Transaction, PendingPayout, BankMovement, stats: _fraudStats }, { days: 30, userIds: [String(userId)], minScore: 0, bonusCfg: await getFraudBonusConfig() });
   const data = await Promise.race([scan, new Promise((r) => setTimeout(() => r(null), 6000))]).catch(() => null);
   // #995 (seguridad): si el chequeo no terminó (base lenta, error) NO se da por bueno: el retiro queda para revisión (sin marcar la cuenta).
   if (!data) { const u0 = await User.findOne({ id: String(userId) }).select('isBlocked').lean().catch(() => null); if (u0 && u0.isBlocked) return { level: 'block', score: null, why: null }; return { level: 'unchecked', score: null, why: null }; }
@@ -19929,8 +19972,11 @@ async function _fraudCheckUser(userId, source) {
   if (a) await _fraudAutoApply([a], source);
   const u = await User.findOne({ id: String(userId) }).select('isBlocked fraudReview').lean();
   const why = a ? `${a.score} pts — ` + (a.reasons || []).map((r) => r.label).slice(0, 4).join(' · ') : null;
-  if (u && u.isBlocked) return { level: 'block', score: a ? a.score : null, why };
-  if (u && u.fraudReview && u.fraudReview.status === 'watch') return { level: 'review', score: a ? a.score : null, why: why || (u.fraudReview.note || 'en observación') };
+  if (u && u.isBlocked) return { level: 'block', score: a ? a.score : null, why, evidence: _fraudEvidenceOf(a) };
+  if (u && u.fraudReview && u.fraudReview.status === 'watch') return { level: 'review', score: a ? a.score : null, why: why || (u.fraudReview.note || 'en observación'), evidence: _fraudEvidenceOf(a) };
+  // #996: una regla de fraude con bonos sola (sin llegar al puntaje) igual frena ESTE retiro para que una persona lo mire.
+  const bh = a && (a.reasons || []).filter((r) => ['bonus_flat_play', 'sports_flat', 'mirror_group', 'bonus_hunter'].includes(r.key));
+  if (bh && bh.length) return { level: 'bonus', score: a.score, why: `${a.score} pts — ` + bh.map((r) => r.label).join(' · '), evidence: _fraudEvidenceOf(a) };
   return { level: null, score: a ? a.score : 0 };
 }
 // Pasada periódica. En AWS corre en cada instancia: el "lease" en Config evita repetir el escaneo (y las stats de 1girox) en la misma media hora.
@@ -19940,7 +19986,7 @@ async function _fraudAutoTick() {
   if (last && Date.now() - new Date(last).getTime() < 25 * 60 * 1000) return;
   await Config.set('fraudAutoLastRun', new Date().toISOString(), 'antifraude');
   const BankMovement = require('./src/models/BankMovement');
-  const data = await fraudRadar.scan({ User, Transaction, PendingPayout, BankMovement, stats: _fraudStats }, { days: 30, minScore: cfg.reviewScore });
+  const data = await fraudRadar.scan({ User, Transaction, PendingPayout, BankMovement, stats: _fraudStats }, { days: 30, minScore: cfg.reviewScore, bonusCfg: await getFraudBonusConfig() });
   const r = await _fraudAutoApply(data.alerts, 'escaneo');
   await Config.set('fraudAutoLastResult', { at: new Date().toISOString(), scanned: data.scanned, blocked: r.blocked, review: r.review }, 'antifraude');
   if (r.blocked.length || r.review.length) logger.warn(`[antifraude] pasada: ${r.blocked.length} bloqueados (${r.blocked.join(', ')}) · ${r.review.length} en observación`);
@@ -19956,11 +20002,44 @@ app.post('/api/admin/fraud/auto-config', authMiddleware, adminMiddleware, async 
     const b = req.body || {}; const blockScore = Math.round(Number(b.blockScore)); const reviewScore = Math.round(Number(b.reviewScore));
     if (!Number.isFinite(blockScore) || blockScore < 40 || blockScore > 500) return res.status(400).json({ error: 'Puntaje de bloqueo entre 40 y 500.' });
     if (!Number.isFinite(reviewScore) || reviewScore < 30 || reviewScore > blockScore) return res.status(400).json({ error: 'Puntaje de observación entre 30 y el de bloqueo.' });
-    const next = { enabled: b.enabled !== false, blockScore, reviewScore };
+    const next = { enabled: b.enabled !== false, blockScore, reviewScore, autoBlock: b.autoBlock === true }; // #996: bloqueo automático opcional (default apagado)
     await Config.set('fraudAuto', next, req.user.username);
     logger.info(`[antifraude] config ${JSON.stringify(next)} por ${req.user.username}`);
     res.json({ success: true, config: next });
   } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+// #996: reglas de FRAUDE CON BONOS (umbrales) — lectura para el staff, edición sólo admin.
+app.get('/api/admin/fraud/bonus-rules', authMiddleware, adminMiddleware, async (req, res) => {
+  try { res.json({ success: true, config: await getFraudBonusConfig(), defaults: fraudRadar.BONUS_DEFAULT, canEdit: req.user.role === 'admin' }); }
+  catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.post('/api/admin/fraud/bonus-rules', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Sólo el admin.' });
+    const next = fraudRadar.normalizeBonusCfg(req.body || {});
+    await Config.set('fraudBonusRules', next, req.user.username);
+    _fraudCache = { at: 0, days: 0, data: null };
+    logger.info(`[antifraude] reglas de bonos ${JSON.stringify(next)} por ${req.user.username}`);
+    res.json({ success: true, config: next });
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+// #996: HISTORIAL DE BLOQUEOS — sólo el admin general (owner: "para tener yo la info"). Sin ruta de borrado a propósito.
+app.get('/api/admin/block-history', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Sólo el admin general ve el historial de bloqueos.' });
+    const q = {}; const qs = String(req.query.q || '').trim().slice(0, 40);
+    if (qs) q.username = new RegExp('^' + qs.replace(/[^A-Za-z0-9_.-]/g, ''), 'i');
+    const act = String(req.query.action || ''); if (act) q.action = act.replace(/[^a-z_]/g, '');
+    const by = String(req.query.by || '').trim(); if (by) q.by = by.replace(/[^A-Za-z0-9_.-]/g, '');
+    if (req.query.before) { const d = new Date(String(req.query.before)); if (!isNaN(d)) q.createdAt = { $lt: d }; }
+    const limit = Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || 50));
+    const [items, totals] = await Promise.all([
+      BlockEvent.find(q).sort({ createdAt: -1 }).limit(limit).lean(),
+      BlockEvent.aggregate([{ $match: { createdAt: { $gte: new Date(Date.now() - 30 * 86400000) } } }, { $group: { _id: '$action', n: { $sum: 1 } } }])
+    ]);
+    res.json({ success: true, items: items.map((e) => ({ id: e.id, at: e.createdAt, userId: e.userId, username: e.username, action: e.action, by: e.by, role: e.role, reason: e.reason, evidence: e.evidence, payoutId: e.payoutId, amount: e.amount })),
+      last30: Object.fromEntries(totals.map((t) => [t._id, t.n])), nextBefore: items.length === limit ? items[items.length - 1].createdAt : null });
+  } catch (e) { logger.warn('[block-history] ' + e.message); res.status(500).json({ error: 'Error del servidor' }); }
 });
 app.post('/api/admin/users/:id/block', authMiddleware, adminMiddleware, async (req, res) => {
   try {
@@ -19985,7 +20064,7 @@ app.post('/api/admin/users/:id/block', authMiddleware, adminMiddleware, async (r
     }
 
     // #993: mismo camino que el antifraude automático (cierra la sesión en vivo y frena sus retiros pendientes)
-    const done = await _blockUserAccount(user.id, reason.trim(), req.user.username);
+    const done = await _blockUserAccount(user.id, reason.trim(), req.user.username, { role: req.user.role, ip: req.ip }); // #996: queda en el historial
     if (!done && !user.isBlocked) return res.status(409).json({ error: 'No se pudo bloquear (reintentá).' });
 
     logger.info(`Admin ${req.user.username} bloqueó a ${user.username}: ${reason.trim()}`);
@@ -20002,17 +20081,22 @@ app.post('/api/admin/users/:id/unblock', authMiddleware, adminMiddleware, async 
     if (!['admin', 'depositor'].includes(req.user.role)) {
       return res.status(403).json({ error: 'No tenés permiso para desbloquear usuarios.' });
     }
+    // #996: desbloquear también exige motivo y queda en el historial de bloqueos.
+    const ureason = String((req.body && req.body.reason) || '').trim();
+    if (ureason.length < 5) return res.status(400).json({ error: 'El motivo es obligatorio (mínimo 5 caracteres): queda en el historial de bloqueos.' });
     const user = await User.findOne({ id });
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado.' });
 
     const wasAuto = user.blockedBy === FRAUD_AUTO_ACTOR;
+    const prevReason = user.blockReason;
     user.isBlocked = false;
     user.blockReason = null;
     user.blockedAt = null;
     user.blockedBy = null;
     user.fraudAutoSkip = true; // #993: lo desbloqueó una persona ⇒ el antifraude automático no lo vuelve a bloquear solo
-    user.fraudNotes = (user.fraudNotes || []).concat([{ at: new Date(), note: `${req.user.username} lo desbloqueó${wasAuto ? ' (lo había bloqueado el antifraude automático)' : ''}` }]);
+    user.fraudNotes = (user.fraudNotes || []).concat([{ at: new Date(), note: `${req.user.username} lo desbloqueó${wasAuto ? ' (lo había bloqueado el antifraude automático)' : ''}: ${ureason.slice(0, 200)}` }]);
     await user.save();
+    _blockLog({ userId: user.id, username: user.username, action: 'unblock', by: req.user.username, role: req.user.role, reason: ureason, evidence: prevReason ? { previousBlockReason: prevReason, wasAuto } : null, ip: req.ip });
     _fraudCache = { at: 0, days: 0, data: null };
 
     logger.info(`Admin ${req.user.username} desbloqueó a ${user.username}`);
@@ -23394,17 +23478,21 @@ async function _payoutBankUnknownBlock(id, body) {
   if (p && p.hgStatus === 'UNKNOWN' && ['pending_review', 'failed'].includes(p.status)) return { code: 'BANK_UNKNOWN', error: 'El banco no confirmó si este retiro salió (puede haberse pagado). Tocá Sincronizar o revisá el extracto del banco antes de rechazarlo o pagarlo por otro lado.' };
   return null;
 }
-app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, async (req, res) => {
+async function _payoutCancelHandler(req, res) { // #996: con nombre para que "Rechazar y bloquear" lo reuse
   try {
     const { id } = req.params;
     { const _bu = await _payoutBankUnknownBlock(id, req.body); if (_bu) return res.status(409).json(_bu); } // #995
+    // #996: rechazar un retiro exige MOTIVO y queda en el historial de bloqueos (con lo que detectó el antifraude).
+    const rejReason = String((req.body && req.body.reason) || '').trim().slice(0, 500);
+    if (rejReason.length < 5) return res.status(400).json({ error: 'Escribí el motivo del rechazo (mínimo 5 caracteres): queda en el historial.', code: 'REASON_REQUIRED' });
     // Reclamo atómico: sólo procede uno (evita doble devolución si dos agentes tocan a la vez).
     const payout = await PendingPayout.findOneAndUpdate(
       { id, status: { $in: ['pending_review', 'failed'] } },
-      { $set: { status: 'cancelled', paidBy: req.user.username, error: 'Rechazado por el agente — fichas devueltas' } },
+      { $set: { status: 'cancelled', paidBy: req.user.username, error: ('Rechazado por ' + req.user.username + ': ' + rejReason).slice(0, 300) } },
       { new: true }
     );
     if (!payout) return res.status(400).json({ error: 'No se pudo rechazar (ya está pagado o en proceso).' });
+    await _blockLog({ userId: payout.userId, username: payout.username, action: req._rejectAndBlock ? 'payout_reject_block' : 'payout_reject', by: req.user.username, role: req.user.role, reason: rejReason, evidence: payout.fraudEvidence || (payout.reviewReason ? { reviewReason: payout.reviewReason } : null), payoutId: payout.id, amount: payout.amount, ip: req.ip });
 
     // FLUJO NUEVO (deductAtPay): las fichas NO se descuentan al solicitar.
     //  - Si todavía NO se confirmó el pago (debitConfirmed !== true) → NO se descontó nada
@@ -23535,6 +23623,29 @@ app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, 
     console.error('Error rechazando payout:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
+}
+app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, _payoutCancelHandler);
+// #996 (owner): RECHAZAR Y BLOQUEAR desde Confirmación de pagos — motivo obligatorio; los dos pasos quedan en el historial de bloqueos con la
+// evidencia del antifraude. Pueden admin y agentes de retiro (todo queda registrado con su usuario); desbloquear sigue siendo sólo del admin.
+app.post('/api/admin/payouts/:id/reject-block', authMiddleware, withdrawerMiddleware, async (req, res) => {
+  try {
+    const reason = String((req.body && req.body.reason) || '').trim().slice(0, 500);
+    if (reason.length < 5) return res.status(400).json({ error: 'Escribí el motivo (mínimo 5 caracteres): queda en el historial.', code: 'REASON_REQUIRED' });
+    const pp = await PendingPayout.findOne({ id: String(req.params.id) }).select('userId username amount fraudEvidence').lean();
+    if (!pp) return res.status(404).json({ error: 'Pago no encontrado' });
+    const target = await User.findOne({ id: pp.userId }).select('id role').lean();
+    if (!target || isAdminRole(target.role)) return res.status(403).json({ error: 'No se puede bloquear esta cuenta.' });
+    req._rejectAndBlock = true;
+    const out = await new Promise((resolve) => {
+      const fake = { _c: 200, status(c) { this._c = c; return this; }, json(b) { resolve({ code: this._c, body: b }); return this; } };
+      Promise.resolve(_payoutCancelHandler(req, fake)).catch((e) => resolve({ code: 500, body: { error: e.message } }));
+    });
+    if (out.code !== 200 || !out.body || !out.body.success) return res.status(out.code || 500).json(out.body || { error: 'No se pudo rechazar.' });
+    const blocked = await _blockUserAccount(pp.userId, `Retiro de $${Math.round(pp.amount || 0).toLocaleString('es-AR')} rechazado: ${reason}`, req.user.username,
+      { role: req.user.role, ip: req.ip, payoutId: req.params.id, amount: pp.amount, evidence: pp.fraudEvidence || null, action: 'block' });
+    logger.warn(`[pay-review] ${req.user.username} (${req.user.role}) RECHAZÓ y BLOQUEÓ a ${pp.username}: ${reason}`);
+    res.json(Object.assign({}, out.body, { blocked: !!blocked }));
+  } catch (e) { logger.error(`[pay-review] reject-block: ${e.message}`); res.status(500).json({ error: 'Error del servidor' }); }
 });
 
 // El agente paga el retiro DESDE OTRO BANCO (manual, fuera de hgcash): se marca como

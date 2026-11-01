@@ -11,6 +11,14 @@
  * #993 (owner 2026-10-30): ahora SÍ hay bloqueo automático, pero vive en server.js (`_fraudAutoApply`): este módulo sólo puntúa.
  *
  * Todo por agregaciones de Mongo sobre lo que ya guardamos (sin servicios externos): User, Transaction, PendingPayout, BankMovement.
+ *
+ * #996 (owner 2026-11-01): FRAUDE CON BONOS ("apuestan en baccarat, ruleta o deportivas con el bono y nos hacen fraude"). 1girox no da apuesta
+ * por apuesta (sólo totales por rango y por casino / deportes + bono otorgado), así que se detecta el RASTRO en los números (bonusRules):
+ *   · bonus_flat_play — con bono, apostó mucho y el resultado quedó DEMASIADO parejo para ese volumen (cubrir Banca y Jugador, rojo y negro).
+ *   · sports_flat     — lo mismo en deportes (cubrir los dos resultados).
+ *   · mirror_group    — cuentas vinculadas que en la misma ventana juegan en contra: una gana lo que la otra pierde y juntas suman ~0.
+ *   · bonus_hunter    — ciclos repetidos de bono → retiro.
+ * Las cuatro son de CONDUCTA (cuentan para el bloqueo automático de server.js). Umbrales en Config['fraudBonusRules'] (BONUS_DEFAULT).
  */
 'use strict';
 
@@ -37,10 +45,134 @@ const RULES = {
   new_big_wd: { pts: 10, label: 'Cuenta nueva pidiendo un retiro grande sin jugar' },
   fast_cycle: { pts: 15, label: 'Carga y retira enseguida (pasa la plata sin jugar)' },
   referral_farm: { pts: 30, label: 'Trajo referidos desde su MISMO celular (cuentas propias)' },
+  bonus_flat_play: { pts: 40, label: 'Juega el bono "al ras": resultado demasiado parejo para lo que apostó (cubre los dos lados)' }, // #996
+  sports_flat: { pts: 30, label: 'Deportes "al ras": mucho volumen y resultado casi neutro (cubre los dos resultados)' }, // #996
+  mirror_group: { pts: 50, label: 'Grupo espejo: cuentas vinculadas que juegan en contra (una gana lo que la otra pierde)' }, // #996
+  bonus_hunter: { pts: 30, label: 'Cazador de bonos: ciclos repetidos de bono → retiro' }, // #996
   flagged: { pts: 20, label: 'Ya marcado por el sistema anti-estafa' },
   no_phone: { pts: 5, label: 'Sin teléfono verificado' }
 };
 const money = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
+// #996 (owner): "que mis agentes verifiquen el caso con los datos que deja el sistema" ⇒ por cada regla, QUÉ VERIFICAR antes de decidir.
+// (Las reglas de bonos arman además su propio texto con los usuarios y el horario exacto.)
+const CHECKS = {
+  cbu_dep_shared: 'Mirá en el caso quiénes cargan desde ese CBU: ¿es familia/pareja que comparte cuenta o son cuentas propias para cobrar bonos varias veces?',
+  cbu_wd_shared: 'Retiran a la MISMA cuenta bancaria: ¿quién es el titular real? Si varias cuentas cobran al mismo CBU, son la misma persona.',
+  device_shared: 'Mismo celular: ¿las cuentas recibieron bonos de bienvenida cada una? ¿juegan en los mismos horarios? Si sí, es multicuenta.',
+  phone_shared: 'Mismo número: pedile al cliente que confirme por Soporte de quién es cada cuenta.',
+  third_party_payers: 'Le cargan varias personas distintas: ¿revende fichas o usa cuentas de terceros? Mirá los titulares en el caso.',
+  wd_other_person: 'Retira a nombre de otra persona: pedile que retire a una cuenta a SU nombre (la misma que carga).',
+  bonus_abuse: 'Recibió casi tanto en regalos como cargó: revisá en 1girox si cumplió el rollover jugando de verdad.',
+  no_play_withdraw: 'Retira casi sin jugar: en 1girox mirá el historial de apuestas; si no jugó, rechazá el retiro.',
+  new_big_wd: 'Cuenta nueva con retiro grande: verificá identidad y que la carga haya entrado de verdad.',
+  fast_cycle: 'Carga y retira en menos de 2 h: ¿jugó en el medio? Si no, es pasar plata.',
+  referral_farm: 'Sus referidos usan su mismo celular: son cuentas propias para cobrar comisiones.',
+  bonus_flat_play: 'En admin.1girox.com abrí el historial de apuestas del cliente en esa ventana: ¿apuesta a Banca Y a Jugador (o rojo Y negro) en la misma mano/giro, o alterna lados con montos iguales? Si sí → rechazar y bloquear.',
+  sports_flat: 'En el historial de deportes de 1girox: ¿apostó a los dos resultados del mismo partido (o local + empate + visitante)? Si sí → rechazar y bloquear.',
+  mirror_group: 'Compará en 1girox el historial de apuestas de las cuentas del grupo en esa ventana: ¿misma mesa/juego, mismos minutos y lados opuestos? Si coincide → rechazar y bloquear a todas.',
+  bonus_hunter: 'Mirá si sólo juega cuando hay bono: si cada ciclo es bono → rollover justo → retiro, es cazador de bonos.',
+  flagged: 'Ya tenía marcas del sistema: leé las notas del caso.',
+  no_phone: 'Pedile que verifique el celular por SMS.'
+};
+const fmtArt = (d) => new Date(d).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+// ===== #996 FRAUDE CON BONOS =====
+// Umbrales por defecto (panel → Alertas de estafa → 🎰, Config['fraudBonusRules']; normalizeBonusCfg acota los valores).
+const BONUS_DEFAULT = {
+  enabled: true,
+  windowHours: 72,          // ventana "de la sesión con bono": stats de 1girox de las últimas N horas para quien pidió retirar
+  flatMinWagered: 100000,   // volumen mínimo apostado en esa ventana para evaluar "al ras"
+  flatMinAvgBet: 2000,      // apuesta promedio mínima (cubrir los dos lados sólo rinde con apuestas grandes)
+  flatMaxZ: 0.15,           // desvío del resultado / (apuesta promedio × √jugadas): un jugador real casi nunca queda tan parejo
+  sportsMinWagered: 50000,
+  sportsMaxZ: 0.1,          // en deportes el centro es ~95,5 % (cubrir los dos resultados a cuota pareja devuelve 92–98 %)
+  groupMinWagered: 50000,   // volumen mínimo del grupo
+  groupMaxNetPct: 0.06,     // |suma de resultados del grupo| ≤ 6 % de lo apostado entre todos
+  groupMinWin: 10000,       // lo mínimo que ganó la cuenta que retira
+  hunterCycles: 3,          // ciclos bono → retiro en el período
+  hunterHours: 48,          // un retiro cuenta como ciclo si llegó a menos de N horas de un regalo
+  holdAfterBonus: { enabled: true, hours: 24, minArs: 50000 } // retiro ≥ minArs a menos de N horas de un regalo ⇒ revisión (server.js)
+};
+function normalizeBonusCfg(raw) {
+  const r = raw || {}; const d = BONUS_DEFAULT;
+  const num = (v, def, lo, hi) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : def; };
+  const h = r.holdAfterBonus || {};
+  return {
+    enabled: r.enabled !== false,
+    windowHours: Math.round(num(r.windowHours, d.windowHours, 6, 336)),
+    flatMinWagered: num(r.flatMinWagered, d.flatMinWagered, 1000, 1e9), flatMinAvgBet: num(r.flatMinAvgBet, d.flatMinAvgBet, 0, 1e8),
+    flatMaxZ: num(r.flatMaxZ, d.flatMaxZ, 0.01, 1), sportsMinWagered: num(r.sportsMinWagered, d.sportsMinWagered, 1000, 1e9), sportsMaxZ: num(r.sportsMaxZ, d.sportsMaxZ, 0.01, 1),
+    groupMinWagered: num(r.groupMinWagered, d.groupMinWagered, 1000, 1e9), groupMaxNetPct: num(r.groupMaxNetPct, d.groupMaxNetPct, 0.005, 0.5),
+    groupMinWin: num(r.groupMinWin, d.groupMinWin, 0, 1e9),
+    hunterCycles: Math.round(num(r.hunterCycles, d.hunterCycles, 2, 50)), hunterHours: Math.round(num(r.hunterHours, d.hunterHours, 1, 336)),
+    holdAfterBonus: { enabled: h.enabled !== false, hours: Math.round(num(h.hours, d.holdAfterBonus.hours, 1, 336)), minArs: num(h.minArs, d.holdAfterBonus.minArs, 0, 1e9) }
+  };
+}
+// Qué tan "parejo" quedó el resultado: |pagado − esperado| / (apuesta promedio × √jugadas). Esperado = 98,5 % de lo apostado en casino (mesas de
+// dinero parejo) y 95,5 % en deportes. Medido con simulaciones (scripts/test-bonus-fraud.js), con 40 manos de $5.000 y desvío ≤ 0,15:
+// cubrir Banca y Jugador cae SIEMPRE; rojo + negro ~65 % (el 0 se lleva las dos); un jugador real de baccarat ~10 % y de tragamonedas ~1,5 %.
+// Deportes (≤ 0,10): cubrir los dos resultados ~93 %, apostador real ~6 %. Por eso pide además bono, volumen, apuesta grande y retiro, y sola
+// NO llega a observación: frena ESE retiro para que lo mire una persona.
+function flatness(c, center) {
+  const wag = Number(c && c.wagered) || 0, pay = Number(c && c.payout) || 0, n = Number(c && c.betsCount) || 0;
+  if (!(wag > 0) || !(n > 0)) return null;
+  const avg = wag / n;
+  return { wag, pay, n, avg, rtp: pay / wag, z: Math.abs(pay - wag * (center || 0.985)) / (avg * Math.sqrt(n)) };
+}
+const pct1 = (x) => (Math.round(x * 1000) / 10).toLocaleString('es-AR') + '%';
+/**
+ * Reglas de fraude con bonos — PURA (sin base ni API, se prueba en scripts/test-bonus-fraud.js).
+ * ctx = { username, recent: stats de la ventana (forma de getPlayersStatsBatch) | null, giftInWindow: $ regalado en la ventana,
+ *         askedInWindow: $ pedido para retirar en la ventana, linked: [{ userId, username, why, recent }], giftTimes: [Date], wdTimes: [Date] }
+ * Devuelve [{ key, evidence, group? }].
+ */
+function bonusRules(ctx, cfgRaw) {
+  const cfg = normalizeBonusCfg(cfgRaw); const out = [];
+  if (!cfg.enabled || !ctx) return out;
+  const rec = ctx.recent || null; const cats = (rec && rec.categories) || {};
+  const hasBonus = (Number(ctx.giftInWindow) || 0) > 0 || (rec && Number(rec.bonusGranted) > 0);
+  const bonusAmt = Math.max(Number(ctx.giftInWindow) || 0, rec ? Number(rec.bonusGranted) || 0 : 0);
+  const wdAsked = Number(ctx.askedInWindow) || 0;
+  const H = cfg.windowHours;
+  const wTo = ctx.windowTo ? new Date(ctx.windowTo) : new Date(); const wFrom = ctx.windowFrom ? new Date(ctx.windowFrom) : new Date(wTo.getTime() - H * 3600000);
+  const wTxt = `del ${fmtArt(wFrom)} al ${fmtArt(wTo)} (hora argentina)`;
+  // 1) Casino al ras con bono
+  const fc = flatness(cats.casino || (rec && !rec.categories ? rec : null));
+  if (hasBonus && wdAsked > 0 && fc && fc.wag >= cfg.flatMinWagered && fc.avg >= cfg.flatMinAvgBet && fc.z <= cfg.flatMaxZ && fc.rtp >= 0.95 && fc.rtp <= 1.02) {
+    out.push({ key: 'bonus_flat_play', check: `En admin.1girox.com → historial de apuestas de ${ctx.username} ${wTxt}: ¿apuesta a Banca Y a Jugador (o rojo Y negro) en la misma mano/giro, o alterna lados con el mismo monto? Si sí → rechazar y bloquear. Si juega un solo lado y tuvo suerte de quedar parejo → es legítimo.`, evidence: `Últimas ${H} h: con bono de ${money(bonusAmt)} apostó ${money(fc.wag)} en casino (${fc.n} jugadas, promedio ${money(fc.avg)}) y le devolvieron ${pct1(fc.rtp)} — desvío ${fc.z.toFixed(3)} (un jugador real casi nunca queda tan parejo) · pidió retirar ${money(wdAsked)}` });
+  }
+  // 2) Deportes al ras
+  const fs = flatness(cats.sports, 0.955);
+  if (wdAsked > 0 && fs && fs.n >= 4 && fs.wag >= cfg.sportsMinWagered && fs.avg >= cfg.flatMinAvgBet && fs.z <= cfg.sportsMaxZ && fs.rtp >= 0.9 && fs.rtp <= 1.0) {
+    out.push({ key: 'sports_flat', check: `En admin.1girox.com → historial de deportes de ${ctx.username} ${wTxt}: ¿apostó a los dos (o tres) resultados del mismo partido? Si sí → rechazar y bloquear.`, evidence: `Últimas ${H} h: apostó ${money(fs.wag)} en deportes (${fs.n} apuestas, promedio ${money(fs.avg)}) y le devolvieron ${pct1(fs.rtp)}${hasBonus ? ` · con bono de ${money(bonusAmt)}` : ''} · pidió retirar ${money(wdAsked)}` });
+  }
+  // 3) Grupo espejo: la cuenta que retira GANÓ (netwin < 0 = ganó el jugador) y sus vinculadas perdieron casi lo mismo en la misma ventana.
+  if (rec && wdAsked > 0) {
+    const myWin = -(Number(rec.netwin) || 0); const myWag = Number(rec.wagered) || 0;
+    const mates = (ctx.linked || []).filter((l) => l && l.recent && (Number(l.recent.wagered) || 0) >= Math.max(1000, myWag * 0.1));
+    if (myWin >= cfg.groupMinWin && mates.length) {
+      const lostByMates = mates.reduce((a, l) => a + (Number(l.recent.netwin) || 0), 0); // positivo = perdieron
+      const wagAll = myWag + mates.reduce((a, l) => a + (Number(l.recent.wagered) || 0), 0);
+      const netAll = (Number(rec.netwin) || 0) + lostByMates;
+      if (wagAll >= cfg.groupMinWagered && lostByMates >= myWin * 0.5 && Math.abs(netAll) <= wagAll * cfg.groupMaxNetPct) {
+        out.push({ key: 'mirror_group', group: mates.map((l) => ({ userId: l.userId, username: l.username })),
+          check: `En admin.1girox.com compará el historial de apuestas de ${[ctx.username, ...mates.map((l) => l.username)].join(', ')} ${wTxt}: ¿misma mesa/juego, en los mismos minutos y a lados opuestos (Banca/Jugador, rojo/negro, local/visitante)? Si coincide → rechazar y bloquear a todas. Si juegan a cosas distintas o en otros horarios → legítimo.`,
+          evidence: `Últimas ${H} h: ganó ${money(myWin)} y sus cuentas vinculadas perdieron ${money(lostByMates)} (${mates.map((l) => `${l.username}${l.why ? ' [' + l.why + ']' : ''}: ${(Number(l.recent.netwin) || 0) >= 0 ? 'perdió ' : 'ganó '}${money(Math.abs(Number(l.recent.netwin) || 0))}`).slice(0, 5).join(' · ')}) — entre todos apostaron ${money(wagAll)} y el resultado conjunto fue ${money(-netAll)} (${pct1(Math.abs(netAll) / wagAll)})${hasBonus ? ` · con bono de ${money(bonusAmt)}` : ''}` });
+      }
+    }
+  }
+  // 4) Cazador de bonos: retiros pedidos a menos de hunterHours de un regalo.
+  const gt = (ctx.giftTimes || []).map((d) => new Date(d).getTime()).filter(Number.isFinite).sort((a, b) => a - b);
+  if (gt.length >= cfg.hunterCycles) {
+    let cycles = 0; const used = new Set();
+    for (const w of (ctx.wdTimes || []).map((d) => new Date(d).getTime()).filter(Number.isFinite).sort((a, b) => a - b)) {
+      const g = gt.find((t) => !used.has(t) && t < w && w - t <= cfg.hunterHours * 3600000);
+      if (g != null) { used.add(g); cycles++; }
+    }
+    if (cycles >= cfg.hunterCycles) out.push({ key: 'bonus_hunter', check: `Mirá en Transacciones de ${ctx.username} cada regalo y el retiro que vino después: si siempre es regalo → rollover justo → retiro, y casi no juega sin bono, es cazador de bonos (rechazá y dejalo sin bonos o bloqueá).`, evidence: `${cycles} veces pidió retirar a menos de ${cfg.hunterHours} h de recibir un regalo (${gt.length} regalos en el período)` });
+  }
+  return out;
+}
 
 /**
  * Escanea a los clientes con movimiento en los últimos `days` días y devuelve las alertas ordenadas por puntaje.
@@ -49,6 +181,7 @@ const money = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
 async function scan(deps, opts = {}) {
   const { User, Transaction, PendingPayout, BankMovement } = deps;
   const days = Math.max(1, Math.min(180, Number(opts.days) || 30));
+  const bcfg = normalizeBonusCfg(opts.bonusCfg); // #996
   const since = new Date(Date.now() - days * 86400000);
   const long = new Date(Date.now() - 180 * 86400000);
 
@@ -115,11 +248,11 @@ async function scan(deps, opts = {}) {
   }
 
   // 4) Reglas por cliente.
-  const alerts = [];
+  const alerts = []; const rows = [];
   for (const u of users) {
     if (u.fraudReview && u.fraudReview.status === 'legit') continue; // ya revisado y legítimo
     const R = [];
-    const add = (key, evidence) => R.push({ key, pts: RULES[key].pts, label: RULES[key].label, evidence });
+    const add = (key, evidence) => R.push({ key, pts: RULES[key].pts, label: RULES[key].label, evidence, check: CHECKS[key] || null });
     const dep = depBy.get(u.id) || { total: 0, n: 0 }; const gift = giftBy.get(u.id) || { total: 0, n: 0 };
     const myPays = payBy.get(u.id) || []; const paid = myPays.filter((p) => p.status === 'paid'); const asked = myPays.filter((p) => !['cancelled', 'rejected'].includes(p.status));
     const wdTotal = asked.reduce((a, p) => a + (Number(p.amount) || 0), 0);
@@ -169,6 +302,45 @@ async function scan(deps, opts = {}) {
     const farm = myRefs.filter((r) => [r.fcmToken, ...(r.fcmTokens || []).map((t) => t && t.token)].filter(Boolean).some((t) => myTok.includes(t)));
     if (farm.length >= 1) add('referral_farm', `${farm.length} referido(s) desde su mismo celular: ${farm.slice(0, 8).map((r) => r.username).join(', ')}`);
     if ((u.fraudFlags || []).length) add('flagged', `Marcas: ${u.fraudFlags.join(', ')}`);
+    // #996: cuentas vinculadas (para el grupo espejo) — por qué se vinculan, sin IP.
+    const links = new Map(); const link = (n, why) => { if (n && n !== u.username && !links.has(n)) links.set(n, why); };
+    for (const o of devO) link(o, 'mismo celular'); for (const o of telO) link(o, 'mismo teléfono'); for (const o of cbuWdO) link(o, 'mismo CBU de retiro');
+    for (const o of cbuDepO) link(o, 'mismo CBU de carga'); for (const r of myRefs) link(r.username, 'su referido'); if (u.referredByUserId) link('#' + u.referredByUserId, 'lo refirió');
+    rows.push({ u, R, add, dep, gift, st, wag, nw, asked, paid, myPays, wdTotal, ageDays, links });
+  }
+
+  // 4b) #996 FRAUDE CON BONOS: stats de la ventana corta (sólo quienes pidieron retirar en esa ventana + sus vinculadas; máx. 200 ⇒ 2 pedidos
+  // agrupados) y horarios de los regalos. Sin stats las reglas de juego no se evalúan (no se inventa nada).
+  const winFrom = new Date(Date.now() - bcfg.windowHours * 3600000);
+  const refIds = [...new Set(rows.flatMap((x) => [...x.links.keys()].filter((n) => n.startsWith('#')).map((n) => n.slice(1))))];
+  const refNames = refIds.length ? new Map((await User.find({ id: { $in: refIds } }).select('id username').lean()).map((r) => ['#' + r.id, r.username])) : new Map();
+  for (const x of rows) for (const [n, why] of [...x.links]) if (n.startsWith('#')) { x.links.delete(n); const real = refNames.get(n); if (real && real !== x.u.username && !x.links.has(real)) x.links.set(real, why); }
+  const recentRows = bcfg.enabled ? rows.filter((x) => x.asked.some((p) => new Date(p.createdAt) >= winFrom)) : [];
+  let recent = new Map();
+  if (recentRows.length && typeof deps.stats === 'function') {
+    const names = [...new Set(recentRows.flatMap((x) => [x.u.username, ...[...x.links.keys()].slice(0, 6)]))].slice(0, 200);
+    const chunks = []; for (let i = 0; i < names.length; i += 100) chunks.push(names.slice(i, i + 100));
+    try { const parts = await Promise.all(chunks.map((c) => deps.stats(c, winFrom, new Date()).catch(() => null))); for (const m of parts) if (m) for (const [k, v] of m) recent.set(k, v); } catch (_) { recent = new Map(); }
+  }
+  const linkedNames = [...new Set(recentRows.flatMap((x) => [...x.links.keys()]))];
+  const linkedIds = linkedNames.length ? new Map((await User.find({ username: { $in: linkedNames } }).select('id username').lean()).map((r) => [r.username, r.id])) : new Map();
+  const giftRows = bcfg.enabled && rows.length ? await Transaction.find({ userId: { $in: rows.map((x) => x.u.id) }, type: { $in: GIFT_TX }, createdAt: { $gte: since } }).select('userId amount createdAt').limit(20000).lean() : [];
+  const giftsOf = new Map(); for (const g of giftRows) { if (!giftsOf.has(g.userId)) giftsOf.set(g.userId, []); giftsOf.get(g.userId).push(g); }
+
+  for (const x of rows) {
+    const { u, R, add, dep, gift, st, wag, nw, asked, paid, myPays, wdTotal, ageDays } = x;
+    if (bcfg.enabled) {
+      const myGifts = giftsOf.get(u.id) || [];
+      const ctx = {
+        username: u.username, recent: recent.get(u.username) || null,
+        giftInWindow: myGifts.filter((g) => new Date(g.createdAt) >= winFrom).reduce((a, g) => a + (Number(g.amount) || 0), 0),
+        askedInWindow: asked.filter((p) => new Date(p.createdAt) >= winFrom).reduce((a, p) => a + (Number(p.amount) || 0), 0),
+        linked: [...x.links].map(([n, why]) => ({ userId: linkedIds.get(n) || null, username: n, why, recent: recent.get(n) || null })).filter((l) => l.userId),
+        giftTimes: myGifts.map((g) => g.createdAt), wdTimes: asked.filter((p) => new Date(p.createdAt) >= since).map((p) => p.createdAt)
+      };
+      ctx.windowFrom = winFrom; ctx.windowTo = new Date();
+      for (const hit of bonusRules(ctx, bcfg)) { add(hit.key, hit.evidence); if (hit.group) R[R.length - 1].group = hit.group; if (hit.check) R[R.length - 1].check = hit.check; }
+    }
     if (!u.phoneVerified && R.length) add('no_phone', 'No verificó su celular por SMS');
 
     const score = R.reduce((a, r) => a + r.pts, 0);
@@ -177,6 +349,8 @@ async function scan(deps, opts = {}) {
       userId: u.id, username: u.username, score, level: score >= 60 ? 'alto' : 'medio', reasons: R, autoSkip: !!u.fraudAutoSkip,
       isBlocked: !!u.isBlocked, blockReason: u.blockReason || null, review: u.fraudReview || null, ageDays: Math.round(ageDays),
       phoneVerified: !!u.phoneVerified, source: u.acquisitionSource || null, campaign: u.acquisitionCampaign || null,
+      group: (R.find((r) => r.group) || {}).group || null, // #996: cuentas del grupo espejo (server.js las deja en observación)
+      window: R.some((r) => ['bonus_flat_play', 'sports_flat', 'mirror_group'].includes(r.key)) ? { from: winFrom, to: new Date() } : null,
       deposits: { n: dep.n, total: Math.round(dep.total) }, gifts: { n: gift.n, total: Math.round(gift.total) }, play: st ? { wagered: wag, netwin: nw } : null,
       withdrawals: { asked: asked.length, askedTotal: Math.round(wdTotal), paid: paid.length, paidTotal: Math.round(paid.reduce((a, p) => a + (Number(p.amount) || 0), 0)), pending: myPays.filter((p) => ['pending_review', 'pending', 'processing', 'failed'].includes(p.status)).length }
     });
@@ -217,4 +391,4 @@ async function caseFile(deps, userId) {
   };
 }
 
-module.exports = { scan, caseFile, RULES };
+module.exports = { scan, caseFile, RULES, CHECKS, BONUS_DEFAULT, normalizeBonusCfg, bonusRules, flatness, GIFT_TX };

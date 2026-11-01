@@ -77,6 +77,7 @@ const pendingPayoutSchema = new mongoose.Schema({
   // Panel → Confirmación de pagos antes de pagar. autoPay = por debajo del umbral se pagó solo (sin agente).
   reviewRequired: { type: Boolean, default: false, index: true },
   reviewReason: { type: String, default: null }, // #881: por qué no salió solo (p.ej. todavía no es cliente de confianza)
+  fraudEvidence: { type: mongoose.Schema.Types.Mixed, default: null }, // #996: lo que detectó el antifraude (Confirmación de pagos lo muestra)
   autoPay: { type: Boolean, default: false },
   // #814: cuántas veces el reintento automático (_payoutAutoRetryTick) volvió a intentar este pago automático.
   autoRetries: { type: Number, default: 0 },
