@@ -22601,14 +22601,27 @@ async function _secondDepositTick() {
     await User.updateMany({ 'secondDepositOffer.status': 'offered', 'secondDepositOffer.expiresAt': { $lt: now } }, { $set: { 'secondDepositOffer.status': 'expired' } });
     if (!sd.enabled || !(sd.pct > 0)) return;
     const lo = new Date(now.getTime() - (sd.afterHours + 48) * 3600000), hi = new Date(now.getTime() - sd.afterHours * 3600000);
-    const cands = await Transaction.aggregate([{ $match: { ..._REAL_DEP, timestamp: { $gte: new Date(lo.getTime() - 400 * 86400000) } } }, { $group: { _id: '$userId', first: { $min: '$timestamp' }, n: { $sum: 1 } } }, { $match: { n: 1, first: { $gte: lo, $lte: hi } } }, { $limit: 300 }]);
+    // #1010 (revisión): vaciar /sys_second_deposit_offer en COMANDOS apaga el aviso del todo (sin mensaje en blanco ni push suelta).
+    const FALLBACK = '🎁 {username}, tu PRÓXIMA carga tiene un {pct}% EXTRA de regalo. Vale por {hours} horas: cargá ahora y se acredita solo (se juega en slots).';
+    const probe = await renderSystemCommand('/sys_second_deposit_offer', FALLBACK, { username: 'x', pct: sd.pct, hours: sd.validHours });
+    if (!probe || !String(probe).trim()) return;
+    // #1010 (revisión): sin pruebas ("PRUEBA") y mirando TODA la historia del cliente (antes 400 días: un cliente viejo que volvía parecía nuevo);
+    // los ya ofrecidos se descartan ANTES de elegir (antes un $limit 300 sin orden repetía siempre los mismos y el resto no recibía la oferta).
+    const notTest = { description: { $not: /PRUEBA/i } };
+    const recentIds = (await Transaction.distinct('userId', { ..._REAL_DEP, ...notTest, timestamp: { $gte: lo, $lte: hi } })).filter(Boolean);
+    if (!recentIds.length) return;
+    const open = await User.find({ id: { $in: recentIds }, role: 'user', fraudFlags: { $size: 0 }, noWelcomeGifts: { $ne: true }, $or: [{ 'secondDepositOffer.status': { $exists: false } }, { 'secondDepositOffer.status': 'none' }] }).select('id').lean();
+    if (!open.length) return;
+    const cands = (await Transaction.aggregate([{ $match: { ..._REAL_DEP, ...notTest, userId: { $in: open.map((u) => u.id) } } }, { $group: { _id: '$userId', first: { $min: '$timestamp' }, n: { $sum: 1 } } }, { $match: { n: 1, first: { $gte: lo, $lte: hi } } }, { $sort: { first: 1 } }]));
     let n = 0;
     for (const c of cands) {
       if (!c._id) continue;
       const user = await User.findOneAndUpdate({ id: c._id, role: 'user', fraudFlags: { $size: 0 }, noWelcomeGifts: { $ne: true } /* #976 */, $or: [{ 'secondDepositOffer.status': { $exists: false } }, { 'secondDepositOffer.status': 'none' }] }, { $set: { secondDepositOffer: { status: 'offered', pct: sd.pct, offeredAt: now, expiresAt: new Date(now.getTime() + sd.validHours * 3600000), usedAt: null } } }, { new: true });
       if (!user) continue;
       const vars = { username: user.username, pct: sd.pct, hours: sd.validHours };
-      const text = await renderSystemCommand('/sys_second_deposit_offer', '🎁 {username}, tu PRÓXIMA carga tiene un {pct}% EXTRA de regalo. Vale por {hours} horas: cargá ahora y se acredita solo (se juega en slots).', vars);
+      let text = String(await renderSystemCommand('/sys_second_deposit_offer', FALLBACK, vars) || '').trim();
+      if (!text) text = FALLBACK.replace('{username}', user.username).replace('{pct}', sd.pct).replace('{hours}', sd.validHours);
+      if (!/slots/i.test(text)) text += ' (se juega en slots)'; // #1007: aunque el comando se haya editado antes
       await _sendUserSystemMessage(user, text, { metadata: { kind: 'second_deposit', pct: sd.pct }, push: { title: `🎁 ${sd.pct}% extra en tu próxima carga`, body: `Vale ${sd.validHours} horas. Cargá y se acredita solo (se juega en slots).` } });
       n++; if (n >= 150) break;
     }

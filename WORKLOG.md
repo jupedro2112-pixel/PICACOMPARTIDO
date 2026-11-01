@@ -41,6 +41,11 @@
 - AVISOS SIEMPRE (owner: "no importa lo que hayan elegido, esos avisos quiero que estén porque es importante para la retención"): los avisos
   de reembolso y el de "tu giro GRATIS está listo" salen con `kind:'system'` ⇒ ignoran `notifPrefs` (ninguno / sólo lo mío) y la fatiga. La oferta de
   2ª carga ya salía sin kind (sistema). Siguen: tope de 3 avisos de ruleta sin girar y no mandar la de ruleta el día que ya salió un lote.
+- REVISIÓN de `_secondDepositTick`: (a) mira TODA la historia del cliente y excluye cargas "PRUEBA" (antes 400 días: un cliente viejo que
+  volvía recibía el 50% de cliente nuevo); (b) descarta a los ya ofrecidos ANTES de elegir (antes `$limit 300` sin orden repetía siempre los mismos
+  y con mucha pauta el resto se quedaba sin oferta); (c) `/sys_second_deposit_offer` vacío en COMANDOS apaga el aviso del todo; si el texto
+  editado no dice "slots", se agrega "(se juega en slots)". El "100% pisado por un bono menor" NO pasaba: desde #832 la 1ª carga toma
+  primero el bono de bienvenida (los otros quedan pendientes). La oferta de 2ª carga sigue fuera del tope diario a propósito (owner).
 
 ### 1009. 📈 TABLERO DEL NEGOCIO (2026-11-01)
 - Owner: "armá el tablero de negocio completo y mostrá adentro cómo funciona".
