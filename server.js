@@ -28222,7 +28222,7 @@ async function _bizMoney(from, to) {
   const [dep, wd, gift, users] = await Promise.all([
     Transaction.aggregate([{ $match: Object.assign({ timestamp: { $gte: from, $lt: to } }, _BIZ_REAL) }, { $group: { _id: null, total: { $sum: '$amount' }, n: { $sum: 1 }, users: { $addToSet: '$userId' } } }, { $project: { total: 1, n: 1, users: { $size: '$users' } } }]),
     PendingPayout.aggregate([{ $match: { status: 'paid', paidAt: { $gte: from, $lt: to }, paidVia: { $nin: ['other_bank'] } } }, { $group: { _id: null, total: { $sum: '$amount' }, n: { $sum: 1 } } }]),
-    Transaction.aggregate([{ $match: { type: { $in: CASHBACK_GIFT_TX_TYPES }, status: { $nin: ['failed', 'cancelled'] }, timestamp: { $gte: from, $lt: to } } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+    Transaction.aggregate([{ $match: { type: { $in: CASHBACK_GIFT_TX_TYPES }, status: { $nin: ['failed', 'cancelled'] }, description: { $not: /PRUEBA/ }, timestamp: { $gte: from, $lt: to } } }, { $group: { _id: null, total: { $sum: '$amount' } } }]), // #1010: sin pruebas, igual que las cargas
     User.countDocuments({ role: 'user', createdAt: { $gte: from, $lt: to } })
   ]);
   const d = dep[0] || {}, w = wd[0] || {}, g = gift[0] || {};

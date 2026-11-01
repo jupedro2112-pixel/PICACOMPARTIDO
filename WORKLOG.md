@@ -28,6 +28,9 @@
   cerrado); mensual día 7 + 15 (antes el 1, cuando todavía no se podía).
 - 📈 Negocio: bloque "🎰 Ruleta diaria" (giros gratis / dorados, % que cargó ese día después de girar, plata dada).
 - Test `scripts/test-roulette-free.js` (10 casos). PWA v654 · admin SW v223.
+- Corrección del 📈 Negocio tras la primera captura del owner: "Siguen activos" se compara con la 1ª carga (mostraba 1615 %), el paso
+  "donde más se pierde" es el que pierde más GENTE (210 → 57 → 13 ⇒ la 2ª carga, 153 personas; antes marcaba 5 cargas por tener el % más bajo) y
+  los regalos de PRUEBA ya no cuentan en regalos/depósitos (las cargas de prueba ya no contaban). Admin SW v224.
 
 ### 1009. 📈 TABLERO DEL NEGOCIO (2026-11-01)
 - Owner: "armá el tablero de negocio completo y mostrá adentro cómo funciona".

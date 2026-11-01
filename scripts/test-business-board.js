@@ -15,6 +15,13 @@ caso('embudo: cuenta pasos y marca dónde más se pierde', () => {
   const f = B.funnel(200, rows, now); assert.strictEqual(f.d1, 100); assert.strictEqual(f.d2, 40); assert.strictEqual(f.d5, 30); assert.strictEqual(f.active30, 25);
   assert.strictEqual(f.worst.key, 'd2');
 });
+caso('embudo #1010: 210 → 57 → 13 marca la 2ª carga (más gente perdida) y "activos" se compara con la 1ª carga', () => {
+  const now = new Date('2026-11-01T12:00:00Z'); const rows = [];
+  for (let i = 0; i < 210; i++) rows.push({ n: i < 13 ? 5 : (i < 57 ? 2 : 1), last: new Date('2026-10-28') });
+  const f = B.funnel(620, rows, now); assert.strictEqual(f.d2, 57); assert.strictEqual(f.d5, 13);
+  assert.strictEqual(f.worst.key, 'd2'); assert.strictEqual(f.worst.lost, 153);
+  const act = f.steps.find((s) => s.key === 'active30'); assert.strictEqual(act.ofPrev, 1); // 210 de 210, no "1615 %"
+});
 caso('regalos: rinde y los pegados a la carga no se miden', () => {
   const g = B.giftLift([{ type: 'refund', users: 10, n: 10, cost: 100000, before: 500000, after: 550000 }, { type: 'mission', users: 5, n: 5, cost: 10000, before: 0, after: 40000 }, { type: 'bonus', users: 9, n: 9, cost: 300000, before: 1, after: 2 }]);
   const by = Object.fromEntries(g.map((x) => [x.type, x]));

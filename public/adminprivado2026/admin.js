@@ -16620,7 +16620,7 @@ function _bizRender(b) {
         '<div class="card" style="font-size:.84rem">' + f.steps.map(function (s) {
             const w = Math.max(2, Math.round(100 * s.n / max)); const worst = f.worst && f.worst.key === s.key;
             return '<div style="display:flex;align-items:center;gap:8px;margin:4px 0"><div style="width:42%;min-width:150px">' + escapeHtml(s.label) + '</div><div style="flex:1;background:rgba(127,127,127,.15);border-radius:6px;overflow:hidden"><div style="width:' + w + '%;background:' + (worst ? C.bad : '#6366f1') + ';color:#fff;font-size:.72rem;padding:2px 6px;white-space:nowrap">' + n(s.n) + '</div></div><div style="width:110px;text-align:right">' + pc(s.ofTotal) + (s.ofPrev != null ? ' <small style="color:' + (worst ? C.bad : '#9ab') + '">(' + pc(s.ofPrev) + ')</small>' : '') + '</div></div>';
-        }).join('') + (f.worst ? '<div style="color:' + C.bad + ';margin-top:6px">⚠️ Donde más se pierde: ' + escapeHtml(f.worst.label) + '</div>' : '') + '</div>';
+        }).join('') + (f.worst ? '<div style="color:' + C.bad + ';margin-top:6px">⚠️ Donde más se pierde: ' + escapeHtml(f.worst.label) + (f.worst.lost != null ? ' (' + n(f.worst.lost) + ' personas no pasaron)' : '') + '</div>' : '') + '<div style="font-size:.72rem;color:#9ab;margin-top:4px">"Siguen activos" se compara con los que hicieron la 1ª carga.</div>' + '</div>';
     // retención
     const rr = b.retention || [];
     html += h('🔁 Retención semana a semana') + info('Cada columna son 7 días (la última = los últimos 7). "Volvieron" = de los que cargaron la semana anterior, qué % cargó en esa.') +

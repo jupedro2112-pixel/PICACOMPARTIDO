@@ -38,10 +38,12 @@ function funnel(registered, rows, now) {
     { key: 'd2', label: 'Volvieron a cargar (2ª)', n: f.d2 },
     { key: 'd5', label: 'Llegaron a 5 cargas', n: f.d5 },
     { key: 'active30', label: 'Siguen activos (cargaron en 30 días)', n: f.active30 }
-  ].map((s, i, a) => Object.assign(s, { ofTotal: pct(s.n, f.registered), ofPrev: i ? pct(s.n, a[i - 1].n) : null }));
-  // el paso donde más se cae la gente (entre 1ª carga y activos)
-  let worst = null; for (let i = 2; i < f.steps.length; i++) { const s = f.steps[i]; if (s.ofPrev != null && f.steps[i - 1].n >= 10 && (!worst || s.ofPrev < worst.ofPrev)) worst = s; }
-  f.worst = worst ? { key: worst.key, label: worst.label, ofPrev: worst.ofPrev } : null;
+  // #1010: "siguen activos" NO es un paso después de las 5 cargas: se compara con los que hicieron la 1ª carga (antes daba "1615 %").
+  ].map((s, i, a) => Object.assign(s, { ofTotal: pct(s.n, f.registered), ofPrev: !i ? null : pct(s.n, s.key === 'active30' ? f.d1 : a[i - 1].n), lost: !i || s.key === 'active30' ? null : Math.max(0, a[i - 1].n - s.n) }));
+  // #1010: el paso donde más GENTE se pierde (2ª carga o 5 cargas), no el % más bajo: con 210 → 57 → 13 el problema es la 2ª carga (153
+  // personas), aunque 57 → 13 dé un % menor.
+  let worst = null; for (let i = 2; i < f.steps.length; i++) { const s = f.steps[i]; if (s.lost != null && f.steps[i - 1].n >= 10 && (!worst || s.lost > worst.lost)) worst = s; }
+  f.worst = worst ? { key: worst.key, label: worst.label, ofPrev: worst.ofPrev, lost: worst.lost } : null;
   return f;
 }
 
@@ -76,7 +78,7 @@ function diagnose(b) {
   else if (b.giftLevel === 'ok') alerts.push({ level: 'ok', text: `Los regalos son el ${pc(m.giftRatio)} de lo depositado: cerca del tope (${Math.round(GIFT_YELLOW * 100)}%).`, fix: 'No sumes regalos nuevos hasta que baje.' });
   const r = b.retention || []; const last3 = r.slice(-3).map((x) => x.rate);
   if (last3.length === 3 && last3.every((x) => x != null) && last3[2] < last3[1] && last3[1] < last3[0]) alerts.push({ level: 'bad', text: `La retención bajó 2 semanas seguidas (${pc(last3[0])} → ${pc(last3[1])} → ${pc(last3[2])}).`, fix: 'Revisá qué avisos salieron esas semanas (Centro de avisos) y si hubo problemas de cargas o retiros.' });
-  const f = b.funnel; if (f && f.worst && f.worst.ofPrev < 0.5) alerts.push({ level: 'ok', text: `Donde más gente se pierde: "${f.worst.label}" (sólo pasa el ${pc(f.worst.ofPrev)} del paso anterior).`, fix: f.worst.key === 'd2' ? 'Es la 2ª carga: reforzá el bono de 2ª carga y el aviso del día siguiente a la 1ª.' : 'Reforzá el recorrido de esa etapa en el Centro de avisos.' });
+  const f = b.funnel; if (f && f.worst && f.worst.ofPrev < 0.5) alerts.push({ level: 'ok', text: `Donde más gente se pierde: "${f.worst.label}" (sólo pasa el ${pc(f.worst.ofPrev)} del paso anterior${f.worst.lost != null ? ': se quedan ' + f.worst.lost + ' personas' : ''}).`, fix: f.worst.key === 'd2' ? 'Es la 2ª carga: reforzá el bono de 2ª carga y el aviso del día siguiente a la 1ª.' : 'Reforzá el recorrido de esa etapa en el Centro de avisos.' });
   for (const g of b.gifts || []) if (g.verdict === 'bad' && g.cost >= Math.max(50000, (m.deposits || 0) * 0.01)) alerts.push({ level: 'bad', text: `${g.label}: costó ${money(g.cost)} y los que lo recibieron cargaron ${g.lift >= 0 ? 'sólo ' + money(g.lift) + ' más' : money(-g.lift) + ' MENOS'} que antes.`, fix: 'Bajá el % o pedí una carga mínima para darlo.' });
   for (const c of b.campaigns || []) if (c.verdict === 'bad' && c.users >= 20) alerts.push({ level: 'bad', text: `Campaña ${c.campaign}${c.publisher ? ' (' + c.publisher + ')' : ''}: costó ${money(c.spend)} y sus clientes dejaron ${money(c.net)}.`, fix: 'Pausala o bajale el presupuesto hasta que traiga gente que vuelva.' });
   const bad = alerts.filter((a) => a.level === 'bad').length;
