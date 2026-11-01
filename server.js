@@ -4217,14 +4217,19 @@ const authMiddleware = async (req, res, next) => {
 // Los agentes siguen pudiendo lo suyo: cargas (deposit, deposit-reviews), pagos (payouts), soporte/chats, lecturas (GET).
 const STAFF_DENY_MUTATIONS = [
   /^\/api\/admin\/(roulette|stories|stories-autopilot|bonus-strategy|send-notification|notification-rules|notif-batches|notif-templates|cronograma|encuesta|inactividad|community-code|promo-bonus|strategy|strategy-plans|vip-levels|fire|refund-tiers|refund-config|platforms|campaigns|publisher-admins|webhooks|cierres|config|commands|sorteos|inicio\/(notif-center|weekly-review)|newbie-offers|fraud|datos-ia|datos|inicio-pin|datos-pin|bank|hgcash\/(config|credentials|fanout)|girox|gastos|expenses|menus|registration|install-gift|missions|referral|referrals|users\/[^/]+\/(login-without-password|role|reset-password|block|unblock|fraud|force-logout|reset-test|change-influencer))/i,
-  /^\/api\/users\/[^/]+$/i // PUT/DELETE /api/users/:id (editar saldo / borrar cliente)
+  /^\/api\/users\/[^/]+$/i, // PUT/DELETE /api/users/:id (editar saldo / borrar cliente)
+  // #995 (seguridad): contactos y links que ve TODO cliente (WhatsApp/Telegram de soporte VIP, canal y soporte de la comunidad):
+  // un agente podía poner su propio número y recibir transferencias / comprobantes / claves.
+  /^\/api\/admin\/(soporte-vip|community)(\/|$)/i
 ];
 const adminMiddleware = (req, res, next) => {
   if (req.user.role !== 'admin' && req.user.role !== 'depositor' && req.user.role !== 'withdrawer' && req.user.role !== 'comunidad') {
     return res.status(403).json({ error: 'Acceso denegado. Solo administradores.' });
   }
   if (req.user.role !== 'admin' && req.method !== 'GET' && req.method !== 'HEAD') {
-    const p = String(req.originalUrl || req.url || '').split('?')[0];
+    // #995 (seguridad): sin las barras del final — Express (no estricto) atiende /api/users/<id>/ igual que /api/users/<id> y la regla con $
+    // no la veía: un agente podía borrar clientes o cambiarles el teléfono (y recuperar la clave por SMS) con una barra al final.
+    const p = String(req.originalUrl || req.url || '').split('?')[0].replace(/\/+$/, '');
     if (STAFF_DENY_MUTATIONS.some((re) => re.test(p))) { logger.warn(`[authz] ${req.user.username} (${req.user.role}) intentó ${req.method} ${p}`); return res.status(403).json({ error: 'Solo el administrador general puede hacer esto.' }); }
   }
   next();
@@ -9918,10 +9923,35 @@ app.get('/api/cashback/status', authMiddleware, async (req, res) => {
 // misma reference → duplicate:true, no se paga dos veces), Transaction local
 // type 'bonus' + metadata.source 'instant_cashback' (alimenta `regalado` y
 // `cobrado`).
+// #995: ¿la acreditación pudo haber entrado igual? (sin respuesta / red / timeout / 429 / 5xx). Un rechazo de negocio (4xx, regalo bloqueado) no.
+function _giftUncertain(r) {
+  if (!r || r.success) return false;
+  if (r.retryable === true) return true;
+  const h = Number(r.httpStatus) || 0; if (h === 429 || h >= 500) return true;
+  return !h && /^(network_error|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|ESOCKET|ERR_NETWORK|timeout)/i.test(String(r.code || ''));
+}
 app.post('/api/cashback/claim', authMiddleware, authLimiter, async (req, res) => {
   try {
     const userId = req.user.userId;
     const username = req.user.username;
+    // #995: si el reclamo anterior quedó "incierto" (la plataforma no respondió), se reintenta ESE con su misma reference antes que nada.
+    const _stuck = await CashbackClaim.findOneAndUpdate({ userId, status: 'pending', uncertain: true, createdAt: { $lt: new Date(Date.now() - 20000) } }, { $set: { uncertain: false } }, { new: false }).lean();
+    if (_stuck) {
+      const sref = `vip-cbk-${userId}-${_stuck.dateKey}-${_stuck.seq}`.slice(0, 100);
+      let sc; try { sc = await girox.creditGift(username, _stuck.amount, { description: `Reembolso ${_stuck.pct}% de tu pérdida acumulada`, reference: sref, rolloverX: _stuck.rolloverX }); } catch (e) { sc = { success: false, error: e.message, code: 'network_error' }; }
+      if (!sc || !sc.success) {
+        if (_giftUncertain(sc)) await CashbackClaim.updateOne({ id: _stuck.id }, { $set: { uncertain: true } }).catch(() => {});
+        else await CashbackClaim.deleteOne({ id: _stuck.id }).catch(() => {});
+        logger.error(`[cashback] reintento del reclamo incierto ${_stuck.id} (${username}) falló: ${(sc && sc.error) || 'unknown'}`);
+        return res.status(503).json({ error: 'Estamos confirmando tu reembolso anterior con la plataforma. Probá de nuevo en un momento.' });
+      }
+      const stx = sc.data?.transfer_id || sc.data?.transferId || null;
+      await CashbackClaim.updateOne({ id: _stuck.id }, { $set: { status: 'credited', transactionId: stx, creditedAs: sc.creditedAs || null } }).catch(() => {});
+      await Transaction.create({ id: uuidv4(), type: 'bonus', userId, username, amount: _stuck.amount, description: `Reembolso acumulativo ${_stuck.pct}% (pérdida neta de por vida)`, transactionId: stx,
+        metadata: { source: 'instant_cashback', dateKey: _stuck.dateKey, seq: _stuck.seq, creditedAs: sc.creditedAs || null, rollover: _stuck.rolloverX, retried: true }, timestamp: new Date() }).catch((e) => logger.error(`[cashback] Transaction (reintento) ${username}: ${e.message}`));
+      await _emitAdminOnlyChatNote(userId, username, `📉 REEMBOLSO ACUMULATIVO: se confirmó el reclamo de $${Number(_stuck.amount).toLocaleString('es-AR')} que había quedado sin respuesta de la plataforma${sc.duplicate ? ' (ya había entrado: no se pagó dos veces)' : ''}.`).catch(() => {});
+      return res.json({ success: true, amount: _stuck.amount, rolloverX: _stuck.rolloverX, pct: _stuck.pct, creditedAs: sc.creditedAs || null, transactionId: stx, retried: true });
+    }
     const st = await _cashbackStateToday(userId, username, { fresh: true });
     if (!st.enabled) return res.status(400).json({ error: 'El reembolso acumulativo no está disponible.' });
     if (st.error) return res.status(503).json({ error: 'No pudimos calcular tu pérdida ahora. Probá en unos minutos.' });
@@ -9972,7 +10002,14 @@ app.post('/api/cashback/claim', authMiddleware, authLimiter, async (req, res) =>
       credit = await girox.creditGift(username, amount, {
         description: `Reembolso ${st.pct}% de tu pérdida acumulada`, reference: ref, rolloverX: st.rolloverX
       });
-    } catch (e) { credit = { success: false, error: e.message }; }
+    } catch (e) { credit = { success: false, error: e.message, code: 'network_error' }; } // #995: una excepción a mitad de camino también puede haber acreditado
+    if (_giftUncertain(credit)) {
+      // #995: timeout / red / 5xx ⇒ PUEDE haber entrado. No se borra (si se borra y el reintento cae otro día, el dateKey cambia ⇒ otra
+      // reference ⇒ doble pago): queda pendiente "incierto" y el próximo intento lo reintenta con la misma reference.
+      await CashbackClaim.updateOne({ id: claimDoc.id }, { $set: { uncertain: true } }).catch(() => {});
+      logger.error(`[cashback] credit INCIERTO ${username} $${amount} (${ref}): ${credit.error || 'unknown'}`);
+      return res.status(503).json({ error: 'La plataforma está demorada. Tu reembolso quedó reservado: tocá Reclamar de nuevo en un momento.' });
+    }
     if (!credit || !credit.success) {
       // §4.5: fallo definitivo → liberar la reserva (el reintento reusa el seq y
       // por lo tanto la MISMA reference).
@@ -10734,7 +10771,23 @@ async function getGiroxBonusMultiplier() {
   return envOk ? envVal : 0;
 }
 
-app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, (req, res) => _agentDepositHandler(req, res, req.body));
+// #995 (seguridad): la referencia de la carga manual se arma en cada pedido ⇒ un doble clic o un reenvío del navegador acreditaba DOS veces.
+// Freno: misma persona + mismo monto en 90 s ⇒ 409 DUP_DEPOSIT; el panel pregunta y reenvía con allowRepeat:true si es una carga nueva de verdad.
+// (Sólo esta ruta: "Confirmar" de la cola de comprobantes llama al handler directo y ya es idempotente por comprobante.)
+async function _agentDepositDupGuard(body) {
+  const who = String((body && (body.userId || body.username)) || '').slice(0, 80); const amt = Math.round(Number(body && body.amount) * 100) || 0;
+  if (!who || !amt || (body && body.allowRepeat === true)) return true;
+  const key = `agent-dep:${who}:${amt}`; const redis = getRedisClient();
+  if (redis) { try { return (await redis.set(key, '1', { NX: true, EX: 90 })) === 'OK'; } catch (_) {} }
+  const now = Date.now(); const t = _agentDepDupMem.get(key); if (t && now - t < 90000) return false;
+  _agentDepDupMem.set(key, now); if (_agentDepDupMem.size > 5000) for (const [k, v] of _agentDepDupMem) if (now - v > 90000) _agentDepDupMem.delete(k);
+  return true;
+}
+const _agentDepDupMem = new Map();
+app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, res) => {
+  if (!(await _agentDepositDupGuard(req.body))) return res.status(409).json({ code: 'DUP_DEPOSIT', error: 'Ya se cargó este mismo monto a este cliente hace menos de 90 segundos. Si es una carga NUEVA, confirmala de nuevo.' });
+  return _agentDepositHandler(req, res, req.body);
+});
 // #376: la carga manual vive en una función para que "Confirmar" de Cargas pendientes la reuse tal cual
 // (bonos automáticos, consumo del movimiento hgcash, mensajes al cliente, SLA, auditoría).
 async function _agentDepositHandler(req, res, body) {
@@ -13959,6 +14012,9 @@ app.post('/api/movements/deposit', authMiddleware, depositorMiddleware, async (r
 });
 
 app.post('/api/movements/withdraw', authMiddleware, async (req, res) => {
+  // #995 (seguridad): ruta VIEJA, ningún front la usa. Descontaba fichas sin PendingPayout ni Transaction, salteando antifraude, banco con
+  // fallas y el rollover: queda apagada. El retiro real es POST /api/withdrawal/request (+ _payPendingPayout).
+  if (process.env.LEGACY_MOVEMENTS_WITHDRAW !== '1') return res.status(410).json({ error: 'Usá el botón Retirar de la app.', code: 'USE_WITHDRAWAL_REQUEST' });
   let withdrawLockAcquired = false;
   try {
     const username = req.user.username;
@@ -14362,7 +14418,7 @@ async function _withdrawalRequestHandler(req, res) {
       let trustWhy = null;
       // #993: antifraude en el momento (sólo este cliente): ≥ 90 pts lo bloquea y le cierra la sesión; ≥ 60 deja el retiro para revisión.
       let fraudWhy = null;
-      try { const fr = await _fraudCheckUser(user.id, 'retiro'); if (fr && fr.level) { needsReview = true; fraudWhy = (fr.level === 'block' ? 'cuenta BLOQUEADA por el antifraude' : 'en observación del antifraude') + (fr.why ? ' (' + fr.why + ')' : ''); } } catch (e) { logger.warn('[antifraude] retiro: ' + e.message); }
+      try { const fr = await _fraudCheckUser(user.id, 'retiro'); if (fr && fr.level) { needsReview = true; fraudWhy = (fr.level === 'block' ? 'cuenta BLOQUEADA por el antifraude' : (fr.level === 'unchecked' ? 'el chequeo antifraude no terminó a tiempo (revisalo a mano)' : 'en observación del antifraude')) + (fr.why ? ' (' + fr.why + ')' : ''); } } catch (e) { logger.warn('[antifraude] retiro: ' + e.message); needsReview = true; fraudWhy = 'el chequeo antifraude falló (revisalo a mano)'; } // #995: falla ⇒ revisión, nunca pago automático
       if (!needsReview && prCfg.trustedOnly) { const t = await _payoutTrust(user.id, prCfg); if (!t.trusted) { needsReview = true; trustWhy = t.why; } }
       // #820: por id (antes por usuario+monto: podía marcar un retiro VIEJO del mismo monto).
       await PendingPayout.updateOne({ id: _newPayoutId }, { $set: Object.assign({ reviewRequired: needsReview, autoPay: !needsReview }, fraudWhy ? { reviewReason: 'antifraude: ' + fraudWhy } : (trustWhy ? { reviewReason: 'no es cliente de confianza: ' + trustWhy.join(' · ') } : {})) });
@@ -14959,10 +15015,12 @@ async function claimStoryBonusPercent(user, usedBy, amount) {
     const sb = prev && prev.storyBonus;
     if (!sb || !(sb.pct > 0)) return { pct: 0, claimed: false };
     const pct = Number(sb.pct) || 0;
+    // #995: queda marcada como USADA (no se reclama de nuevo); si la carga falla, revert la desmarca.
+    if (sb.storyId) await User.updateOne({ id: user.id }, { $push: { storyBonusUsed: { $each: [sb.storyId], $slice: -30 } } }).catch(() => {});
     return { pct, claimed: true, source: 'story_bonus', label: sb.label || `historia: +${pct}%`,
       // #827: cómo respondió la gente a la historia con bono ⇒ cuántos lo USARON en una carga, cuánto cargaron y cuánto bono se dio.
       settle: (bonusAmt) => Story.updateOne({ id: sb.storyId }, { $inc: { bonusUses: 1, bonusUsedTotal: Math.round(Number(bonusAmt) || 0), bonusDepositTotal: Math.round(Number(amount) || 0) } }).catch(() => {}),
-      revert: () => User.updateOne({ id: user.id, 'storyBonus.pct': 0 }, { $set: { 'storyBonus.pct': pct } }).catch(() => {}) };
+      revert: () => User.updateOne({ id: user.id, 'storyBonus.pct': 0 }, Object.assign({ $set: { 'storyBonus.pct': pct } }, sb.storyId ? { $pull: { storyBonusUsed: sb.storyId } } : {})).catch(() => {}) };
   } catch (e) { logger.warn(`[auto-bonus] claim bono de historia falló: ${e.message}`); return { pct: 0, claimed: false }; }
 }
 async function claimDailyRoulettePercent(user, usedBy) {
@@ -16493,7 +16551,9 @@ app.post('/api/fire/claim-reward', authMiddleware, async (req, res) => {
     // ⚠️ La fecha va en hora ARGENTINA, no UTC: entre las 21:00 y las 24:00 ART el día
     // UTC ya cambió, así que un reclamo que falla falsamente a las 20:59 y se reintenta
     // a las 21:01 tendría otra reference → se pagaría dos veces.
-    const _fireRef = `vip-fire-${userId}-d${reserved.pendingCashRewardDay}-${periodRanges.getTodayRangeArgentinaEpoch().dateStr}`;
+    // #995 (seguridad): la fecha sale del día en que se GANÓ el premio (pendingCashRewardDate, se restaura igual si el crédito falla), no del
+    // día del reclamo: un timeout a las 23:59 que sí acreditó + reintento a las 00:01 tenía otra reference ⇒ se pagaba dos veces.
+    const _fireRef = `vip-fire-${userId}-d${reserved.pendingCashRewardDay}-${reserved.pendingCashRewardDate || periodRanges.getTodayRangeArgentinaEpoch().dateStr}`;
     // Acreditación (2026-09-07): como BONO en 1girox — ver _creditFireReward.
     // Con rollover >0 va por /bonus con ese multiplier (bloqueado hasta apostar
     // multiplier × premio; con claim_required el jugador lo libera tocando el
@@ -19863,6 +19923,8 @@ async function _fraudCheckUser(userId, source) {
   const BankMovement = require('./src/models/BankMovement');
   const scan = fraudRadar.scan({ User, Transaction, PendingPayout, BankMovement, stats: _fraudStats }, { days: 30, userIds: [String(userId)], minScore: 0 });
   const data = await Promise.race([scan, new Promise((r) => setTimeout(() => r(null), 6000))]).catch(() => null);
+  // #995 (seguridad): si el chequeo no terminó (base lenta, error) NO se da por bueno: el retiro queda para revisión (sin marcar la cuenta).
+  if (!data) { const u0 = await User.findOne({ id: String(userId) }).select('isBlocked').lean().catch(() => null); if (u0 && u0.isBlocked) return { level: 'block', score: null, why: null }; return { level: 'unchecked', score: null, why: null }; }
   const a = data && data.alerts && data.alerts[0];
   if (a) await _fraudAutoApply([a], source);
   const u = await User.findOne({ id: String(userId) }).select('isBlocked fraudReview').lean();
@@ -23324,9 +23386,18 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
 
 // El agente RECHAZA el pago: NO se paga y se le DEVUELVEN las fichas al cliente
 // (re-crédito en JUGAYGANA, ya que el self-retiro se las había descontado).
+// #995 (seguridad): con hgStatus 'UNKNOWN' el banco no respondió y PUEDE haber pagado. Rechazar (devuelve fichas) o pagar por otro banco
+// ahí es pagar dos veces. Primero "Sincronizar"; si el banco sigue sin saberlo, el agente confirma que lo vio en el extracto (bankChecked).
+async function _payoutBankUnknownBlock(id, body) {
+  if (body && body.bankChecked === true) return null;
+  const p = await PendingPayout.findOne({ id }).select('hgStatus status').lean().catch(() => null);
+  if (p && p.hgStatus === 'UNKNOWN' && ['pending_review', 'failed'].includes(p.status)) return { code: 'BANK_UNKNOWN', error: 'El banco no confirmó si este retiro salió (puede haberse pagado). Tocá Sincronizar o revisá el extracto del banco antes de rechazarlo o pagarlo por otro lado.' };
+  return null;
+}
 app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
+    { const _bu = await _payoutBankUnknownBlock(id, req.body); if (_bu) return res.status(409).json(_bu); } // #995
     // Reclamo atómico: sólo procede uno (evita doble devolución si dos agentes tocan a la vez).
     const payout = await PendingPayout.findOneAndUpdate(
       { id, status: { $in: ['pending_review', 'failed'] } },
@@ -23471,6 +23542,7 @@ app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, 
 app.post('/api/admin/payouts/:id/pay-other-bank', authMiddleware, withdrawerMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
+    { const _bu = await _payoutBankUnknownBlock(id, req.body); if (_bu) return res.status(409).json(_bu); } // #995
     const payout = await PendingPayout.findOne({ id });
     if (!payout) return res.status(404).json({ error: 'Pago no encontrado' });
     if (!['pending_review', 'failed'].includes(payout.status)) {
@@ -26206,15 +26278,20 @@ app.post('/api/stories/:id/claim-bonus', authMiddleware, async (req, res) => {
     if (s && s.audienceUserId && s.audienceUserId !== String(req.user.userId)) return res.status(404).json({ error: 'Historia no encontrada' }); // #886
     const pub = s ? _storyPublic(s, req) : null;
     if (!pub || !pub.bonusActive) return res.status(400).json({ error: 'Este bono ya no está vigente.', code: 'NOT_ACTIVE' });
-    const user = await User.findOne({ id: req.user.userId }).select('id username storyBonus fraudFlags').lean();
+    const user = await User.findOne({ id: req.user.userId }).select('id username storyBonus storyBonusUsed fraudFlags').lean();
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
     if (_isFlagged(user)) return res.status(403).json({ error: 'Tu cuenta no puede usar este bono. Escribinos a Soporte.' });
     const cur = user.storyBonus || {};
     if (cur.storyId === s.id && Number(cur.pct) > 0 && cur.expiresAt && new Date(cur.expiresAt).getTime() > Date.now()) {
       return res.json({ success: true, already: true, pct: cur.pct, expiresAt: cur.expiresAt });
     }
+    // #995 (seguridad): al usarse en una carga el pct queda en 0; antes se podía volver a tocar "Reclamar" y cobrar el bono en CADA carga
+    // mientras la historia estuviera vigente. Una historia = un uso por cliente.
+    const _usedMsg = { error: 'Ya usaste el bono de esta historia en una carga.', code: 'ALREADY_USED' };
+    if ((cur.storyId === s.id && cur.claimedAt && !(Number(cur.pct) > 0)) || (user.storyBonusUsed || []).includes(s.id)) return res.status(409).json(_usedMsg);
     const label = `historia: +${pub.bonusPct}% en tu próxima carga`;
-    await User.updateOne({ id: user.id }, { $set: { storyBonus: { storyId: s.id, pct: pub.bonusPct, label, claimedAt: new Date(), expiresAt: s.bonusUntil } } });
+    const _upd = await User.updateOne({ id: user.id, storyBonusUsed: { $ne: s.id } }, { $set: { storyBonus: { storyId: s.id, pct: pub.bonusPct, label, claimedAt: new Date(), expiresAt: s.bonusUntil } } });
+    if (!_upd || !(_upd.matchedCount || _upd.n)) return res.status(409).json(_usedMsg);
     await Story.updateOne({ id: s.id }, { $inc: { bonusClaims: 1 } }).catch(() => {});
     try { _emitAdminOnlyChatNote(user.id, user.username, `🎁 Reclamó desde la historia "${s.title || s.text.slice(0, 30)}": +${pub.bonusPct}% en su próxima carga (vence ${new Date(s.bonusUntil).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })})`); } catch (_) {}
     res.json({ success: true, pct: pub.bonusPct, expiresAt: s.bonusUntil });

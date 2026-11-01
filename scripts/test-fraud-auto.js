@@ -146,9 +146,11 @@ caso('al pedir un retiro: bloquea / observa / deja pasar según el cliente', asy
   const rc = await e._fraudCheckUser('c', 'retiro'); assert.strictEqual(rc.level, null);
 });
 
-caso('al pedir un retiro: si el radar no contesta, no traba el retiro (sigue las reglas de siempre)', async () => {
+// #995: antes dejaba pasar (fail-open); ahora el retiro queda para revisión a mano, sin marcar la cuenta.
+caso('al pedir un retiro: si el radar no contesta, el retiro queda para revisión (sin marcar la cuenta)', async () => {
   reset([{ id: 'c', username: 'limpio' }]); SCAN_HANGS = true;
-  const r = await env()._fraudCheckUser('c', 'retiro'); assert.strictEqual(r.level, null);
+  const r = await env()._fraudCheckUser('c', 'retiro'); assert.strictEqual(r.level, 'unchecked');
+  assert.ok(!u('c').isBlocked); assert.ok(!(u('c').fraudReview && u('c').fraudReview.status === 'watch'));
 });
 
 (async () => {

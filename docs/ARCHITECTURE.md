@@ -1596,3 +1596,25 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
   (`loginhero.js` `viaAd`) siguen registrando. Los links de referido NO pasan (a diferencia de 'invite'). Texto `/sys_register_closed`.
   Siguen: login, alta desde el panel (`/api/users`, `/api/admin/users`, publisher-admin) y la creación local de un jugador que YA existe en 1girox.
 - Test: `node scripts/test-fraud-auto.js` (10 casos).
+
+### Revisión de seguridad #995 (2026-11-01)
+- **Lista de mutaciones de sólo-admin (`STAFF_DENY_MUTATIONS`):** `adminMiddleware` compara la ruta SIN las barras del final (Express no es
+  estricto: `/api/users/<id>/` llega al mismo handler y una regla con `$` no la veía). Una regla nueva puede terminar en `$` tranquila.
+  `soporte-vip` y `community` (contactos y links que ven todos los clientes) son sólo del admin general.
+- **`/api/movements/withdraw` (vieja) apagada:** 410 salvo `LEGACY_MOVEMENTS_WITHDRAW=1`. El retiro es `/api/withdrawal/request`.
+- **Antifraude del retiro FAIL-CLOSED:** si `_fraudCheckUser` no termina en 6 s o tira error, devuelve `level:'unchecked'` y el retiro queda
+  `reviewRequired` (sin marcar la cuenta). Con la base lenta habrá más retiros en Confirmación de pagos: es a propósito.
+- **Bono de historia una vez por historia:** `User.storyBonusUsed` (últimas 30) se llena al USARLO en una carga (`claimStoryBonusPercent`;
+  `revert` lo saca) y el claim lo rechaza con 409 `ALREADY_USED` (antes, con pct en 0 tras usarlo, se podía reclamar de nuevo y cobrar en cada carga).
+- **Carga manual repetida:** `POST /api/admin/deposit` frena mismo cliente + mismo monto en 90 s (`_agentDepositDupGuard`, Redis NX o memoria)
+  ⇒ 409 `DUP_DEPOSIT`; el panel pregunta y reenvía con `allowRepeat:true`. "Confirmar" de la cola de comprobantes no pasa por ahí.
+- **Banco sin confirmar:** con `hgStatus:'UNKNOWN'`, `/cancel` y `/pay-other-bank` responden 409 `BANK_UNKNOWN` salvo `bankChecked:true` (el panel
+  pregunta si se revisó el extracto; `_payoutPost` en admin.js). Primero conviene "Sincronizar".
+- **Fueguito:** la reference usa `pendingCashRewardDate` (día en que se ganó), no el día del reclamo.
+- **Reembolso acumulativo:** si `creditGift` falla de forma incierta (`_giftUncertain`: red/timeout/429/5xx) el `CashbackClaim` NO se borra:
+  queda `pending` + `uncertain:true` (cuenta como cobrado) y el próximo "Reclamar" reintenta ESE con su misma reference.
+- **Dependencias:** lockfile con body-parser 1.20.9, qs 6.14.3, follow-redirects 1.16.2 (`npm audit fix` sin saltos de versión). Queda
+  firebase-admin (moderada, pide versión mayor: probar antes).
+- **Pendiente de confirmar con 1girox:** si una `reference` usada en `/bonus` también frena un `/deposit` con la misma reference. `creditGift` y
+  `_creditFireReward` pueden cambiar de ruta entre un intento y su reintento (lectura fresca del bono activo); si 1girox no comparte la unicidad,
+  un timeout que sí acreditó + reintento podría pagar dos veces.

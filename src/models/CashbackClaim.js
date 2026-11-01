@@ -32,6 +32,9 @@ const cashbackClaimSchema = new mongoose.Schema({
   status: { type: String, enum: ['pending', 'credited'], default: 'pending', index: true },
   creditedAs: { type: String, default: null },            // 'bonus' | 'deposit' (cómo salió en 1girox)
   transactionId: { type: String, default: null },
+  // #995: la acreditación se cortó (timeout / red / 5xx) y PUEDE haber entrado: el reclamo queda 'pending' (cuenta como cobrado) y el
+  // próximo intento del cliente reintenta ESTE mismo (misma reference) en vez de abrir otro seq ⇒ nunca se paga dos veces.
+  uncertain: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now, index: true }
 });
 

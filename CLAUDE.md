@@ -82,6 +82,8 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`). Git user: j
   comunidad las mutaciones de sólo-admin (fichas, historias, bonos, config, clientes); una ruta admin NUEVA que mute algo sensible va a esa lista o
   chequea `req.user.role === 'admin'`. Las cuentas de landing nacen con clave ALEATORIA (ya no "asd123"); entrar con "asd123" fuerza el cambio.
   Staff: sesión de 8 h y logout revoca (tokenVersion). Login con bloqueo por cuenta (10 fallos / 15 min) y claves de Datos/INICIO con 6 intentos.
+  **#995:** el chequeo compara la ruta sin barras finales (no sacarlo); antifraude del retiro fail-closed (`level:'unchecked'` ⇒ revisión);
+  bono de historia una vez por historia (`User.storyBonusUsed`); carga manual repetida en 90 s pide confirmar (`DUP_DEPOSIT`). Detalle: ARCHITECTURE "#995".
 - **EL REPO ES PÚBLICO en GitHub (#413).** Nunca escribir claves, hashes, tokens ni API keys en código ni en docs (ni en el
   WORKLOG al citar pedidos del owner: reemplazar por "[clave]"). Credenciales siempre por env/SSM o por el panel (cifradas).
   La clave del admin `iginte1000` se rotó el 2026-10-18 y vive sólo en manos del owner.

@@ -4,7 +4,28 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-10-31**
+> **Última actualización: 2026-11-01**
+
+## Sesión 2026-11-01
+
+### 995. 🔐 Revisión de seguridad a fondo (permisos, plata, XSS, dependencias) — admin SW v211
+**Pedido (owner):** "revisá seguridad y todo a tope" + "que funcione bien viendo el archivo anterior, hasta lo que habíamos trabajado".
+- **Contra el zip anterior (`ultimo28.zip`):** es idéntico al commit bdc6713 (#992). De ahí a hoy sólo entraron #993 y #994; nada se perdió.
+- **Corregido:**
+  1. GRAVE: barra final (`/api/users/<id>/`) salteaba `STAFF_DENY_MUTATIONS` ⇒ un agente podía borrar clientes o cambiarles el teléfono (y
+     recuperar la clave por SMS). Ahora se compara sin barras finales (probado: 12 variantes).
+  2. `soporte-vip` y `community` (WhatsApp/Telegram y links que ven todos) pasan a sólo-admin.
+  3. `/api/movements/withdraw` (vieja, sin registro ni antifraude) apagada con 410.
+  4. Bono de historia: se podía reclamar de nuevo tras usarlo y cobrarlo en CADA carga mientras la historia seguía vigente ⇒ una vez por historia.
+  5. Antifraude del retiro: si no terminaba (6 s) o fallaba, el retiro salía automático ⇒ ahora queda para revisión.
+  6. Carga manual: doble clic / reenvío acreditaba dos veces ⇒ freno de 90 s con confirmación en el panel.
+  7. Rechazar / pagar por otro banco un retiro con el banco SIN confirmar (UNKNOWN) ⇒ pide confirmar que se revisó el extracto.
+  8. Fueguito y reembolso acumulativo: referencias estables entre reintentos (medianoche / timeout que sí acreditó).
+  9. Dependencias: body-parser (alta, caída del server), qs y follow-redirects actualizados en el lockfile.
+- **XSS:** sin hallazgos explotables (todo lo que escribe el cliente llega escapado al panel y a la app).
+- **Sin tocar (decisión del owner):** depositor puede cambiar claves de clientes, generar links de acceso y dar bonos sin tope. firebase-admin
+  (moderada, versión mayor). Consultar a 1girox si la reference es única entre /bonus y /deposit (ver ARCHITECTURE "#995").
+- Tests: los 11 pasan (`test-fraud-auto` actualizado: radar sin respuesta ⇒ `unchecked`).
 
 ## Sesión 2026-10-31
 

@@ -2978,11 +2978,21 @@ async function payPayout(id) {
     } catch (e) { showToast('Error de conexión', 'error'); }
 }
 
+// #995: rechazar / pagar por otro banco un retiro con el banco SIN confirmar (hgStatus UNKNOWN) pide confirmar que se revisó el extracto.
+async function _payoutPost(id, action, body) {
+    const send = (extra) => authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({}, body || {}, extra || {})) });
+    let r = await send();
+    if (r.status === 409) {
+        const j = await r.clone().json().catch(function () { return {}; });
+        if (j.code === 'BANK_UNKNOWN' && confirm('⚠️ ' + j.error + '\n\n¿Ya revisaste el extracto del banco y este retiro NO salió? (Si salió, tocá Cancelar.)')) r = await send({ bankChecked: true });
+    }
+    return r;
+}
 async function cancelPayout(id) {
     if (!confirm('¿Rechazar este pago? NO se paga. Como las fichas se descuentan recién al pagar, acá no hay nada que devolver: solo se cancela la solicitud.')) return;
     const el = document.getElementById('chatPayoutBanner');
     try {
-        const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/cancel', { method: 'POST' });
+        const r = await _payoutPost(id, 'cancel'); // #995
         const j = await r.json();
         if (r.ok && j.success) {
             // Flujo nuevo: noDeduction = no se había descontado nada (caso normal).
@@ -3006,7 +3016,7 @@ async function payOtherBank(id) {
     if (!confirm('¿Marcar este retiro como PAGADO desde otro banco? Confirmá sólo si YA hiciste la transferencia por fuera. No se devuelven fichas.')) return;
     const el = document.getElementById('chatPayoutBanner');
     try {
-        const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/pay-other-bank', { method: 'POST' });
+        const r = await _payoutPost(id, 'pay-other-bank'); // #995
         const j = await r.json();
         if (r.ok && j.success) {
             showToast('Pagado por otro banco ✅', 'success');
@@ -3326,7 +3336,7 @@ async function sendCBU() {
     }
 }
 
-async function handleDeposit() {
+async function handleDeposit(allowRepeat) {
     const amount = parseFloat(document.getElementById('depositAmount').value);
     const bonus = parseFloat(document.getElementById('depositBonus').value) || 0;
     const description = document.getElementById('depositDesc').value;
@@ -3358,12 +3368,20 @@ async function handleDeposit() {
                 bonus,
                 description,
                 // Multi-plataforma: a qué plataforma va la carga (select del modal; vacío = default del cliente)
-                platform: (document.getElementById('depositPlatform') && document.getElementById('depositPlatform').value) || undefined
+                platform: (document.getElementById('depositPlatform') && document.getElementById('depositPlatform').value) || undefined,
+                allowRepeat: allowRepeat === true || undefined // #995
             })
         });
         
         const data = await response.json();
         
+        // #995: el server frena la MISMA carga repetida en 90 s (doble clic / reenvío); si es una carga nueva de verdad, se confirma y va.
+        if (response.status === 409 && data && data.code === 'DUP_DEPOSIT') {
+            setButtonLoading(confirmBtn, false, 'Confirmar Depósito');
+            if (window.confirm('⚠️ ' + data.error + '\n\n¿Cargar OTRA VEZ $' + amount.toLocaleString('es-AR') + '?')) return await handleDeposit(true);
+            showToast('Carga repetida cancelada (no se acreditó dos veces).', 'info');
+            return;
+        }
         if (!response.ok) {
             throw new Error(data.error || 'Error al realizar depósito');
         }
@@ -6318,7 +6336,7 @@ async function payReviewOtherBank(id) {
     const p = _prItems.find(function (x) { return x.id === id; });
     if (!confirm('¿Marcar ' + (p ? fmtARS(p.amount) + ' de ' + p.username : 'este retiro') + ' como PAGADO DESDE UN BANCO EXTERNO?\n\nConfirmá sólo si YA hiciste la transferencia por fuera. Se descuentan las fichas del cliente y no sale nada por el banco automático.')) return;
     try {
-        const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/pay-other-bank', { method: 'POST' }); const j = await r.json().catch(function () { return {}; });
+        const r = await _payoutPost(id, 'pay-other-bank'); // #995 const j = await r.json().catch(function () { return {}; });
         if (r.ok && j.success) showToast('🏦 Pagado por banco externo ✅ (fichas descontadas)', 'success');
         else if (r.ok && j.insufficient) showToast(j.message || 'Saldo insuficiente: no se pagó. Se avisó al cliente.', 'error');
         else showToast(j.error || 'No se pudo', 'error');
@@ -6349,7 +6367,7 @@ async function payReviewReject(id) {
     const reason = prompt('Motivo del rechazo (se guarda en el caso):', 'Revisión anti-estafa'); if (reason === null) return;
     if (!confirm('¿RECHAZAR el retiro de ' + (p ? fmtARS(p.amount) + ' de ' + p.username : '') + '? No se paga.')) return;
     try {
-        const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }) }); const j = await r.json().catch(function () { return {}; });
+        const r = await _payoutPost(id, 'cancel', { reason }); // #995 const j = await r.json().catch(function () { return {}; });
         if (!r.ok) showToast(j.error || 'No se pudo rechazar', 'error'); else showToast('Retiro rechazado', 'success');
         loadPayReview();
     } catch (_) { showToast('Error de conexión', 'error'); }

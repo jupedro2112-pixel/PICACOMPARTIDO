@@ -692,6 +692,8 @@ const userSchema = new mongoose.Schema({
     claimedAt: { type: Date, default: null },
     expiresAt: { type: Date, default: null }
   },
+  // #995 (seguridad): historias cuyo bono ya se USÓ en una carga (últimas 30): no se puede volver a reclamar mientras la historia siga vigente.
+  storyBonusUsed: { type: [String], default: [] },
   dailyRouletteWonAt: { type: Date, default: null },
 
   // ============================================
