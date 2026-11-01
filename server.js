@@ -2828,7 +2828,7 @@ async function handlePayoutStatusWebhook(p) {
     if (status === 'DONE') {
       if (payout.status === 'paid') return; // idempotente
       // #820: el banco pagó algo que ya estaba RECHAZADO (fichas devueltas) o pagado por otro banco ⇒ posible pago doble: alertar, no pisar.
-      if (payout.status === 'cancelled' || payout.paidVia === 'other_bank') {
+      if (payout.status === 'cancelled' || ['other_bank', 'secondary', 'same_bank_manual'].includes(payout.paidVia)) { // #1001
         await PendingPayout.updateOne({ id: payout.id }, { $set: { hgStatus: status } });
         await _emitAdminOnlyChatNote(payout.userId, payout.username, `🚨 URGENTE: hgcash confirmó PAGADO el retiro de $${Number(payout.amount).toLocaleString('es-AR')}, pero en el panel estaba ${payout.status === 'cancelled' ? 'RECHAZADO (con las fichas devueltas)' : 'pagado por OTRO banco'}. Revisá: el cliente pudo cobrar dos veces.`).catch(() => {});
         try { io.to('admins').emit('security_alert', { username: payout.username, message: `Posible pago doble: retiro $${payout.amount} de ${payout.username}`, at: new Date() }); } catch (_) {}
@@ -11240,12 +11240,13 @@ async function _agentDepositHandler(req, res, body) {
         adminUsername: req.user?.username,
         adminRole: req.user?.role || 'admin',
         transactionId: result.data?.transfer_id || result.data?.transferId,
-        metadata: bonusRequested && !bonusActuallyApplied ? {
+        // #1001: en qué cuenta NUESTRA entró la plata de esta carga a mano (principal / secundaria): el cierre lo cuenta en esa cuenta.
+        metadata: Object.assign({ bankAccount: await _normBankAccount(body && body.bankAccount) }, bonusRequested && !bonusActuallyApplied ? {
           // Trazabilidad: agente pidió bonus pero no entró. Sirve para reportes
           // de discrepancias y para que el admin sepa que hubo intento fallido.
           requestedBonus: _effectiveBonus,
           bonusFailureReason: bonusJgResult?.error || 'desconocido'
-        } : null,
+        } : {}),
         timestamp: new Date()
       });
 
@@ -21388,7 +21389,7 @@ app.post('/api/admin/deposit-reviews/:id/confirm', authMiddleware, depositorMidd
       const mv = await BankMovement.findOne({ movementId: c.matchedMovementId }).select('movementId coelsaCode externalId').lean();
       if (mv) _reference = `vip-hg-${String(mv.coelsaCode || mv.externalId || '').trim() || mv.movementId}`;
     }
-    await _agentDepositHandler(req, proxy, { userId: c.userId, amount, bonus: Number(req.body && req.body.bonus) || 0, platform: req.body && req.body.platform, description: `Carga automática · confirmada por ${req.user.username || 'agente'}`, _fromReviewId: id, _reference });
+    await _agentDepositHandler(req, proxy, { userId: c.userId, amount, bonus: Number(req.body && req.body.bonus) || 0, platform: req.body && req.body.platform, description: `Carga automática · confirmada por ${req.user.username || 'agente'}`, _fromReviewId: id, _reference, bankAccount: (req.body && req.body.bankAccount) || await _bankAccountForCbu(c.destCbu) }); // #1001
     if (out.status !== 200 || !out.json || out.json.error) {
       await Comprobante.updateOne({ id }, { $set: { reviewStatus: 'pending', reviewResolution: null, reviewedBy: null, reviewedAt: null } });
       return res.status(out.status && out.status !== 200 ? out.status : 400).json({ error: (out.json && out.json.error) || 'No se pudo cargar' });
@@ -21957,6 +21958,50 @@ async function _closeAttachBalances(doc) {
 setTimeout(() => { _bankBalanceSnapshotTick(); setInterval(_bankBalanceSnapshotTick, 60 * 1000); }, 60 * 1000);
 // #948 (owner): + costo por transferencia ($50 por cada carga del día, editable); USDT ya no forma parte del cierre.
 async function _closeConfig() { const c = (await getConfig('closeConfig', null)) || {}; return { bankCommissionPct: Number(c.bankCommissionPct) || 0, perDepositFee: c.perDepositFee == null ? 50 : Math.max(0, Number(c.perDepositFee) || 0), autoUsdt: false }; }
+// #1001 (owner): CUENTAS DEL CIERRE. La principal es la del banco automático (hgcash, con API). Las SECUNDARIAS (otro banco / billetera,
+// p. ej. Fiwind; con API todavía no conectada = se toma lo que marcan los agentes) se cargan en Cierres → Cuentas del cierre:
+// Config['bankAccounts'] = { list: [{ id, name, cbu, kind: 'manual'|'api', active }] }. Cada carga a mano dice en qué cuenta entró
+// (Transaction.metadata.bankAccount) y cada retiro pagado a mano desde dónde salió (PendingPayout.paidVia / paidAccount).
+async function _bankAccounts() { try { const c = (await getConfig('bankAccounts', null)) || {}; return (Array.isArray(c.list) ? c.list : []).filter((a) => a && a.id && a.name); } catch (_) { return []; } }
+async function _normBankAccount(v) {
+  const id = String(v || 'main').replace(/^sec:/, '');
+  if (!id || id === 'main') return 'main';
+  return (await _bankAccounts()).some((a) => a.id === id && a.active !== false) ? id : 'main';
+}
+async function _bankAccountForCbu(cbu) {
+  const d = _digits(cbu); if (d.length !== 22) return 'main';
+  const a = (await _bankAccounts()).find((x) => x.active !== false && _digits(x.cbu) === d); return a ? a.id : 'main';
+}
+// Para los agentes (selector de la carga a mano y del "pagado a mano"): sólo nombre y últimos 4 del CBU.
+app.get('/api/admin/bank-accounts/options', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!['admin', 'depositor', 'withdrawer'].includes(req.user.role)) return res.status(403).json({ error: 'Sin acceso' });
+    const list = (await _bankAccounts()).filter((a) => a.active !== false).map((a) => ({ id: a.id, name: a.name, cbu4: _digits(a.cbu).slice(-4) || null }));
+    res.json({ success: true, main: { id: 'main', name: 'Cuenta principal (banco automático)' }, accounts: list });
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.get('/api/admin/cierres/accounts', authMiddleware, adminMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+  res.json({ success: true, list: await _bankAccounts() });
+});
+app.post('/api/admin/cierres/accounts', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const prev = await _bankAccounts(); const inList = Array.isArray(req.body && req.body.list) ? req.body.list.slice(0, 8) : null;
+    if (!inList) return res.status(400).json({ error: 'Lista inválida' });
+    const out = [];
+    for (const a of inList) {
+      const name = String((a && a.name) || '').trim().slice(0, 40); if (name.length < 2) return res.status(400).json({ error: 'Cada cuenta necesita un nombre' });
+      const cbu = _digits(a.cbu); if (cbu && cbu.length !== 22) return res.status(400).json({ error: 'El CBU/CVU de "' + name + '" tiene que tener 22 números (o dejalo vacío)' });
+      const id = a.id && prev.some((p) => p.id === a.id) ? a.id : 's' + Date.now().toString(36) + out.length;
+      out.push({ id, name, cbu, kind: a.kind === 'api' ? 'api' : 'manual', active: a.active !== false });
+    }
+    // Una cuenta que ya se usó no se borra (los cierres viejos la nombran): queda desactivada.
+    for (const p of prev) if (!out.some((o) => o.id === p.id)) out.push(Object.assign({}, p, { active: false }));
+    await Config.set('bankAccounts', { list: out, updatedAt: new Date().toISOString(), by: req.user.username }, req.user.username);
+    res.json({ success: true, list: out });
+  } catch (e) { logger.error('[cierres] cuentas ' + e.message); res.status(500).json({ error: 'Error del servidor' }); }
+});
 function _closeApply(doc, cfg) {
   // comisión: monto a mano > % del día (a mano) > % por defecto sobre depósitos (#501: el % se puede cambiar en cada cierre)
   if (doc.bankCommissionSource === 'manual_pct') { doc.bankCommissionArs = Math.round(doc.depositos * (doc.bankCommissionPct || 0) / 100); }
@@ -21972,7 +22017,9 @@ function _closeApply(doc, cfg) {
   doc.ingresosTotal = Math.round((doc.depositos || 0) + (doc.pagosExternos || 0) + (doc.fondeos || 0));
   doc.egresosTotal = Math.round((doc.retiros || 0) + (doc.bankCommissionArs || 0) + (doc.feeDepositsArs || 0) + (doc.gastos || 0));
   doc.resultado = Math.round(doc.ingresosTotal - doc.egresosTotal);
-  doc.resultadoCaja = Math.round(doc.resultado + ((doc.gastos || 0) - (doc.gastosBanco || 0)));
+  // #1001: lo que entró / salió por una cuenta SECUNDARIA es plata real (va al resultado) pero no pasa por la caja de la principal.
+  const _depSec = Number(doc.depositosSecundaria) || 0, _paySec = Number(doc.pagosSecundaria) || 0;
+  doc.resultadoCaja = Math.round(doc.resultado + ((doc.gastos || 0) - (doc.gastosBanco || 0)) - _depSec + _paySec);
   // #501 ARQUEO: banco (manual > automático) vs sistema
   doc.bankIn = doc.bankInManual != null ? doc.bankInManual : (doc.bankInAuto || 0);
   doc.bankOut = doc.bankOutManual != null ? doc.bankOutManual : (doc.bankOutAuto || 0);
@@ -21982,8 +22029,8 @@ function _closeApply(doc, cfg) {
   // entró a la cuenta sin ser carga de nadie. Los dos son ingresos de la cuenta que el sistema no tiene como depósito: se restan de la
   // diferencia para que el arqueo dé 0 cuando todo está registrado.
   doc.ingresosExternos = Math.round((doc.pagosExternos || 0) + (doc.fondeos || 0));
-  doc.difIn = Math.round(doc.bankIn - (doc.fondeos || 0) - doc.depositos); doc.difOut = Math.round(doc.bankOut - (doc.retiros - (doc.pagosExternos || 0)));
-  doc.diferencia = Math.round((doc.bankIn - doc.bankOut) - (doc.depositos - doc.retiros) - doc.ingresosExternos);
+  doc.difIn = Math.round(doc.bankIn - (doc.fondeos || 0) - (doc.depositos - _depSec)); doc.difOut = Math.round(doc.bankOut - (doc.retiros - (doc.pagosExternos || 0) - _paySec));
+  doc.diferencia = Math.round((doc.bankIn - doc.bankOut) - (doc.depositos - _depSec - doc.retiros + _paySec) - doc.ingresosExternos);
   const tol = Math.max(1000, Math.round(doc.depositos * 0.001));
   // #502: si hay saldo del banco al inicio y al fin del día, el arqueo REAL es (saldo fin − saldo inicio) − (depósitos − retiros)
   const bs = doc.bankBalanceStartManual != null ? doc.bankBalanceStartManual : doc.bankBalanceStart, be = doc.bankBalanceEndManual != null ? doc.bankBalanceEndManual : doc.bankBalanceEnd;
@@ -22021,14 +22068,28 @@ async function _closeReconcile(dayKey) {
   out.sistema.depositosManual = sum(g.manual); out.sistema.depositosManualN = g.manual.length;
   out.sistema.depositosPrueba = sum(g.prueba); out.sistema.depositosPruebaN = g.prueba.length;
   out.sistema.depositos = out.sistema.depositosAuto + out.sistema.depositosManual + out.sistema.depositosPrueba;
-  out.items.depositosManual = g.manual.slice(0, 50).map((t) => ({ hora: t.timestamp, usuario: t.username, monto: r0(t.amount), agente: t.adminUsername || null, nota: String(t.description || '').slice(0, 80) }));
+  // #1001: cargas a mano según la cuenta donde entró la plata (las viejas, sin marca, quedan "sin cuenta").
+  const _accs = await _bankAccounts(); const _accName = (id) => id === 'main' ? 'Principal' : ((_accs.find((a) => a.id === id) || {}).name || id);
+  const _acc = (t) => (t.metadata && t.metadata.bankAccount) || null;
+  const gMain = g.manual.filter((t) => _acc(t) === 'main'), gSec = g.manual.filter((t) => _acc(t) && _acc(t) !== 'main'), gNone = g.manual.filter((t) => !_acc(t));
+  out.sistema.depositosManualPrincipal = sum(gMain); out.sistema.depositosSecundaria = sum(gSec); out.sistema.depositosSecundariaN = gSec.length;
+  out.sistema.depositosSinCuenta = sum(gNone); out.sistema.depositosSinCuentaN = gNone.length;
+  out.items.depositosManual = g.manual.slice(0, 50).map((t) => ({ hora: t.timestamp, usuario: t.username, monto: r0(t.amount), agente: t.adminUsername || null, cuenta: _acc(t) ? _accName(_acc(t)) : '⚠ sin marcar', nota: String(t.description || '').slice(0, 80) }));
   out.items.depositosPrueba = g.prueba.slice(0, 20).map((t) => ({ hora: t.timestamp, usuario: t.username, monto: r0(t.amount), nota: String(t.description || '').slice(0, 80) }));
   // ---- SISTEMA: retiros
   const wds = await Transaction.find({ type: 'withdrawal', status: okSt, timestamp: { $gte: d0, $lte: d1 } }).select('amount username timestamp').lean();
   out.sistema.retiros = sum(wds); out.sistema.retirosN = wds.length;
-  const pays = await PendingPayout.find({ status: 'paid', paidAt: { $gte: d0, $lte: d1 } }).select('amount username paidBy paidVia hgTransactionId paidAt').lean();
+  const pays = await PendingPayout.find({ status: 'paid', paidAt: { $gte: d0, $lte: d1 } }).select('amount username paidBy paidVia paidAccount hgTransactionId paidAt').lean();
   // #913: pagados por BANCO EXTERNO (#904, paidVia 'other_bank') aparte de los pagados a mano: son un INGRESO (la plata quedó en la cuenta).
-  const payAuto = pays.filter((p) => p.hgTransactionId), payExt = pays.filter((p) => !p.hgTransactionId && p.paidVia === 'other_bank'), payMan = pays.filter((p) => !p.hgTransactionId && p.paidVia !== 'other_bank');
+  // #1001: + pagados a mano desde la MISMA cuenta (falló la API: la salida está en el banco) y desde una cuenta SECUNDARIA nuestra.
+  const payAuto = pays.filter((p) => p.hgTransactionId), payExt = pays.filter((p) => !p.hgTransactionId && p.paidVia === 'other_bank');
+  const paySame = pays.filter((p) => !p.hgTransactionId && p.paidVia === 'same_bank_manual'), paySec = pays.filter((p) => !p.hgTransactionId && p.paidVia === 'secondary');
+  const payMan = pays.filter((p) => !p.hgTransactionId && !['other_bank', 'same_bank_manual', 'secondary'].includes(p.paidVia));
+  out.sistema.pagosMismoBanco = sum(paySame); out.sistema.pagosMismoBancoN = paySame.length;
+  out.sistema.pagosSecundaria = sum(paySec); out.sistema.pagosSecundariaN = paySec.length;
+  out.items.pagosMarcados = paySame.concat(paySec).slice(0, 50).map((p) => ({ hora: p.paidAt, usuario: p.username, monto: r0(p.amount), agente: p.paidBy || null, via: p.paidVia === 'secondary' ? 'secundaria ' + _accName(p.paidAccount) : 'principal, a mano' }));
+  // Retiros que quedaron "pagando" más de 30 min (no se sabe si salió la plata): el cierre no puede dar OK con eso.
+  out.sistema.pagosTrabadosN = await PendingPayout.countDocuments({ status: 'paying', updatedAt: { $lte: new Date(Date.now() - 30 * 60000) }, createdAt: { $lte: d1 } }).catch(() => 0);
   out.sistema.pagosBanco = sum(payAuto); out.sistema.pagosBancoN = payAuto.length;
   out.sistema.pagosManual = sum(payMan); out.sistema.pagosManualN = payMan.length;
   out.sistema.pagosExternos = sum(payExt); out.sistema.pagosExternosN = payExt.length;
@@ -22059,7 +22120,10 @@ async function _closeReconcile(dayKey) {
   const dif = r0((out.banco.entradas - out.banco.salidas) - (out.sistema.depositos - out.sistema.retiros));
   out.diferencia = dif; out.sinDatosBanco = inDay.length === 0;
   const add = (clave, titulo, monto, signo, explica, severidad) => { if (!(Math.abs(monto) > 0)) return; out.causas.push({ clave, titulo, monto: r0(monto), impacto: r0(monto) * signo, explica, severidad }); };
-  add('dep_manual', 'Cargas acreditadas A MANO por un agente (sin pasar por el banco)', out.sistema.depositosManual, -1, 'El sistema las cuenta como depósito pero el banco no tiene esa entrada. Si el cliente transfirió, tiene que verse como entrada del banco; si no, revisar con quién y por qué se acreditó.', 'alta');
+  // #1001: cargas a mano separadas por cuenta.
+  add('dep_manual', 'Cargas a mano que entraron a la cuenta PRINCIPAL', out.sistema.depositosManualPrincipal, -1, 'La transferencia tiene que verse en el banco como "entrada sin acreditar" (se compensan). Si no aparece, revisar el comprobante.', 'media');
+  add('dep_secundaria', 'Cargas a mano que entraron a una cuenta SECUNDARIA', out.sistema.depositosSecundaria, -1, 'La plata entró a otra cuenta nuestra (ver "Cuentas"): no pasa por el banco principal. Es normal.', 'baja');
+  add('dep_sin_cuenta', 'Cargas a mano SIN marcar en qué cuenta entró la plata', out.sistema.depositosSinCuenta, -1, 'El agente no dijo dónde entró la plata. Revisar con quién y por qué se acreditó (lista de abajo).', 'alta');
   add('dep_prueba', 'Cargas de PRUEBA (usuario tester)', out.sistema.depositosPrueba, -1, 'Sólo en el entorno de prueba. En producción tiene que ser $0.', 'media');
   // #904: lo que el dueño registró como FONDEO explica (hasta su monto) las entradas del banco que no son cargas de clientes.
   const _fondeoExpl = Math.min(out.sistema.fondeos || 0, out.banco.entradasSinAcreditar || 0); out.fondeoNoVistoEnBanco = Math.max(0, (out.sistema.fondeos || 0) - _fondeoExpl);
@@ -22068,9 +22132,10 @@ async function _closeReconcile(dayKey) {
   add('in_devueltas', 'Entradas devueltas al origen (rebote por carga menor al mínimo)', out.banco.entradasDevueltas, +1, 'Entró y se devolvió: la entrada cuenta en el banco pero la salida de la devolución también. Neutro si la devolución salió el mismo día.', 'baja');
   add('in_dup', 'Entradas duplicadas o ignoradas por el sistema', out.banco.entradasDupIgn, +1, 'El banco las informó pero el sistema las descartó (duplicado o ignorado). Verificar que no sean cargas reales.', 'media');
   add('pago_externo', 'Retiros pagados por BANCO EXTERNO (ingreso: la plata quedó en la cuenta)', out.sistema.pagosExternos, +1, 'Las fichas se descontaron en 1girox (cuenta como retiro) pero se pagó desde otra cuenta: la plata NO salió de este banco. Se toma como INGRESO del día y explica ese sobrante.', 'baja'); // #913
-  add('pago_manual', 'Retiros pagados A MANO (por fuera de la API del banco)', out.sistema.pagosManual, +1, 'El sistema los cuenta como retiro pero el banco no registra la salida por API. Si se pagaron desde otra cuenta, es normal; si no, verificar.', 'alta');
+  add('pago_secundaria', 'Retiros pagados desde una cuenta SECUNDARIA', out.sistema.pagosSecundaria, +1, 'Salieron de otra cuenta nuestra (ver "Cuentas"), no del banco principal. Es normal.', 'baja'); // #1001
+  add('pago_manual', 'Retiros pagados a mano SIN marcar desde dónde', out.sistema.pagosManual, +1, 'Nadie marcó si salió de la principal, de una secundaria o de otro banco. Verificar en el extracto.', 'alta');
   add('gastos_banco', 'Gastos pagados por la API del banco (registrados en Gastos)', out.sistema.gastosBanco, -1, 'Salieron del banco como gasto cargado en el panel: explican esa parte de las salidas; se descuentan del resultado del día.', 'baja');
-  const salidasOtras = r0(out.banco.salidas - out.sistema.pagosBanco - out.banco.entradasDevueltas - out.sistema.gastosBanco);
+  const salidasOtras = r0(out.banco.salidas - out.sistema.pagosBanco - out.sistema.pagosMismoBanco - out.banco.entradasDevueltas - out.sistema.gastosBanco); // #1001: los pagados a mano desde la principal ya explican su salida
   add('out_otras', 'Otras salidas del banco (comisiones, transferencias ajenas a retiros)', salidasOtras, -1, 'Salieron del banco sin ser un retiro de cliente, una devolución ni un gasto registrado: comisiones del banco u otros pagos. Si es un gasto, cargalo en Gastos para que quede explicado.', 'media');
   const explicado = r0(out.causas.reduce((s, c) => s + c.impacto, 0));
   out.explicado = explicado; out.sinExplicar = r0(dif - explicado);
@@ -22081,6 +22146,21 @@ async function _closeReconcile(dayKey) {
   // 1girox) + lo que se movió en 1girox POR FUERA de la app (caja de 1girox, GET /chip-requests aceptadas). El owner carga los totales del
   // cierre de 1girox (DailyClose.giroxPanel) y se calcula la diferencia por rubro.
   try { out.girox = await _closeGiroxSide(dayKey, d0, d1); } catch (e) { out.girox = { error: e.message }; }
+  // #1001: CUENTAS — la principal (banco por API) y cada secundaria (lo que marcaron los agentes + saldos que carga el admin).
+  try {
+    const prevKey = datosIa.dateKeyART(new Date(d0.getTime() - 43200000));
+    const [cur, prv] = await Promise.all([DailyClose.findOne({ dateKey: dayKey }).select('accountBalances').lean(), DailyClose.findOne({ dateKey: prevKey }).select('accountBalances').lean()]);
+    const bal = (cur && cur.accountBalances) || {}, pb = (prv && prv.accountBalances) || {};
+    out.cuentas = [{ id: 'main', name: 'Principal (banco automático)', kind: 'api', entradas: out.banco.entradas, salidas: out.banco.salidas, fuente: out.sinDatosBanco ? 'sin datos del banco' : 'API del banco' }];
+    for (const a of _accs) {
+      const ins = gSec.filter((t) => _acc(t) === a.id), outs = paySec.filter((p) => p.paidAccount === a.id);
+      if (a.active === false && !ins.length && !outs.length) continue;
+      const b = bal[a.id] || {}; const start = b.start != null ? b.start : (pb[a.id] && pb[a.id].end != null ? pb[a.id].end : null);
+      const c = { id: a.id, name: a.name, kind: a.kind, entradas: sum(ins), entradasN: ins.length, salidas: sum(outs), salidasN: outs.length, fuente: a.kind === 'api' ? 'API todavía no conectada: lo marcado por los agentes' : 'lo marcado por los agentes', saldoInicio: start, saldoInicioOrigen: b.start != null ? 'cargado' : (start != null ? 'cierre del día anterior' : null), saldoFin: b.end != null ? b.end : null };
+      c.saldoEsperado = start != null ? r0(start + c.entradas - c.salidas) : null; c.diferencia = c.saldoEsperado != null && c.saldoFin != null ? r0(c.saldoFin - c.saldoEsperado) : null;
+      out.cuentas.push(c);
+    }
+  } catch (e) { out.cuentas = []; }
   out.calculadoEn = new Date();
   return out;
 }
@@ -22142,9 +22222,32 @@ async function _closeEnsure(dayKey, recalc) {
     try { doc = await DailyClose.create({ id: uuidv4(), ...t }); } catch (e) { if (e && e.code === 11000) doc = await DailyClose.findOne({ dateKey: dayKey }); else throw e; }
   } else if (doc.status !== 'finalizado' || recalc) { Object.assign(doc, t, { recalculatedAt: new Date() }); }
   await _closeAttachBalances(doc); _closeApply(doc, cfg);
-  try { doc.detalle = await _closeReconcile(dayKey); doc.markModified('detalle'); const _ds = (doc.detalle && doc.detalle.sistema) || {}; doc.gastos = Number(_ds.gastos) || 0; doc.pagosExternos = Number(_ds.pagosExternos) || 0; doc.fondeos = Number(_ds.fondeos) || 0; doc.gastosBanco = Number(_ds.gastosBanco) || 0; _closeApply(doc, cfg); } /* #913: pagos externos + fondeos → arqueo */ catch (e) { logger.warn('[cierres] conciliación ' + dayKey + ': ' + e.message); } // #770: gastos → resultado
+  try { doc.detalle = await _closeReconcile(dayKey); doc.markModified('detalle'); const _ds = (doc.detalle && doc.detalle.sistema) || {}; doc.gastos = Number(_ds.gastos) || 0; doc.pagosExternos = Number(_ds.pagosExternos) || 0; doc.fondeos = Number(_ds.fondeos) || 0; doc.gastosBanco = Number(_ds.gastosBanco) || 0; doc.depositosSecundaria = Number(_ds.depositosSecundaria) || 0; doc.pagosSecundaria = Number(_ds.pagosSecundaria) || 0; _closeApply(doc, cfg); } /* #913: pagos externos + fondeos → arqueo */ catch (e) { logger.warn('[cierres] conciliación ' + dayKey + ': ' + e.message); } // #770: gastos → resultado
+  _closeCheckSet(doc);
   await doc.save(); return doc;
 }
+// #1001 (owner): "que des confirmación de que el cierre está okey". Lista de controles; estado 'ok' sólo si TODOS pasan.
+function _closeCheck(doc) {
+  const d = doc.detalle || {}, s = d.sistema || {}, b = d.banco || {}; const r0 = (n) => Math.round(Number(n) || 0); const $ = (n) => '$' + r0(n).toLocaleString('es-AR');
+  const tol = Math.max(1000, Math.round((doc.depositos || 0) * 0.001)); const items = [];
+  const it = (key, label, ok, detail, info) => items.push({ key, label, ok: !!ok, detail: detail || '', info: !!info });
+  const hasBank = doc.bankSource === 'api' || doc.bankInManual != null || doc.bankOutManual != null || !d.sinDatosBanco;
+  it('banco', 'Datos del banco principal', hasBank, hasBank ? (doc.bankSource === 'api' ? 'por API' : 'cargados a mano') : 'No hay movimientos del banco: si la API falló, cargá a mano "Banco entró / salió" en Ajustes del día.');
+  const sinAcr = Math.max(0, r0(b.entradasSinAcreditar) - r0(Math.min(s.fondeos || 0, b.entradasSinAcreditar || 0)));
+  it('sin_acreditar', 'Transferencias del banco acreditadas a alguien', sinAcr <= tol, sinAcr ? $(sinAcr) + ' entraron al banco y no se cargaron a nadie (Cargas pendientes).' : 'todas');
+  const legacy = String(doc.dateKey || '') < '2026-11-02'; // antes de #1001 nadie marcaba la cuenta: en esos días sólo se informa
+  it('dep_cuenta', 'Cargas a mano con la cuenta marcada', legacy || !s.depositosSinCuentaN, s.depositosSinCuentaN ? s.depositosSinCuentaN + ' carga(s) por ' + $(s.depositosSinCuenta) + ' sin decir en qué cuenta entró la plata.' : 'todas', legacy && !!s.depositosSinCuentaN);
+  it('pago_marca', 'Retiros a mano con "desde dónde se pagó"', !s.pagosManualN, s.pagosManualN ? s.pagosManualN + ' retiro(s) por ' + $(s.pagosManual) + ' sin marcar (principal / secundaria / otro banco).' : 'todos');
+  it('trabados', 'Ningún retiro trabado "pagando"', !s.pagosTrabadosN, s.pagosTrabadosN ? s.pagosTrabadosN + ' retiro(s) quedaron pagando más de 30 min: revisar en Pagos a confirmar.' : 'ninguno');
+  if (hasBank) it('diferencia', 'Diferencia banco − sistema explicada', Math.abs(r0(d.sinExplicar)) <= tol, d.sinExplicar ? 'queda ' + $(d.sinExplicar) + ' sin explicar (ver Posibles causas).' : 'todo explicado');
+  if (doc.arqueo && doc.arqueo !== 'sin_datos') it('caja', 'Caja de la principal (saldo 00 hs)', doc.arqueo === 'cuadra', doc.arqueo === 'cuadra' ? 'cuadra' : (doc.arqueo === 'faltante' ? 'faltante ' : 'sobrante ') + $(Math.abs(doc.diferencia || 0)));
+  for (const c of (d.cuentas || [])) { if (c.id === 'main') continue; if (c.diferencia == null) { if (c.entradasN || c.salidasN) it('acc_' + c.id, 'Cuenta ' + c.name, true, 'entró ' + $(c.entradas) + ' · salió ' + $(c.salidas) + ' (sin saldos cargados: no se puede arquear)', true); continue; } it('acc_' + c.id, 'Cuenta ' + c.name + ' (saldo)', Math.abs(c.diferencia) <= tol, Math.abs(c.diferencia) <= tol ? 'cuadra' : 'diferencia ' + $(c.diferencia)); }
+  const gx = d.girox || {}; if (gx.panel) it('girox', 'Fichas vs panel de 1girox', gx.cuadra !== false, gx.cuadra === false ? (gx.causas || [])[0] || 'no coincide' : 'coincide'); else it('girox', 'Fichas vs panel de 1girox', true, 'todavía no cargaste los totales de 1girox (opcional)', true);
+  const bad = items.filter((x) => !x.ok && !x.info);
+  const today = datosIa.dateKeyART(new Date());
+  return { estado: bad.length ? 'revisar' : 'ok', enCurso: doc.dateKey >= today, pendientes: bad.length, items, at: new Date() };
+}
+function _closeCheckSet(doc) { try { doc.check = _closeCheck(doc); doc.markModified && doc.markModified('check'); } catch (e) { logger.warn('[cierres] control ' + e.message); } }
 // Cron: cada 20 min asegura el cierre de AYER y rellena hasta 7 días hacia atrás (idempotente por dateKey; corre en cada instancia sin duplicar).
 // #744 (owner): TODO AUTOMÁTICO — no espera confirmación: los últimos 3 días se recalculan en cada pasada (llegan pagos/cargas tarde) y
 // todo día ya terminado se FINALIZA solo (finalizedBy 'auto'; un cierre finalizado a mano no se toca). USDT es opcional.
@@ -22158,6 +22261,8 @@ async function _closeTick() {
     const pend = await DailyClose.find({ status: 'pendiente', dateKey: { $lt: today } }).select('id dateKey').lean();
     for (const p of pend) { await DailyClose.updateOne({ id: p.id, status: 'pendiente' }, { $set: { status: 'finalizado', finalizedAt: new Date(), finalizedBy: 'auto', autoFinalizedAt: new Date() } }); }
     if (pend.length) logger.info('[cierres] finalizados solos: ' + pend.map((p) => p.dateKey).join(', '));
+    // #1001 (owner): "cierre automático dependiendo cómo avanza el día": el de HOY se recalcula en cada pasada (cada 20 min).
+    try { const _t = datosIa.dateKeyART(new Date()); if (!_since || _t >= _since) await _closeEnsure(_t, true); } catch (e) { logger.warn('[cierres] hoy: ' + e.message); }
   } catch (e) { logger.warn('[cierres] auto: ' + e.message); }
   try { for (let i = 1; i <= 7; i++) { const dk = datosIa.dateKeyART(new Date(Date.now() - i * 86400000)); if (_since && dk < _since) continue; const ex = await DailyClose.findOne({ dateKey: dk }).select('id status recalculatedAt generatedAt').lean(); if (!ex) await _closeEnsure(dk, false); else if (ex.status !== 'finalizado' && i <= 2 && (Date.now() - new Date(ex.recalculatedAt || ex.generatedAt).getTime()) > 6 * 3600000) await _closeEnsure(dk, true); } } catch (e) { logger.warn('[cierres] tick: ' + e.message); }
 }
@@ -22208,8 +22313,8 @@ app.get('/api/admin/cierres/:dateKey/detalle', authMiddleware, adminMiddleware, 
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
     const dk = String(req.params.dateKey || ''); if (!/^\d{4}-\d{2}-\d{2}$/.test(dk)) return res.status(400).json({ error: 'Día inválido' });
     const det = await _closeReconcile(dk);
-    try { await DailyClose.updateOne({ dateKey: dk }, { $set: { detalle: det } }); } catch (_) {}
-    res.json({ success: true, detalle: det });
+    let check = null; try { const doc = await DailyClose.findOne({ dateKey: dk }); if (doc) { doc.detalle = det; doc.markModified('detalle'); _closeCheckSet(doc); check = doc.check; await doc.save(); } } catch (_) {}
+    res.json({ success: true, detalle: det, check }); // #1001
   } catch (e) { logger.error('[cierres] detalle ' + e.message); res.status(500).json({ error: 'Error del servidor' }); }
 });
 // #888: el owner carga los totales del cierre del panel de 1girox (cargas / retiros / bonos de ese día) para que se comparen con la app.
@@ -22244,7 +22349,15 @@ app.post('/api/admin/cierres/:dateKey', authMiddleware, adminMiddleware, async (
     if (b.useDefaultCommission) { doc.bankCommissionSource = null; }
     if (b.usdtRate != null && b.usdtRate !== '') { const r = Number(b.usdtRate); if (!(r > 0)) return res.status(400).json({ error: 'Cotización inválida' }); doc.usdtRate = Math.round(r); }
     if (b.notes != null) doc.notes = String(b.notes).slice(0, 500);
-    _closeApply(doc, cfg);
+    // #1001: saldos de las cuentas SECUNDARIAS (inicio / fin del día) que carga el admin → arqueo de cada cuenta.
+    if (b.accountBalances && typeof b.accountBalances === 'object') {
+      const ids = (await _bankAccounts()).map((a) => a.id); const ab = Object.assign({}, doc.accountBalances || {});
+      const nv = (v) => (v === '' || v == null ? null : (Number.isFinite(Number(v)) ? Math.round(Number(v)) : null));
+      for (const [k, v] of Object.entries(b.accountBalances)) { if (!ids.includes(k) || !v || typeof v !== 'object') continue; ab[k] = { start: nv(v.start), end: nv(v.end) }; }
+      doc.accountBalances = ab; doc.markModified('accountBalances');
+      try { doc.detalle = await _closeReconcile(dk); doc.markModified('detalle'); } catch (_) {}
+    }
+    _closeApply(doc, cfg); _closeCheckSet(doc);
     if (b.finalize) { doc.status = 'finalizado'; doc.finalizedAt = new Date(); doc.finalizedBy = req.user.username; } // #744: USDT opcional
     if (b.reopen) { doc.status = 'pendiente'; doc.finalizedAt = null; doc.finalizedBy = null; }
     doc.updatedBy = req.user.username; await doc.save();
@@ -23714,14 +23827,24 @@ app.post('/api/admin/payouts/:id/pay-other-bank', authMiddleware, withdrawerMidd
     }
 
     // Marcar pagado por OTRO BANCO (atómico). Incluye 'paying' por si recién descontamos arriba.
+    // #1001 (owner): DESDE DÓNDE salió la plata, para el cierre: 'same_bank' = a mano desde la cuenta principal (falló la API) ·
+    // 'secondary' = desde una cuenta secundaria nuestra cargada en Cierres · 'external' (default, como antes) = otro banco, la plata no salió de nuestras cuentas.
+    const _via = String((req.body && req.body.via) || 'external');
+    let _pv = 'other_bank', _pacc = null, _pLbl = 'OTRO BANCO (externo)';
+    if (_via === 'same_bank') { _pv = 'same_bank_manual'; _pacc = 'main'; _pLbl = 'la CUENTA PRINCIPAL, a mano'; }
+    else if (_via === 'secondary') {
+      const _acc = (await _bankAccounts()).find((a) => a.id === String(req.body.accountId || '') && a.active !== false);
+      if (!_acc) return res.status(400).json({ error: 'Elegí una cuenta secundaria válida (se cargan en Cierres → Cuentas del cierre).' });
+      _pv = 'secondary'; _pacc = _acc.id; _pLbl = 'la cuenta secundaria ' + _acc.name;
+    }
     const paid = await PendingPayout.findOneAndUpdate(
       { id, status: { $in: ['pending_review', 'failed', 'paying'] } },
-      { $set: { status: 'paid', paidVia: 'other_bank', paidBy: req.user.username, paidAt: new Date(), error: null } },
+      { $set: { status: 'paid', paidVia: _pv, paidAccount: _pacc, paidBy: req.user.username, paidAt: new Date(), error: null } },
       { new: true }
     );
     if (!paid) return res.status(400).json({ error: 'No se pudo marcar como pagado (ya está pagado o en proceso).' });
     await _emitAdminOnlyChatNote(paid.userId, paid.username,
-      `🏦 Retiro de $${Number(paid.amount).toLocaleString('es-AR')} pagado por OTRO BANCO por ${req.user.username}.`);
+      `🏦 Retiro de $${Number(paid.amount).toLocaleString('es-AR')} pagado desde ${_pLbl} por ${req.user.username}.`);
     await notifyPayoutPaid(paid); // aviso editable /sys_payout_paid (no envía si está vacío)
     res.json({ success: true });
   } catch (error) {

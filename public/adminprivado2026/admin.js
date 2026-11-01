@@ -281,6 +281,7 @@ function setupEventListeners() {
         const bonusInfoEl = document.getElementById('bonusInfo');
         if (bonusInfoEl) bonusInfoEl.textContent = '';
         populateDepositPlatforms();
+        populateDepositBankAccounts(); // #1001
         showModal('depositModal');
     });
     if (elements.btnBonus) {
@@ -3015,13 +3016,13 @@ async function cancelPayout(id) {
 // Pagar el retiro DESDE OTRO BANCO (manual, fuera de hgcash): marca pagado sin
 // devolver fichas y sin llamar a hgcash. Avisa "pago enviado" al cliente.
 async function payOtherBank(id) {
-    if (!confirm('¿Marcar este retiro como PAGADO desde otro banco? Confirmá sólo si YA hiciste la transferencia por fuera. No se devuelven fichas.')) return;
+    const pick = await payViaPick('Retiro de este chat'); if (!pick) return; // #1001
     const el = document.getElementById('chatPayoutBanner');
     try {
-        const r = await _payoutPost(id, 'pay-other-bank'); // #995
+        const r = await _payoutPost(id, 'pay-other-bank', pick); // #995 · #1001
         const j = await r.json();
         if (r.ok && j.success) {
-            showToast('Pagado por otro banco ✅', 'success');
+            showToast('Pago a mano registrado ✅', 'success');
             if (el) { el.style.display = 'none'; el.innerHTML = ''; }
         } else if (r.ok && j.insufficient) {
             showToast(j.message || 'Saldo insuficiente: no se pagó. Se avisó al cliente.', 'error');
@@ -3371,6 +3372,7 @@ async function handleDeposit(allowRepeat) {
                 description,
                 // Multi-plataforma: a qué plataforma va la carga (select del modal; vacío = default del cliente)
                 platform: (document.getElementById('depositPlatform') && document.getElementById('depositPlatform').value) || undefined,
+                bankAccount: (document.getElementById('depositBankAccount') && document.getElementById('depositBankAccount').value) || 'main', // #1001
                 allowRepeat: allowRepeat === true || undefined // #995
             })
         });
@@ -5933,12 +5935,13 @@ async function cierresLoad() {
         const t = j.totals || {};
         document.getElementById('cierresTotals').innerHTML = _diaKpi('INGRESOS (30 d)', _clM(t.ingresos)) + _diaKpi('GASTOS', _clM(t.egresos), 'transf. ' + _clM(t.fee) + ' · gastos ' + _clM(t.gastos) + ' · comisión ' + _clM(t.comision)) + _diaKpi('RESULTADO (plata)', _clC(t.resultado)) + _diaKpi('Depósitos', _clM(t.depositos)) + _diaKpi('Retiros', _clM(t.retiros)) + _diaKpi('NETO (fichas)', _clC(t.neto)) + _diaKpi('Días con diferencia', String(malos)); // #948
         try { document.getElementById('cierresTotals').insertAdjacentHTML('beforeend', _clGiftSemaforo(_clItems)); } catch (_) {} // #971
+        try { _clCheckBanner(); clAccountsLoad(); } catch (_) {} // #1001
         if (!list) return;
         // #744 (owner): cierres día a día, automáticos. Diferencia SIEMPRE visible (0 = cuadra) y "Ver detalle" con la conciliación.
         const arq = function (c) { const d = Number(c.diferencia) || 0; const num = (d > 0 ? '+' : '') + _clM(d).replace('$-', '-$'); if (c.arqueo === 'sin_datos') return '<span class="cl-st">— sin datos del banco</span>'; return c.arqueo === 'cuadra' ? '<span class="cl-st fin">✅ Da 0</span>' : ('<span class="cl-st bad">⚠ ' + (c.arqueo === 'faltante' ? 'Faltante' : 'Sobrante') + ' <b>' + num + '</b></span>'); };
         const det = function (c) { const d = c.detalle || {}; const s = d.sistema || {}, b = d.banco || {}; return '<small>auto ' + _clM(s.depositosAuto || 0) + (s.depositosManual ? ' · <b class="cl-warn">a mano ' + _clM(s.depositosManual) + '</b>' : '') + (s.depositosPrueba ? ' · prueba ' + _clM(s.depositosPrueba) : '') + '</small>'; };
         const detR = function (c) { const d = c.detalle || {}; const s = d.sistema || {}; return '<small>banco ' + _clM(s.pagosBanco || 0) + (s.pagosManual ? ' · <b class="cl-warn">a mano ' + _clM(s.pagosManual) + '</b>' : '') + (s.pagosExternos ? ' · <b style="color:var(--p-green,#16a34a)">banco externo ' + _clM(s.pagosExternos) + ' (ingreso)</b>' : '') + '</small>'; }; // #913
-        list.innerHTML = '<table class="data-table cl-table" style="width:100%;"><thead><tr><th>Día</th><th>Estado</th><th>Depósitos</th><th>Retiros</th><th>Banco entró / salió</th><th>Regalos</th><th>NETO (fichas)</th><th>INGRESOS</th><th>GASTOS</th><th>RESULTADO (plata)</th><th>Caja 00 hs</th><th>Diferencia</th><th></th></tr></thead><tbody>' + _clItems.map(function (c) {
+        list.innerHTML = '<table class="data-table cl-table" style="width:100%;"><thead><tr><th>Día</th><th>Estado</th><th>Depósitos</th><th>Retiros</th><th>Banco entró / salió</th><th>Regalos</th><th>NETO (fichas)</th><th>INGRESOS</th><th>GASTOS</th><th>RESULTADO (plata)</th><th>Caja 00 hs</th><th>Diferencia</th><th>Control</th><th></th></tr></thead><tbody>' + _clItems.map(function (c) {
             const fin = c.status === 'finalizado';
             return '<tr class="' + (fin ? 'fin' : 'pend') + (c.arqueo === 'faltante' || c.arqueo === 'sobrante' ? ' dif' : '') + '" id="cl-' + c.dateKey + '"><td><b>' + c.dateKey + '</b><br><small>' + c.nuevos + ' nuevos · ' + c.retenidos + ' ret.</small></td>' +
                 '<td>' + (fin ? '<span class="cl-st fin">✅ Cerrado' + (c.finalizedBy === 'auto' ? ' (auto)' : '') + '</span>' : '<span class="cl-st">⏳ Hoy / en curso</span>') + '</td>' +
@@ -5951,8 +5954,9 @@ async function cierresLoad() {
                 '<td><b>' + _clC(c.resultado) + '</b></td>' +
                 '<td><small>' + (c.bankBalanceStart != null || c.bankBalanceStartManual != null ? '00 hs ' + _clM(c.bankBalanceStartManual != null ? c.bankBalanceStartManual : c.bankBalanceStart) + ' → esp. ' + _clM(c.bankBalanceExpectedEnd) + (c.bankBalanceEnd != null || c.bankBalanceEndManual != null ? ' · real ' + _clM(c.bankBalanceEndManual != null ? c.bankBalanceEndManual : c.bankBalanceEnd) : ' · real —') : 'sin saldo 00 hs') + '</small></td>' +
                 '<td>' + arq(c) + '</td>' +
+                '<td>' + _clCheckCell(c) + '</td>' + // #1001
                 '<td style="white-space:nowrap;"><button class="btn-secondary btn-small" onclick="cierresDetalle(\'' + c.dateKey + '\')">🔍 Ver detalle</button> <button class="btn-secondary btn-small" onclick="cierresSave(\'' + c.dateKey + '\', {recalc:true})" title="Vuelve a calcular con los datos de ahora">↻</button></td></tr>' +
-                '<tr class="cl-det" id="cld-' + c.dateKey + '" style="display:none;"><td colspan="13"></td></tr>';
+                '<tr class="cl-det" id="cld-' + c.dateKey + '" style="display:none;"><td colspan="14"></td></tr>';
         }).join('') + '</tbody></table>';
     } catch (_) { if (list) list.textContent = 'Error de conexión'; }
 }
@@ -5964,10 +5968,11 @@ async function cierresDetalle(dk) {
     try {
         const r = await authFetch('/api/admin/cierres/' + dk + '/detalle'); const j = await r.json(); if (!r.ok) { cell.innerHTML = '<div style="color:#ff8080;">' + escapeHtml(j.error || 'Error') + '</div>'; return; }
         const d = j.detalle || {}, s = d.sistema || {}, b = d.banco || {}, it = d.items || {};
+        try { const ci = _clItems.find(function (x) { return x.dateKey === dk; }); if (ci && j.check) { ci.check = j.check; ci.detalle = d; } } catch (_) {} // #1001
         const money = function (n) { return _clM(n).replace('$-', '-$'); };
         const signed = function (n) { return (n > 0 ? '+' : '') + money(n); };
         const sev = { alta: 'cl-sev-alta', media: 'cl-sev-media', baja: 'cl-sev-baja' };
-        let html = '<div class="cl-rec">';
+        let html = '<div class="cl-rec">' + _clCheckHtml(j.check) + _clCuentasHtml(dk, d.cuentas || [], money, signed); // #1001
         // #948: INGRESOS · GASTOS · CAJA 00 hs del día (de DailyClose) arriba de la conciliación · #951: + REGALADO, con una guía de lectura
         html += '<div class="cl-rec-sum" style="margin-bottom:.5rem"><b>Cómo leerlo:</b> 💰 INGRESOS − 💸 GASTOS = <b>RESULTADO en plata</b> (lo que entró y salió del banco). 🎁 REGALADO son fichas (bonos, reembolsos…): no mueven la caja, bajan el NETO de fichas. 🏦 CAJA compara el saldo del CBU a las 00 hs con lo esperado.</div>';
         { const c = _clItems.find(function (x) { return x.dateKey === dk; }) || {}; const g = s.gastos || 0;
@@ -6008,7 +6013,8 @@ async function cierresDetalle(dk) {
             html += '<table class="data-table cl-causas"><thead><tr><th>Posible causa</th><th>Monto</th><th>Impacto</th><th>Qué revisar</th></tr></thead><tbody>' + d.causas.map(function (c) { return '<tr class="' + (sev[c.severidad] || '') + '"><td><b>' + escapeHtml(c.titulo) + '</b></td><td>' + money(c.monto) + '</td><td><b>' + signed(c.impacto) + '</b></td><td><small>' + escapeHtml(c.explica) + '</small></td></tr>'; }).join('') + '</tbody></table>';
         }
         const lst = function (titulo, arr, cols) { if (!arr || !arr.length) return ''; return '<details class="cl-list"><summary>' + titulo + ' (' + arr.length + ')</summary><table class="data-table"><thead><tr>' + cols.map(function (c) { return '<th>' + c[1] + '</th>'; }).join('') + '</tr></thead><tbody>' + arr.map(function (x) { return '<tr>' + cols.map(function (c) { const v = x[c[0]]; return '<td>' + (c[0] === 'hora' && v ? new Date(v).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) : (c[0] === 'monto' ? money(v) : escapeHtml(String(v == null ? '—' : v)))) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></details>'; };
-        html += lst('Cargas acreditadas a mano', it.depositosManual, [['hora', 'Hora'], ['usuario', 'Usuario'], ['monto', 'Monto'], ['agente', 'Agente'], ['nota', 'Nota']]);
+        html += lst('Cargas acreditadas a mano', it.depositosManual, [['hora', 'Hora'], ['usuario', 'Usuario'], ['monto', 'Monto'], ['agente', 'Agente'], ['cuenta', 'Entró en'], ['nota', 'Nota']]);
+        html += lst('Retiros pagados a mano desde nuestras cuentas', it.pagosMarcados, [['hora', 'Hora'], ['usuario', 'Usuario'], ['monto', 'Monto'], ['agente', 'Agente'], ['via', 'Desde']]); // #1001
         html += lst('Entradas del banco sin acreditar', it.entradasSinAcreditar, [['hora', 'Hora'], ['de', 'De'], ['monto', 'Monto'], ['estado', 'Estado']]);
         html += lst('Retiros pagados a mano', it.pagosManual, [['hora', 'Hora'], ['usuario', 'Usuario'], ['monto', 'Monto'], ['agente', 'Agente'], ['via', 'Vía']]);
         html += lst('Retiros pagados por banco externo (ingreso)', it.pagosExternos, [['hora', 'Hora'], ['usuario', 'Usuario'], ['monto', 'Monto'], ['agente', 'Agente'], ['via', 'Vía']]); // #913
@@ -6033,6 +6039,64 @@ function _cierresAdjHtml(dk) {
         '</div>';
 }
 window.cierresDetalle = cierresDetalle;
+// ═══ #1001: CONTROL DEL CIERRE + CUENTAS SECUNDARIAS ═══
+function _clCheckCell(c) {
+    const k = c.check; if (!k) return '<small style="color:#888">—</small>';
+    if (k.estado === 'ok') return '<span class="cl-st fin" title="Todos los controles pasan">✅ OK</span>' + (k.enCurso ? '<br><small>hasta ahora</small>' : '');
+    return '<span class="cl-st bad" title="' + escapeHtml((k.items || []).filter(function (x) { return !x.ok && !x.info; }).map(function (x) { return x.label + ': ' + x.detail; }).join('\n')) + '">⚠ Revisar ' + k.pendientes + '</span>';
+}
+function _clCheckHtml(k) {
+    if (!k) return '';
+    const ok = k.estado === 'ok';
+    return '<div style="border-radius:10px;padding:10px 12px;margin-bottom:10px;background:' + (ok ? 'rgba(34,197,94,.12)' : 'rgba(245,158,11,.14)') + ';border:1px solid ' + (ok ? 'rgba(34,197,94,.5)' : 'rgba(245,158,11,.55)') + '"><b style="font-size:1rem">' + (ok ? '✅ CIERRE OK' + (k.enCurso ? ' (hasta ahora: el día sigue)' : '') : '⚠️ El cierre tiene ' + k.pendientes + ' cosa(s) para revisar') + '</b>' +
+        '<div style="display:grid;gap:3px;margin-top:6px;font-size:.85rem">' + (k.items || []).map(function (x) { return '<div>' + (x.info ? 'ℹ️' : (x.ok ? '✅' : '❌')) + ' <b>' + escapeHtml(x.label) + '</b> — ' + escapeHtml(x.detail) + '</div>'; }).join('') + '</div></div>';
+}
+function _clCheckBanner() {
+    const box = document.getElementById('cierresCheck'); if (!box) return;
+    const today = _clItems[0] && _clItems[0].status !== 'finalizado' ? _clItems[0] : null; const ayer = _clItems.find(function (x) { return x.status === 'finalizado'; });
+    const line = function (c, t) { if (!c || !c.check) return ''; const ok = c.check.estado === 'ok'; return '<div style="flex:1;min-width:240px;border-radius:10px;padding:10px 12px;background:' + (ok ? 'rgba(34,197,94,.12)' : 'rgba(245,158,11,.14)') + ';border:1px solid ' + (ok ? 'rgba(34,197,94,.5)' : 'rgba(245,158,11,.55)') + '"><b>' + t + ' (' + c.dateKey + '): ' + (ok ? '✅ OK' : '⚠️ revisar ' + c.check.pendientes) + '</b><div style="font-size:.78rem;opacity:.85;margin-top:3px">' + (ok ? (c.check.enCurso ? 'Se actualiza solo cada 20 min mientras avanza el día.' : 'Banco, cargas, retiros y cuentas cuadran.') : escapeHtml((c.check.items || []).filter(function (x) { return !x.ok && !x.info; }).map(function (x) { return x.label; }).join(' · '))) + '</div><button class="btn-secondary btn-small" style="margin-top:6px" onclick="cierresDetalle(\'' + c.dateKey + '\');document.getElementById(\'cl-' + c.dateKey + '\').scrollIntoView({behavior:\'smooth\'})">🔍 Ver controles</button></div>'; };
+    box.innerHTML = '<div style="display:flex;gap:10px;flex-wrap:wrap">' + line(ayer, 'Último cierre') + line(today, 'Hoy, en curso') + '</div>';
+}
+function _clCuentasHtml(dk, cuentas, money, signed) {
+    if (!cuentas.length) return '';
+    const c0 = _clItems.find(function (x) { return x.dateKey === dk; }) || {}; const lock = c0.status === 'finalizado' && c0.finalizedBy !== 'auto';
+    return '<div class="cl-rec-box" style="margin-bottom:10px"><b>🏦 Cuentas del día</b><div style="overflow-x:auto"><table class="data-table" style="width:100%;font-size:.8rem"><thead><tr><th>Cuenta</th><th>Entró</th><th>Salió</th><th>Saldo inicio</th><th>Esperado al cierre</th><th>Saldo real al cierre</th><th>Diferencia</th></tr></thead><tbody>' +
+        cuentas.map(function (a) {
+            if (a.id === 'main') return '<tr><td><b>' + escapeHtml(a.name) + '</b><br><small>' + escapeHtml(a.fuente || '') + '</small></td><td>' + money(a.entradas) + '</td><td>' + money(a.salidas) + '</td><td colspan="4"><small>Saldos 00 hs y arqueo en la caja de arriba / Ajustes del día.</small></td></tr>';
+            return '<tr><td><b>' + escapeHtml(a.name) + '</b><br><small>' + escapeHtml(a.fuente || '') + '</small></td><td>' + money(a.entradas) + ' <small>(' + (a.entradasN || 0) + ')</small></td><td>' + money(a.salidas) + ' <small>(' + (a.salidasN || 0) + ')</small></td>' +
+                '<td><input type="number" class="cl-in" id="clAs-' + dk + '-' + escapeHtml(a.id) + '" value="' + (a.saldoInicio != null ? a.saldoInicio : '') + '" style="width:110px" ' + (lock ? 'disabled' : '') + '>' + (a.saldoInicioOrigen === 'cierre del día anterior' ? '<br><small>del día anterior</small>' : '') + '</td>' +
+                '<td>' + (a.saldoEsperado != null ? money(a.saldoEsperado) : '—') + '</td>' +
+                '<td><input type="number" class="cl-in" id="clAe-' + dk + '-' + escapeHtml(a.id) + '" value="' + (a.saldoFin != null ? a.saldoFin : '') + '" style="width:110px" ' + (lock ? 'disabled' : '') + '></td>' +
+                '<td>' + (a.diferencia != null ? '<b class="' + (Math.abs(a.diferencia) > 1000 ? 'cl-warn' : '') + '">' + signed(a.diferencia) + '</b>' : '—') + '</td></tr>';
+        }).join('') + '</tbody></table></div>' +
+        (cuentas.length > 1 && !lock ? '<button class="btn-primary btn-small" style="margin-top:6px" onclick="clSaveAccBalances(\'' + dk + '\')">Guardar saldos de las secundarias</button>' : '') +
+        (cuentas.length === 1 ? '<small style="opacity:.8">Sin cuentas secundarias cargadas (se agregan en "Cuentas del cierre", arriba).</small>' : '') + '</div>';
+}
+async function clSaveAccBalances(dk) {
+    const ab = {}; document.querySelectorAll('[id^="clAs-' + dk + '-"]').forEach(function (el) { const id = el.id.slice(('clAs-' + dk + '-').length); const e2 = document.getElementById('clAe-' + dk + '-' + id); ab[id] = { start: el.value, end: e2 ? e2.value : '' }; });
+    try { const r = await authFetch('/api/admin/cierres/' + dk, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accountBalances: ab }) }); const j = await r.json(); if (!r.ok) { showToast(j.error || 'No se pudo', 'error'); return; } showToast('Saldos guardados', 'success'); await cierresLoad(); cierresDetalle(dk); } catch (_) { showToast('Error de conexión', 'error'); }
+}
+let _clAccList = [];
+async function clAccountsLoad() {
+    const box = document.getElementById('clAccounts'); if (!box) return;
+    try { const r = await authFetch('/api/admin/cierres/accounts'); const j = await r.json(); if (!r.ok) { box.textContent = j.error || 'Error'; return; } _clAccList = (j.list || []).filter(function (a) { return a.active !== false; }); } catch (_) { box.textContent = 'Error de conexión'; return; }
+    _clAccRender();
+}
+function _clAccRender() {
+    const box = document.getElementById('clAccounts'); if (!box) return;
+    box.innerHTML = '<div style="display:grid;gap:6px">' + _clAccList.map(function (a, i) {
+        return '<div class="dia-bar dia-bar-in" style="flex-wrap:wrap"><label>Nombre<input type="text" maxlength="40" value="' + escapeHtml(a.name || '') + '" oninput="_clAccList[' + i + '].name=this.value" style="width:160px"></label>' +
+            '<label>CBU/CVU (22 números)<input type="text" maxlength="26" value="' + escapeHtml(a.cbu || '') + '" oninput="_clAccList[' + i + '].cbu=this.value" style="width:210px" title="Con el CBU, las cargas confirmadas desde Cargas pendientes se marcan solas en esta cuenta"></label>' +
+            '<label>Tipo<select onchange="_clAccList[' + i + '].kind=this.value"><option value="manual"' + (a.kind !== 'api' ? ' selected' : '') + '>A mano (sin API)</option><option value="api"' + (a.kind === 'api' ? ' selected' : '') + '>Con API (todavía no conectada)</option></select></label>' +
+            '<button class="btn-secondary btn-small" onclick="_clAccList.splice(' + i + ',1);_clAccRender()">Quitar</button></div>';
+    }).join('') + '</div><div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><button class="btn-secondary btn-small" onclick="_clAccList.push({name:\'\',cbu:\'\',kind:\'manual\'});_clAccRender()">➕ Agregar cuenta secundaria</button><button class="btn-primary btn-small" onclick="clAccountsSave()">Guardar cuentas</button>' +
+        (_clAccList.length ? '' : '<small style="opacity:.8;align-self:center">Hoy sólo está la principal.</small>') + '</div>';
+}
+async function clAccountsSave() {
+    try { const r = await authFetch('/api/admin/cierres/accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ list: _clAccList }) }); const j = await r.json(); if (!r.ok) { showToast(j.error || 'No se pudo', 'error'); return; } _clAccList = (j.list || []).filter(function (a) { return a.active !== false; }); _clAccRender(); _bankAccOpts = null; showToast('Cuentas guardadas', 'success'); } catch (_) { showToast('Error de conexión', 'error'); }
+}
+Object.defineProperty(window, '_clAccList', { get: function () { return _clAccList; }, configurable: true });
+window.clAccountsLoad = clAccountsLoad; window.clAccountsSave = clAccountsSave; window._clAccRender = _clAccRender; window.clSaveAccBalances = clSaveAccBalances;
 async function cierresSave(dk, extra) {
     const body = Object.assign({}, extra || {});
     const com = document.getElementById('clCom-' + dk), usd = document.getElementById('clUsd-' + dk), pct = document.getElementById('clPctD-' + dk), bin = document.getElementById('clBin-' + dk), bout = document.getElementById('clBout-' + dk);
@@ -6379,10 +6443,11 @@ async function payReviewRejectBlock(id) {
 window.payReviewRejectBlock = payReviewRejectBlock;
 async function payReviewOtherBank(id) {
     const p = _prItems.find(function (x) { return x.id === id; });
-    if (!confirm('¿Marcar ' + (p ? fmtARS(p.amount) + ' de ' + p.username : 'este retiro') + ' como PAGADO DESDE UN BANCO EXTERNO?\n\nConfirmá sólo si YA hiciste la transferencia por fuera. Se descuentan las fichas del cliente y no sale nada por el banco automático.')) return;
+    const pick = await payViaPick(p ? fmtARS(p.amount) + ' de ' + p.username : 'Este retiro'); if (!pick) return; // #1001
     try {
-        const r = await _payoutPost(id, 'pay-other-bank'); // #995 const j = await r.json().catch(function () { return {}; });
-        if (r.ok && j.success) showToast('🏦 Pagado por banco externo ✅ (fichas descontadas)', 'success');
+        const r = await _payoutPost(id, 'pay-other-bank', pick); // #995 · #1001
+        const j = await r.json().catch(function () { return {}; });
+        if (r.ok && j.success) showToast('🏦 Pago a mano registrado ✅ (fichas descontadas)', 'success');
         else if (r.ok && j.insufficient) showToast(j.message || 'Saldo insuficiente: no se pagó. Se avisó al cliente.', 'error');
         else showToast(j.error || 'No se pudo', 'error');
         loadPayReview();
@@ -6413,7 +6478,8 @@ async function payReviewReject(id) {
     if (reason.trim().length < 5) { showToast('El motivo es obligatorio (mínimo 5 caracteres)', 'error'); return; } // #996
     if (!confirm('¿RECHAZAR el retiro de ' + (p ? fmtARS(p.amount) + ' de ' + p.username : '') + '? No se paga.')) return;
     try {
-        const r = await _payoutPost(id, 'cancel', { reason }); // #995 const j = await r.json().catch(function () { return {}; });
+        const r = await _payoutPost(id, 'cancel', { reason }); // #995
+        const j = await r.json().catch(function () { return {}; });
         if (!r.ok) showToast(j.error || 'No se pudo rechazar', 'error'); else showToast('Retiro rechazado', 'success');
         loadPayReview();
     } catch (_) { showToast('Error de conexión', 'error'); }
@@ -6935,6 +7001,37 @@ async function fetchPlatforms(force) {
 
 // Selector de plataforma del modal de depósito: sólo plataformas con API CONECTADA
 // (una sin API no se puede cargar desde acá). Con una sola queda oculto.
+// #1001: cuentas nuestras (principal + secundarias cargadas en Cierres) para "en qué cuenta entró" / "desde dónde se pagó".
+let _bankAccOpts = null, _bankAccOptsAt = 0;
+async function fetchBankAccountOptions(force) {
+    if (!force && _bankAccOpts && Date.now() - _bankAccOptsAt < 60000) return _bankAccOpts;
+    try { const r = await authFetch('/api/admin/bank-accounts/options'); if (r.ok) { _bankAccOpts = await r.json(); _bankAccOptsAt = Date.now(); } } catch (_) {}
+    return _bankAccOpts || { main: { id: 'main', name: 'Cuenta principal (banco automático)' }, accounts: [] };
+}
+async function populateDepositBankAccounts() {
+    const sel = document.getElementById('depositBankAccount'); if (!sel) return;
+    const d = await fetchBankAccountOptions(false);
+    sel.innerHTML = '<option value="main">' + escapeHtml(d.main.name) + '</option>' + (d.accounts || []).map(function (a) { return '<option value="' + escapeHtml(a.id) + '">Secundaria: ' + escapeHtml(a.name) + (a.cbu4 ? ' (…' + escapeHtml(a.cbu4) + ')' : '') + '</option>'; }).join('');
+    sel.value = 'main';
+}
+// Elegir DESDE DÓNDE se pagó un retiro a mano. Devuelve { via, accountId } o null si cancela.
+function payViaPick(title) {
+    return fetchBankAccountOptions(false).then(function (d) {
+        return new Promise(function (resolve) {
+            const ov = document.createElement('div');
+            ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px;';
+            const opt = function (via, acc, ico, t, sub) { return '<button type="button" class="btn-secondary" data-via="' + via + '" data-acc="' + escapeHtml(acc || '') + '" style="display:block;width:100%;text-align:left;margin:6px 0;padding:10px 12px;"><b>' + ico + ' ' + t + '</b><br><small style="opacity:.8">' + sub + '</small></button>'; };
+            ov.innerHTML = '<div style="background:var(--p-card,#1b1f2a);color:var(--p-text,#fff);border-radius:12px;max-width:440px;width:100%;padding:16px;box-shadow:0 10px 40px rgba(0,0,0,.5)"><h3 style="margin:0 0 4px">🏦 ¿Desde dónde pagaste?</h3><div style="font-size:.85rem;opacity:.85;margin-bottom:6px">' + escapeHtml(title) + '<br>Confirmá sólo si YA hiciste la transferencia. Se descuentan las fichas del cliente.</div>' +
+                opt('same_bank', '', '🏦', 'Mismo banco, a mano', 'Salió de la cuenta PRINCIPAL pero no por el botón Pagar (p. ej. falló la API).') +
+                (d.accounts || []).map(function (a) { return opt('secondary', a.id, '🏧', 'Cuenta secundaria: ' + escapeHtml(a.name), 'Salió de esa cuenta nuestra' + (a.cbu4 ? ' (…' + escapeHtml(a.cbu4) + ')' : '') + '.'); }).join('') +
+                opt('external', '', '🌐', 'Otro banco (externo)', 'Salió de una cuenta que NO es nuestra: la plata no salió de nuestras cuentas (en el cierre cuenta como ingreso).') +
+                '<button type="button" class="btn-small" data-cancel="1" style="margin-top:6px">Cancelar</button></div>';
+            ov.addEventListener('click', function (e) { const b = e.target.closest('button'); if (!b && e.target !== ov) return; ov.remove(); if (!b || b.dataset.cancel) return resolve(null); resolve({ via: b.dataset.via, accountId: b.dataset.acc || undefined }); });
+            document.body.appendChild(ov);
+        });
+    });
+}
+window.payViaPick = payViaPick;
 async function populateDepositPlatforms() {
     const group = document.getElementById('depositPlatformGroup');
     const sel = document.getElementById('depositPlatform');

@@ -1479,6 +1479,10 @@ Responder 2xx. Con 5xx / timeout se reintenta; con 4xx no.</pre>
                         <button class="btn-secondary btn-small" onclick="cierresBankBalance()" title="Consulta el saldo del banco por API ahora y muestra el último saldo guardado de las 00:00">🏦 Saldo del banco</button>
                     </div>
                 </div>
+                <div id="cierresCheck" style="margin-bottom:10px;"></div>
+                <div class="dia-card"><div class="dia-card-h"><b>🏦 Cuentas del cierre</b><small>La PRINCIPAL es la del banco automático (se lee sola por API). Las SECUNDARIAS (otro banco o billetera, p. ej. Fiwind) se cargan acá: los agentes eligen en qué cuenta entró cada carga a mano y desde dónde pagaron cada retiro a mano, y el cierre suma todo. Sus saldos 00 hs se cargan en "Ver detalle" de cada día.</small></div>
+                    <div id="clAccounts"></div>
+                </div>
                 <div id="cierresTotals" class="dia-kpis" style="margin-bottom:10px;"></div>
                 <div class="dia-card"><div class="dia-card-h"><b>📅 Últimos 30 días</b><small>INGRESOS − GASTOS = RESULTADO (plata). NETO (fichas) = depósitos − retiros − regalos, aparte. Caja: saldo 00 hs + resultado = saldo esperado al cierre vs el real. <b>Arqueo:</b> lo que entró y salió del BANCO (automático desde los movimientos del banco; si el resumen dice otra cosa, escribilo "según banco") contra lo que dice el sistema → la <b>diferencia</b> queda en 0 si cuadra, negativa = faltante, positiva = sobrante. Además, todas las noches a las 00:00 se guarda el <b>saldo del banco</b> por API: con saldo inicial y final, el arqueo real es (saldo fin − saldo inicio) − (depósitos − retiros) + comisión; si la API no lo informa, se escribe a mano. La comisión se puede cambiar por día (% o monto).</small></div>
                     <div id="cierresList" style="overflow-x:auto;"></div>
@@ -4295,6 +4299,11 @@ Responder 2xx. Con 5xx / timeout se reintenta; con 4xx no.</pre>
                     <label for="depositPlatform">🎮 Plataforma donde cargar:</label>
                     <select id="depositPlatform" style="width:100%;padding:9px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.18);background:rgba(0,0,0,0.25);color:#fff;font-size:14px;"></select>
                     <small id="depositPlatformHint" style="color:#aaa;font-size:11.5px;display:block;margin-top:4px;"></small>
+                </div>
+                <div class="form-group" id="depositBankGroup">
+                    <label for="depositBankAccount">🏦 ¿En qué cuenta entró la plata?</label>
+                    <select id="depositBankAccount" style="width:100%;padding:9px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.18);background:rgba(0,0,0,0.25);color:#fff;font-size:14px;"><option value="main">Cuenta principal (banco automático)</option></select>
+                    <small style="color:#aaa;font-size:11.5px;display:block;margin-top:4px;">Para el cierre del día: si el cliente transfirió a una cuenta secundaria, elegila acá.</small>
                 </div>
                 <div class="form-group">
                     <label for="depositAmount">Monto ($):</label>

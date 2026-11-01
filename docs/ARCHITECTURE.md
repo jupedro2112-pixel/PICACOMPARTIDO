@@ -1597,6 +1597,18 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
   Siguen: login, alta desde el panel (`/api/users`, `/api/admin/users`, publisher-admin) y la creación local de un jugador que YA existe en 1girox.
 - Test: `node scripts/test-fraud-auto.js` (10 casos).
 
+### Cierre general con cuentas secundarias #1001 (2026-11-01)
+- `Config['bankAccounts'].list` = cuentas SECUNDARIAS ({ id, name, cbu, kind 'manual'|'api', active }); la principal es implícita (`'main'`, hgcash).
+  Quitar una la deja `active:false` (los cierres viejos la nombran). `_normBankAccount` / `_bankAccountForCbu` resuelven la cuenta.
+- Carga a mano: `Transaction.metadata.bankAccount` ('main' | id). Retiro a mano: `PendingPayout.paidVia` 'same_bank_manual' | 'secondary'
+  (+ `paidAccount`) | 'other_bank'. El webhook de hgcash trata los tres como "ya pagado por fuera" (alerta de pago doble).
+- `_closeReconcile`: separa cargas a mano por cuenta (`depositosManualPrincipal` / `depositosSecundaria` / `depositosSinCuenta`) y pagos
+  (`pagosMismoBanco` / `pagosSecundaria` / `pagosManual` = sin marcar), `pagosTrabadosN`, y arma `cuentas[]` (secundarias con saldos de
+  `DailyClose.accountBalances`, inicio = el fin del día anterior si no se cargó). `_closeApply` saca lo de secundarias de la caja de la principal.
+- `_closeCheck(doc)` → `DailyClose.check { estado 'ok'|'revisar', enCurso, pendientes, items[] }` en `_closeEnsure`, al guardar y en `/detalle`.
+  Un control nuevo va ahí (con `info:true` si sólo informa). Un flujo NUEVO que cargue o pague a mano tiene que marcar la cuenta, si no el
+  control lo deja en "revisar".
+
 ### Antifraude central #1000 (2026-11-01)
 - `#fraudSection` (nav "🛡️ Antifraude", grupo Manejo) = pestañas `.fx-pane` (`fxTab(name)`, recuerda `localStorage fx_tab`): casos (`renderFraud`,
   filtro `pend`/`high` usa `review.priority`), retiros (`#fxPayList`, lo dibuja `loadPayReview` con el mismo `_prItemHtml` filtrando por

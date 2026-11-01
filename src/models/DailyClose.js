@@ -46,6 +46,10 @@ const schema = new mongoose.Schema({
   // resultado = ingresosTotal − egresosTotal · resultadoCaja = sólo con lo que salió de ESTE banco · bankBalanceExpectedEnd = saldo 00 hs + resultadoCaja.
   feePerDeposit: { type: Number, default: 50 }, feeDepositsArs: { type: Number, default: 0 }, gastosBanco: { type: Number, default: 0 },
   ingresosTotal: { type: Number, default: 0 }, egresosTotal: { type: Number, default: 0 }, resultadoCaja: { type: Number, default: 0 }, bankBalanceExpectedEnd: { type: Number, default: null },
+  // #1001: cuentas SECUNDARIAS (Config['bankAccounts']): lo cargado / pagado por ahí, saldos { <id>: { start, end } } y el CONTROL del cierre.
+  depositosSecundaria: { type: Number, default: 0 }, pagosSecundaria: { type: Number, default: 0 },
+  accountBalances: { type: mongoose.Schema.Types.Mixed, default: null },
+  check: { type: mongoose.Schema.Types.Mixed, default: null },
   autoFinalizedAt: { type: Date, default: null },
   generatedAt: { type: Date, default: Date.now },
   recalculatedAt: { type: Date, default: null },

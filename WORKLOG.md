@@ -8,7 +8,28 @@
 
 ## Sesión 2026-11-01
 
-### 1000. 🛡️ ANTIFRAUDE CENTRAL — todo en un lugar, con pestañas — admin SW v214
+### 1001. 🧾 CIERRE GENERAL con cuentas secundarias, "desde dónde se pagó" y control ✅ OK — admin SW v215
+**Pedido (owner):** "que haya un cierre automático según avanza el día; si pagan de otro banco que se pueda tildar si el pago a mano salió del
+mismo banco o de otro banco; si se cambia el CBU a uno secundario ya cargado, tomar sus datos también para un buen cierre general diario, y que
+des confirmación de que el cierre está okey". Secundaria = otro banco con API (Fiwind, todavía sin configurar) o a mano; y "a mano dentro de la
+misma cuenta si falla la API del banco".
+- **Cuentas del cierre** (Cierres → 🏦): principal = banco automático (API); secundarias en `Config['bankAccounts']` (nombre, CBU, tipo a mano /
+  con API pendiente). Rutas `GET/POST /api/admin/cierres/accounts` (admin) y `GET /api/admin/bank-accounts/options` (staff, sin CBU completo).
+- **Carga a mano:** el modal pregunta "¿En qué cuenta entró la plata?" → `Transaction.metadata.bankAccount`. Confirmar desde Cargas pendientes
+  la deduce sola del CBU destino del comprobante (`_bankAccountForCbu`).
+- **Retiro pagado a mano:** "Pagado por otro banco" ahora pregunta DESDE DÓNDE: mismo banco a mano (`paidVia:'same_bank_manual'`, la salida está
+  en el banco principal) · cuenta secundaria (`'secondary'` + `paidAccount`) · otro banco externo (`'other_bank'`, como antes = ingreso).
+- **Cierre:** las cargas / pagos de una secundaria son plata real (resultado) pero no tocan el arqueo de la principal (`_closeApply`:
+  `depositosSecundaria` / `pagosSecundaria`). Detalle → "Cuentas del día" con saldo inicio (o el fin del día anterior) / esperado / real por
+  secundaria (`DailyClose.accountBalances`). El de HOY se recalcula solo cada 20 min (`_closeTick`).
+- **Control del cierre** (`_closeCheck` → `DailyClose.check`): datos del banco, transferencias sin acreditar, cargas a mano sin cuenta, retiros a
+  mano sin "desde dónde", retiros trabados "pagando" > 30 min, diferencia sin explicar, caja 00 hs, saldo de cada secundaria, 1girox. Arriba de
+  Cierres: "Último cierre ✅ OK / ⚠ revisar N" y "Hoy, en curso"; columna "Control" en la tabla. Días anteriores al 2026-11-02: la carga sin
+  cuenta sólo informa (nadie la marcaba). Test `scripts/test-close-accounts.js`.
+- **Arreglo:** en Pagos a confirmar, "Pagado por otro banco" y "Rechazar" mostraban "Error de conexión" aunque funcionaban (una línea quedó
+  comentada en #995).
+
+ — todo en un lugar, con pestañas — admin SW v214
 **Pedido (owner):** "hay varios antifraude y no me quiero marear; unificá todo en un lugar y dejalo organizado ahí adentro, central, para que
 la empresa no se maree y no haya problemas en la atención".
 **Antes:** casos en "Alertas de estafa" (con ajustes e historial mezclados arriba de la lista), evidencia de retiros sólo en Pagos a confirmar,
