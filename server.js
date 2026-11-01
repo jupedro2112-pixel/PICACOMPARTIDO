@@ -28207,6 +28207,28 @@ app.post('/api/admin/sorteos/:key/draw/:step', authMiddleware, adminMiddleware, 
 // la lógica de lectura (alertas, frase, semáforos) está en src/services/businessBoard.js. Cache 10 min por período.
 const businessBoard = require('./src/services/businessBoard');
 const _bizCache = new Map();
+// #1010: de dónde sale cada Transaction 'bonus' (hgcash guarda metadata.source; la carga manual sólo la descripción).
+const _BIZ_BONUS_SRC = { $switch: { branches: [
+  { case: { $gt: [{ $ifNull: ['$metadata.source', null] }, null] }, then: '$metadata.source' },
+  { case: { $regexMatch: { input: { $ifNull: ['$description', ''] }, regex: /primera carga/i } }, then: 'first_deposit' },
+  { case: { $regexMatch: { input: { $ifNull: ['$description', ''] }, regex: /segunda carga/i } }, then: 'second_deposit' },
+  { case: { $regexMatch: { input: { $ifNull: ['$description', ''] }, regex: /historia/i } }, then: 'story_bonus' },
+  { case: { $regexMatch: { input: { $ifNull: ['$description', ''] }, regex: /ruleta/i } }, then: 'daily_roulette' },
+  { case: { $regexMatch: { input: { $ifNull: ['$description', ''] }, regex: /carga autom[aá]tica/i } }, then: 'auto_load' },
+  { case: { $regexMatch: { input: { $ifNull: ['$description', ''] }, regex: /Bonificaci[oó]n incluida en dep[oó]sito/i } }, then: 'agent_deposit' },
+  { case: { $regexMatch: { input: { $ifNull: ['$description', ''] }, regex: /Bonificaci[oó]n otorgada/i } }, then: 'manual_gift' },
+  { case: { $regexMatch: { input: { $ifNull: ['$description', ''] }, regex: /Reembolso acumulativo/i } }, then: 'instant_cashback' }
+], default: 'otro' } };
+const _BIZ_BONUS_LABELS = { first_deposit: 'Bono 1ª carga', second_deposit: 'Bono 2ª carga', story_bonus: 'Bono de historia', daily_roulette: 'Bono de ruleta (%)',
+  auto_load: 'Bono automático en cada carga', auto_bonus: 'Bono automático en cada carga', auto_hgcash: 'Bono automático en cada carga', agent_deposit: 'Bono puesto por el agente en la carga', manual_gift: 'Bonificación manual (panel)',
+  instant_cashback: 'Reembolso acumulativo', notif_batch: 'Fichas de lotes / recorrido', welcome_code: 'Código de bienvenida', referral_milestone: 'Premio de referidos', otro: 'Otros bonos' };
+// Mongo < 4.2 no tiene $regexMatch ⇒ si falla, sólo por tipo.
+async function _bizGiftsAgg(from, to) {
+  const m = { $match: { type: { $in: CASHBACK_GIFT_TX_TYPES }, status: { $nin: ['failed', 'cancelled'] }, description: { $not: /PRUEBA/ }, timestamp: { $gte: from, $lt: to } } };
+  const tail = [{ $project: { total: 1, n: 1, users: { $size: '$users' } } }];
+  try { return await Transaction.aggregate([m, { $group: { _id: { t: '$type', s: { $cond: [{ $eq: ['$type', 'bonus'] }, _BIZ_BONUS_SRC, null] } }, total: { $sum: '$amount' }, n: { $sum: 1 }, users: { $addToSet: '$userId' } } }].concat(tail)).allowDiskUse(true); }
+  catch (e) { logger.warn('[negocio] regalos por origen: ' + e.message); return Transaction.aggregate([m, { $group: { _id: { t: '$type', s: null }, total: { $sum: '$amount' }, n: { $sum: 1 }, users: { $addToSet: '$userId' } } }].concat(tail)).allowDiskUse(true); }
+}
 const _BIZ_REAL = { type: 'deposit', status: { $nin: ['failed', 'cancelled'] }, 'metadata.source': { $nin: ['install_bonus', 'welcome_gift', 'welcome_code', 'payout_refund'] }, description: { $not: /PRUEBA/ } };
 function _bizRange(period, now) {
   const DAY = 86400000;
@@ -28222,11 +28244,13 @@ async function _bizMoney(from, to) {
   const [dep, wd, gift, users] = await Promise.all([
     Transaction.aggregate([{ $match: Object.assign({ timestamp: { $gte: from, $lt: to } }, _BIZ_REAL) }, { $group: { _id: null, total: { $sum: '$amount' }, n: { $sum: 1 }, users: { $addToSet: '$userId' } } }, { $project: { total: 1, n: 1, users: { $size: '$users' } } }]),
     PendingPayout.aggregate([{ $match: { status: 'paid', paidAt: { $gte: from, $lt: to }, paidVia: { $nin: ['other_bank'] } } }, { $group: { _id: null, total: { $sum: '$amount' }, n: { $sum: 1 } } }]),
-    Transaction.aggregate([{ $match: { type: { $in: CASHBACK_GIFT_TX_TYPES }, status: { $nin: ['failed', 'cancelled'] }, description: { $not: /PRUEBA/ }, timestamp: { $gte: from, $lt: to } } }, { $group: { _id: null, total: { $sum: '$amount' } } }]), // #1010: sin pruebas, igual que las cargas
+    _bizGiftsAgg(from, to), // #1010: sin pruebas, igual que las cargas; por tipo (y el 'bonus' por origen)
     User.countDocuments({ role: 'user', createdAt: { $gte: from, $lt: to } })
   ]);
-  const d = dep[0] || {}, w = wd[0] || {}, g = gift[0] || {};
-  const out = { deposits: d.total || 0, depositCount: d.n || 0, depositors: d.users || 0, withdrawals: w.total || 0, withdrawalCount: w.n || 0, gifts: g.total || 0, registered: users };
+  const d = dep[0] || {}, w = wd[0] || {};
+  const giftsByType = gift.map((x) => { const t = x._id && x._id.t, sr = x._id && x._id.s; return { type: t, source: sr || null, label: (t === 'bonus' && sr ? (_BIZ_BONUS_LABELS[sr] || 'Bono · ' + sr) : (businessBoard.GIFT_LABELS[t] || t)), total: Math.round(x.total || 0), n: x.n || 0, users: x.users || 0 }; })
+    .reduce((acc, g) => { const k = acc.find((y) => y.label === g.label); if (k) { k.total += g.total; k.n += g.n; k.users += g.users; } else acc.push(g); return acc; }, []).sort((a, b) => b.total - a.total); // mismo nombre ⇒ una fila (clientes puede contar de más al sumar orígenes)
+  const out = { deposits: d.total || 0, depositCount: d.n || 0, depositors: d.users || 0, withdrawals: w.total || 0, withdrawalCount: w.n || 0, gifts: giftsByType.reduce((a, x) => a + x.total, 0), giftsByType, registered: users };
   out.result = out.deposits - out.withdrawals; out.giftRatio = businessBoard.pct(out.gifts, out.deposits); out.ticket = out.depositCount ? out.deposits / out.depositCount : 0;
   return out;
 }

@@ -31,6 +31,9 @@
 - Corrección del 📈 Negocio tras la primera captura del owner: "Siguen activos" se compara con la 1ª carga (mostraba 1615 %), el paso
   "donde más se pierde" es el que pierde más GENTE (210 → 57 → 13 ⇒ la 2ª carga, 153 personas; antes marcaba 5 cargas por tener el % más bajo) y
   los regalos de PRUEBA ya no cuentan en regalos/depósitos (las cargas de prueba ya no contaban). Admin SW v224.
+- 📈 Negocio → "🧾 En qué se fue lo regalado": total del PERÍODO por tipo de regalo, y el 'bonus' separado por origen (`_BIZ_BONUS_SRC`:
+  metadata.source o, en la carga manual, la descripción: 1ª carga / automático / historia / ruleta / puesto por el agente / manual / acumulativo /
+  lotes). La tabla "¿Qué regalo rinde?" mira regalos de hace 7-37 días; ésta es la que explica el % de regalos/depósitos. Admin SW v225.
 
 ### 1009. 📈 TABLERO DEL NEGOCIO (2026-11-01)
 - Owner: "armá el tablero de negocio completo y mostrá adentro cómo funciona".

@@ -16646,6 +16646,11 @@ function _bizRender(b) {
         box1('✨', 'Giros dorados', n(rl.gold.spins), n(rl.gold.perDay) + ' por día · ' + n(rl.gold.users) + ' clientes', '#f59e0b') +
         box1('💰', 'Plata dada por la ruleta', money(rl.free.cash + rl.gold.cash), n(rl.free.pctWins + rl.gold.pctWins) + ' ganaron % extra (cuesta sólo si cargan)', C.na) +
         '</div>';
+    // #1010: en qué se fue lo regalado DEL PERÍODO (la tabla de arriba mide regalos de hace 7-37 días).
+    const gbt = m.giftsByType || [];
+    if (gbt.length) html += h('🧾 En qué se fue lo regalado (' + escapeHtml(b.range.label) + ')') + info('Total por tipo de regalo en el período elegido, sobre ' + money(m.deposits) + ' cargados.') +
+        '<div style="overflow-x:auto"><table class="data-table" style="width:100%;font-size:.84rem"><thead><tr><th>Regalo</th><th>Total</th><th>% de lo cargado</th><th>Veces</th><th>Clientes</th></tr></thead><tbody>' +
+        gbt.map(function (g) { const r = m.deposits > 0 ? g.total / m.deposits : null; return '<tr><td><b>' + escapeHtml(g.label) + '</b></td><td>' + money(g.total) + '</td><td style="color:' + (r != null && r > 0.1 ? C.bad : '#9ab') + '">' + pc(r) + '</td><td>' + n(g.n) + '</td><td>' + n(g.users) + '</td></tr>'; }).join('') + '</tbody></table></div>';
     const cs = b.campaigns || [];
     html += h('📣 Campañas · ¿la pauta se paga?') + info('Registrados en los últimos 90 días. "Dejaron" = cargas − retiros desde que llegaron. Gasto = lo cargado en Datos para esa campaña.' + (b.generalSpend > 0 ? ' Además hay ' + money(b.generalSpend) + ' de gasto general sin campaña asignada.' : '')) +
         (cs.length ? '<div class="card" style="overflow:auto"><table class="data-table" style="width:100%;font-size:.8rem"><thead><tr><th>Campaña</th><th>Registrados</th><th>Cargaron</th><th>Dejaron</th><th>Gasto</th><th>Costo x cliente</th><th>Deja x cliente</th><th>¿Se paga?</th></tr></thead><tbody>' +
