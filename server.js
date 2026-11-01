@@ -22664,7 +22664,7 @@ app.post('/api/admin/support/:userId/quick', authMiddleware, async (req, res) =>
     await new Promise((r) => setTimeout(r, 40));
     const agentName = (await getSupportAgentName().catch(() => null)) || 'Soporte';
     const meta = Object.assign({ channel: 'support', quickReply: q.key, agentName }, q.btn ? { kind: 'go_section', target: q.btn.target, label: q.btn.label } : { kind: 'support_quick' });
-    await _sendUserSystemMessage(u, text, { metadata: meta, senderUsername: agentName, push: { title: '💬 Te respondió Soporte', body: text.slice(0, 110) } });
+    await _sendUserSystemMessage(u, text, { metadata: meta, senderUsername: agentName, push: { title: '💬 Te respondió Soporte', body: text.slice(0, 110), data: { tag: 'support' } } }); // #997: tag ⇒ el filtro de push sólo recorta (es lo que escribió el agente)
     await _emitAdminOnlyChatNote(u.id, u.username, `💬 Respuesta rápida "${q.label}" enviada por ${req.user.username}; charla cerrada.`).catch(() => {});
     try { await delayClockResolve(u.id, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'quick' }); } catch (_) {}
     res.json({ success: true });
