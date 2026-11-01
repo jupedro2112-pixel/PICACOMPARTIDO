@@ -352,6 +352,9 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`). Git user: j
   2° y 3° por ranking (puntos con techo diario $300.000 + constancia). Tickets NUNCA se quitan ni se reasignan (índice único). Requisitos para anotarse:
   app, notificaciones, Telegram, **celular cargado** y una carga. Premios se entregan a mano (push + nota al ganador). Panel → App → Sorteos (🎟️ / 🎲)
   y Principal → "Sorteos: ¿sirven?". Un cambio en las reglas de puntos/tickets pasa por `computePoints` y sus tests, nunca por el motor.
+- **HISTORIAS POR SEGMENTO + CÓDIGO SORPRESA (#1003):** `Story.audience` ('new' = sin carga real, 'active', 'all'); consultas nuevas de historias filtran
+  audience. Código sorpresa (`CodeDrop`, `Config['codeDrop']`, $2.000 × primeros 10, 2-3/semana) sólo para quien ya cargó; regalos al azar personales sin
+  push (`Config['storyGifts']`). Un tipo de regalo nuevo ⇒ `CASHBACK_GIFT_TX_TYPES` (ya está `code_drop`). Test `scripts/test-story-segments.js`.
 - **HISTORIAS PERSONALES (#886):** `Story.audienceUserId` = sólo la ve ese cliente (bono de bienvenida día 5/15/30, `_newbieOffersTick`,
   `Config['newbieOffers']`). Toda consulta NUEVA de historias para clientes o públicas tiene que filtrar `audienceUserId: null` (o el propio id).
 - **HISTORIAS CON BONO (#742, 2026-10-21):** una historia puede llevar `bonusPct` por `bonusHours` (+ push a todos). **#978:** la automática es SEMANAL (miércoles 12:30, +100 % por 3 h, `STORY_AUTO_BONUS`, `bonusDays=[3]`); ese día el autopiloto no manda campaña. El cliente que toca

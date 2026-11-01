@@ -225,7 +225,7 @@
         } catch (_) {}
         try { const s = _el('fireHomeSub'), st = _el('fireHomeStreak'); const ms = _el('fireMiniSub'), mst = _el('fireMiniStreak'); if (s && ms) ms.textContent = (s.textContent || '').trim() || 'Reclamá tu premio de hoy'; if (st && mst) mst.textContent = (st.textContent || '0').trim() + ' d'; } catch (_) {}
     }
-    setInterval(_fireMiniSync, 5000);
+    setInterval(() => { if (!document.hidden) _fireMiniSync(); }, 5000); // #1003: no corre con la app en segundo plano
     // #512: MENÚ BÁSICO — saludo + saldo, CARGAR, RETIRAR, chips de plataforma (fija la preferida) y "Entrar a jugar".
     // #636: usuario con logo en la franja del saldo del completo
     function _paintBsUser() { try { const u = VIP.state && VIP.state.currentUser && VIP.state.currentUser.username; const b = _el('bsUserName'); if (b) b.textContent = u || '—'; } catch (_) {} }

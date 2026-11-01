@@ -48,7 +48,7 @@
         window.__VIP_PUBLIC_BASE_URL__ = '__VIP_PUBLIC_BASE_URL_PLACEHOLDER__';
     </script>
     <!-- Socket.IO desde el servidor local -->
-    <script src="/socket.io/socket.io.js"></script>
+    <script src="/socket.io/socket.io.min.js"></script>
     
     <!-- Firebase SDK (self-hosted para evitar bloqueos de red/CDN/CSP) -->
     <script src="/lib/firebase/9.1.2/firebase-app-compat.js"></script>
@@ -2892,6 +2892,25 @@ Responder 2xx. Con 5xx / timeout se reintenta; con 4xx no.</pre>
                     </div>
                     <div style="color:#8fd3a8;font-size:.78rem;margin:.4rem 0 .6rem">A las 10:00 · 13:00 · 16:00 · 19:00 · 21:30 sale una historia (dura 24 h): lo que ofrece el servicio (cómo funciona para los nuevos, carga automática, retiros, reembolso, soporte, misiones, VIP, referidos, juegos, instalar la app), los partidos fuertes del día con botón directo a Deportes, los lunes el slot más jugado con botón directo a ese juego y los miércoles la historia con BONO de la semana (+50% por 3 h) con notificación a todos.</div>
                     <div id="stAutoBody" style="font-size:.82rem">Cargando…</div>
+                    <div style="color:#9ab;font-size:.76rem;margin-top:.4rem">👥 #1003: los clientes NUEVOS (todavía sin carga) ven las 5 informativas del servicio; los ACTIVOS (ya cargaron) ven otras 5 que rotan: Soporte, ganadores de ayer, el slot del día y temas variados. Partidos, bono de la semana y código sorpresa los ven todos.</div>
+                </div>
+                <!-- #1003 (owner): CÓDIGO SORPRESA (2-3 por semana, 1 h, $2.000 a los primeros 10) -->
+                <div class="card" style="margin-bottom:1rem" id="cdCard">
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
+                        <h3 style="margin:0;font-size:1rem">🎁 Código sorpresa en historias</h3>
+                        <div style="display:flex;gap:6px"><button class="btn btn-secondary btn-sm" onclick="cdLaunchNow()">🚀 Lanzar uno ahora</button><button class="btn btn-secondary btn-sm" onclick="loadCodeDrops()">🔄</button></div>
+                    </div>
+                    <div style="color:#8fd3a8;font-size:.78rem;margin:.4rem 0 .6rem">Sale solo 2 o 3 veces por semana en un horario al azar. A la mañana de ese día aparece una historia "👀 Hoy sale un código sorpresa, estate atento" (sin notificación). Al salir: historia con el código + notificación a todos. Los primeros en tocar "Reclamar ahora" cobran el monto al instante (regalo con el rollover global). Al completarse o vencer: historia "✅ Código completado, estate atento al próximo" con los ganadores. Sólo canjean clientes que ya cargaron; cuentas secundarias, bloqueadas o en observación, nunca.</div>
+                    <div id="cdBody" style="font-size:.82rem">Cargando…</div>
+                </div>
+                <!-- #1003 (owner): REGALOS AL AZAR repartidos (historia personal, sin push) -->
+                <div class="card" style="margin-bottom:1rem" id="sgCard">
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
+                        <h3 style="margin:0;font-size:1rem">🎲 Regalos al azar en historias (repartidos, sin invadir)</h3>
+                        <button class="btn btn-secondary btn-sm" onclick="loadStoryGifts()">🔄</button>
+                    </div>
+                    <div style="color:#8fd3a8;font-size:.78rem;margin:.4rem 0 .6rem">Cada cliente activo (cargó en los últimos 30 días) encuentra en sus historias un regalo personal +% en su próxima carga, en un día al azar de cada tanda de días. No a todos el mismo día y SIN notificación: lo descubre al entrar.</div>
+                    <div id="sgBody" style="font-size:.82rem">Cargando…</div>
                 </div>
             </section>
             <!-- #873 (owner): ALERTAS DE ESTAFA — reglas + puntaje (src/services/fraudRadar.js); bloquear usa /api/admin/users/:id/block -->
@@ -3015,6 +3034,18 @@ Responder 2xx. Con 5xx / timeout se reintenta; con 4xx no.</pre>
                             <li>Decidí: <b>✅ Confirmar y pagar</b> si está bien · <b>⛔ Rechazar</b> si no corresponde pagar pero no es estafa · <b>🚫 Rechazar y bloquear</b> si confirmaste la estafa. Escribí un motivo concreto ("apostó Banca y Jugador en la misma mano con el bono"), nunca "raro".</li>
                             <li>Si tenés dudas, dejalo como está y avisale al admin: el retiro no sale solo.</li>
                         </ol>
+                        <h3 style="margin:10px 0 6px">💸 Un retiro, de punta a punta</h3>
+                        <ol style="margin:0 0 10px 1.1rem;padding:0">
+                            <li><b>El cliente lo pide en la app.</b> El sistema controla: monto mínimo, que el saldo esté LIBRE (sin rollover pendiente: nunca se valida contra el saldo total), celular verificado una vez por SMS, cuenta no bloqueada y banco funcionando.</li>
+                            <li><b>Un solo retiro vigente:</b> si ya tenía otro esperando y todavía no se le descontaron las fichas, el anterior se ANULA solo y queda el último (nota 🔁 en el chat). Si el anterior ya se está pagando, quedan los dos.</li>
+                            <li><b>Antifraude:</b> el radar revisa al cliente en ese momento (las señales de la tabla de abajo, con puntaje). Las fichas NO se descuentan todavía.</li>
+                            <li><b>¿Sale solo o espera a una persona?</b> Sale solo por el banco si es menor al umbral de revisión, el cliente es de confianza y no hay señales. Si no, va a <b>Pagos a confirmar</b> (y si lo frenó el antifraude, también a <b>💸 Retiros frenados</b> con la evidencia).</li>
+                            <li><b>La persona decide:</b> <b>Pagar</b> (descuenta las fichas, verifica que bajaron y paga por el banco) · <b>Pagado a mano</b> (elegís desde dónde: misma cuenta, cuenta secundaria u otro banco) · <b>Rechazar</b> · <b>Rechazar y bloquear</b>. Siempre con motivo.</li>
+                            <li><b>Cierre del día:</b> todo queda en el cierre automático con desde qué cuenta salió; el control ✅ OK avisa si quedó algo sin marcar o trabado.</li>
+                        </ol>
+                        <h3 style="margin:10px 0 6px">🚨 Cuándo alguien puede estar estafando (señales y qué mirar)</h3>
+                        <div style="overflow-x:auto;margin-bottom:10px"><table class="data-table" style="width:100%;font-size:.78rem"><thead><tr><th>Señal</th><th>Puntos</th><th>Qué verificar</th></tr></thead><tbody><tr><td><b>Carga desde una cuenta bancaria que usan OTROS clientes</b></td><td>30</td><td>Mirá en el caso quiénes cargan desde ese CBU: ¿es familia/pareja que comparte cuenta o son cuentas propias para cobrar bonos varias veces?</td></tr><tr><td><b>Retira a una cuenta bancaria que usan OTROS clientes</b></td><td>35</td><td>Retiran a la MISMA cuenta bancaria: ¿quién es el titular real? Si varias cuentas cobran al mismo CBU, son la misma persona.</td></tr><tr><td><b>Mismo celular que otras cuentas</b></td><td>40</td><td>Mismo celular: ¿las cuentas recibieron bonos de bienvenida cada una? ¿juegan en los mismos horarios? Si sí, es multicuenta.</td></tr><tr><td><b>Mismo número de celular que otras cuentas</b></td><td>35</td><td>Mismo número: pedile al cliente que confirme por Soporte de quién es cada cuenta.</td></tr><tr><td><b>Carga desde cuentas de varias personas distintas</b></td><td>20</td><td>Le cargan varias personas distintas: ¿revende fichas o usa cuentas de terceros? Mirá los titulares en el caso.</td></tr><tr><td><b>Retira a nombre de otra persona (distinta de la que carga)</b></td><td>30</td><td>Retira a nombre de otra persona: pedile que retire a una cuenta a SU nombre (la misma que carga).</td></tr><tr><td><b>Abuso de bonos: recibió mucho en regalos y retira enseguida</b></td><td>25</td><td>Recibió casi tanto en regalos como cargó: revisá en 1girox si cumplió el rollover jugando de verdad.</td></tr><tr><td><b>Retira casi sin haber jugado (pasa la plata)</b></td><td>35</td><td>Retira casi sin jugar: en 1girox mirá el historial de apuestas; si no jugó, rechazá el retiro.</td></tr><tr><td><b>Cuenta nueva pidiendo un retiro grande sin jugar</b></td><td>10</td><td>Cuenta nueva con retiro grande: verificá identidad y que la carga haya entrado de verdad.</td></tr><tr><td><b>Carga y retira enseguida (pasa la plata sin jugar)</b></td><td>15</td><td>Carga y retira en menos de 2 h: ¿jugó en el medio? Si no, es pasar plata.</td></tr><tr><td><b>Trajo referidos desde su MISMO celular (cuentas propias)</b></td><td>30</td><td>Sus referidos usan su mismo celular: son cuentas propias para cobrar comisiones.</td></tr><tr><td><b>Juega el bono &quot;al ras&quot;: resultado demasiado parejo para lo que apostó (cubre los dos lados)</b></td><td>40</td><td>En admin.1girox.com abrí el historial de apuestas del cliente en esa ventana: ¿apuesta a Banca Y a Jugador (o rojo Y negro) en la misma mano/giro, o alterna lados con montos iguales? Si sí → rechazar y bloquear.</td></tr><tr><td><b>Deportes &quot;al ras&quot;: mucho volumen y resultado casi neutro (cubre los dos resultados)</b></td><td>30</td><td>En el historial de deportes de 1girox: ¿apostó a los dos resultados del mismo partido (o local + empate + visitante)? Si sí → rechazar y bloquear.</td></tr><tr><td><b>Grupo espejo: cuentas vinculadas que juegan en contra (una gana lo que la otra pierde)</b></td><td>50</td><td>Compará en 1girox el historial de apuestas de las cuentas del grupo en esa ventana: ¿misma mesa/juego, mismos minutos y lados opuestos? Si coincide → rechazar y bloquear a todas.</td></tr><tr><td><b>Cazador de bonos: ciclos repetidos de bono → retiro</b></td><td>30</td><td>Mirá si sólo juega cuando hay bono: si cada ciclo es bono → rollover justo → retiro, es cazador de bonos.</td></tr><tr><td><b>Ya marcado por el sistema anti-estafa</b></td><td>20</td><td>Ya tenía marcas del sistema: leé las notas del caso.</td></tr><tr><td><b>Sin teléfono verificado</b></td><td>5</td><td>Pedile que verifique el celular por SMS.</td></tr></tbody></table></div>
+                        <div style="font-size:.8rem;opacity:.85;margin-bottom:10px">Desde 60 pts: en observación (sus retiros no salen solos). Desde 90 pts con una señal de conducta: 🚨 prioridad alta. El sistema NO bloquea solo: bloquea una persona después de verificar.</div>
                         <h3 style="margin:10px 0 6px">🎰 Qué es fraude con bonos</h3>
                         <ul style="margin:0 0 10px 1.1rem;padding:0">
                             <li><b>Jugar al ras:</b> apostar a los dos lados a la vez (Banca y Jugador, rojo y negro, los dos equipos) para cumplir el rollover sin riesgo.</li>

@@ -9798,7 +9798,7 @@ async function _cashbackPaidBetween(userId, fromDate, toDate) {
 // reembolsos por período ('refund'), el rakeback, el nivel VIP, la ruleta, el
 // fueguito, las comisiones y TODO 'bonus' (incluido el propio reembolso
 // acumulativo, metadata.source 'instant_cashback' — §3.2).
-const CASHBACK_GIFT_TX_TYPES = ['bonus', 'fire_reward', 'refund', 'rakeback', 'vip_levelup', 'referral_commission', 'roulette', 'install_gift', 'mission', 'review_gift']; // review_gift (#875) // install_gift (#283): carga gratis por instalar la app
+const CASHBACK_GIFT_TX_TYPES = ['bonus', 'fire_reward', 'refund', 'rakeback', 'vip_levelup', 'referral_commission', 'roulette', 'install_gift', 'mission', 'review_gift', 'code_drop']; // code_drop (#1003) // review_gift (#875) // install_gift (#283): carga gratis por instalar la app
 
 /**
  * Estado del reembolso acumulativo de un jugador. `opts.fresh` → netwin sin
@@ -14364,10 +14364,14 @@ async function _withdrawalRequestHandler(req, res) {
     // envío al banco (o con el envío fallido). Uno que ya se está pagando / con fichas descontadas / con el banco sin confirmar queda como está.
     let _replaced = [];
     try {
-      const _olds = await PendingPayout.find({ userId: user.id, id: { $ne: _newPayoutId }, status: 'pending_review', deductAtPay: true, debitConfirmed: { $ne: true },
-        $or: [{ hgTransactionId: null, hgTxId: null }, { hgStatus: { $regex: /fail|error|reject|cancel/i } }] }).select('id amount hgStatus').lean();
+      // Revisión #1003: no se anula uno que un agente tocó en los últimos 30 min (puede estar transfiriéndolo a mano en ese momento:
+      // si lo anuláramos, se pagarían los dos). Los 'failed' sin fichas descontadas también se reemplazan (si no, el reintento automático
+      // los seguía intentando y quedaban dos vigentes).
+      const _touchedSince = new Date(Date.now() - 30 * 60000);
+      const _olds = await PendingPayout.find({ userId: user.id, id: { $ne: _newPayoutId }, status: { $in: ['pending_review', 'failed'] }, deductAtPay: true, debitConfirmed: { $ne: true },
+        $and: [{ $or: [{ hgTransactionId: null, hgTxId: null }, { hgStatus: { $regex: /fail|error|reject|cancel/i } }] }, { $or: [{ paidBy: null }, { updatedAt: { $lt: _touchedSince } }] }] }).select('id amount hgStatus status').lean();
       for (const o of _olds) {
-        const r = await PendingPayout.updateOne({ id: o.id, status: 'pending_review', debitConfirmed: { $ne: true } },
+        const r = await PendingPayout.updateOne({ id: o.id, status: o.status, debitConfirmed: { $ne: true } },
           { $set: { status: 'cancelled', paidVia: 'replaced', chipsReturned: false, error: 'Reemplazado por el retiro nuevo de $' + amountNum.toLocaleString('es-AR') + ' (el cliente pidió otro monto)', replacedBy: _newPayoutId } });
         if (r.modifiedCount) _replaced.push(o);
       }
@@ -23432,7 +23436,15 @@ app.get('/api/admin/payouts/review', authMiddleware, withdrawerMiddleware, async
       if (risk.deposits === 0) warn.push('nunca cargó');
       if (risk.daysOld !== null && risk.daysOld < 2) warn.push('cuenta de menos de 2 días');
       if (!risk.phoneVerified) warn.push('celular sin verificar');
-      out.push(Object.assign({}, p, { risk, warnings: warn, hgcashEnabled: hgcashPay.isEnabled() }));
+      // Revisión #1003 (owner: "no están pasando para pagos automáticos, ¿qué detecta?"): POR QUÉ no salió solo, también para los que no
+      // guardaron el motivo (retiros viejos o por monto).
+      const whyAuto = [];
+      if (p.status === 'failed') whyAuto.push('el pago automático FALLÓ' + (p.error ? ' (' + String(p.error).slice(0, 80) + ')' : '') + ': antes de reintentar mirá el extracto del banco');
+      if (p.amount > cfg.minArs) whyAuto.push('supera el monto que sale solo (' + '$' + Number(cfg.minArs).toLocaleString('es-AR') + ')');
+      if (!cfg.autoBelow) whyAuto.push('el pago automático está apagado');
+      if (!hgcashPay.isEnabled()) whyAuto.push('el banco automático no está conectado');
+      if (!p.reviewReason && !whyAuto.length && cfg.trustedOnly) { try { const t = await _payoutTrust(p.userId, cfg); if (!t.trusted) whyAuto.push('no es cliente de confianza: ' + t.why.join(' · ')); } catch (_) {} }
+      out.push(Object.assign({}, p, { risk, warnings: warn, whyNotAuto: whyAuto, hgcashEnabled: hgcashPay.isEnabled() }));
     }
     res.json({ success: true, config: cfg, hgcashEnabled: hgcashPay.isEnabled(), items: out, canEditConfig: req.user.role === 'admin' });
   } catch (e) { logger.error(`[pay-review] ${e.message}`); res.status(500).json({ error: 'Error del servidor' }); }
@@ -23826,10 +23838,32 @@ app.post('/api/admin/payouts/:id/pay-other-bank', authMiddleware, withdrawerMidd
   try {
     const { id } = req.params;
     { const _bu = await _payoutBankUnknownBlock(id, req.body); if (_bu) return res.status(409).json(_bu); } // #995
-    const payout = await PendingPayout.findOne({ id });
+    let payout = await PendingPayout.findOne({ id });
     if (!payout) return res.status(404).json({ error: 'Pago no encontrado' });
+    // Revisión #1003: el cliente pidió OTRO retiro y este quedó anulado (#1002), pero el agente ya lo había transferido a mano ⇒ se avisa; si
+    // confirma que YA lo pagó, se reabre para registrarlo (descuenta fichas) y se avisa que el retiro nuevo hay que revisarlo antes de pagarlo.
+    if (payout.status === 'cancelled' && payout.paidVia === 'replaced') {
+      const nw = payout.replacedBy ? await PendingPayout.findOne({ id: payout.replacedBy }).select('amount status').lean() : null;
+      if (!(req.body && req.body.replacedOk === true)) return res.status(409).json({ code: 'REPLACED', error: `Este retiro se ANULÓ porque el cliente pidió uno nuevo${nw ? ' de $' + Number(nw.amount).toLocaleString('es-AR') : ''}. ¿Ya lo transferiste igual?` });
+      const ro = await PendingPayout.findOneAndUpdate({ id, status: 'cancelled', paidVia: 'replaced' }, { $set: { status: 'pending_review', paidVia: null, error: null } }, { new: true });
+      if (!ro) return res.status(409).json({ error: 'El retiro cambió de estado, refrescá.' });
+      payout = ro;
+      await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ ${req.user.username} registró como PAGADO A MANO el retiro de $${Number(payout.amount).toLocaleString('es-AR')} que estaba anulado por un pedido nuevo${nw ? ' de $' + Number(nw.amount).toLocaleString('es-AR') + ' (' + nw.status + ')' : ''}. Revisá el nuevo ANTES de pagarlo: el cliente ya cobró este.`).catch(() => {});
+    }
     if (!['pending_review', 'failed'].includes(payout.status)) {
       return res.status(400).json({ error: `El pago ya está en estado "${payout.status}".` });
+    }
+
+    // #1001: DESDE DÓNDE salió la plata — se valida ANTES de descontar fichas (si no, un accountId inválido dejaba el retiro trabado en 'paying').
+    // 'same_bank' = a mano desde la cuenta principal (falló la API) · 'secondary' = cuenta secundaria nuestra (Cierres → Cuentas del cierre) ·
+    // 'external' (default, como antes) = otro banco: la plata no salió de nuestras cuentas.
+    const _via = String((req.body && req.body.via) || 'external');
+    let _pv = 'other_bank', _pacc = null, _pLbl = 'OTRO BANCO (externo)';
+    if (_via === 'same_bank') { _pv = 'same_bank_manual'; _pacc = 'main'; _pLbl = 'la CUENTA PRINCIPAL, a mano'; }
+    else if (_via === 'secondary') {
+      const _acc = (await _bankAccounts()).find((a) => a.id === String(req.body.accountId || '') && a.active !== false);
+      if (!_acc) return res.status(400).json({ error: 'Elegí una cuenta secundaria válida (se cargan en Cierres → Cuentas del cierre).' });
+      _pv = 'secondary'; _pacc = _acc.id; _pLbl = 'la cuenta secundaria ' + _acc.name;
     }
 
     // Flujo nuevo: si las fichas todavía NO se descontaron, descontarlas ahora (igual que /pay).
@@ -23848,16 +23882,6 @@ app.post('/api/admin/payouts/:id/pay-other-bank', authMiddleware, withdrawerMidd
     }
 
     // Marcar pagado por OTRO BANCO (atómico). Incluye 'paying' por si recién descontamos arriba.
-    // #1001 (owner): DESDE DÓNDE salió la plata, para el cierre: 'same_bank' = a mano desde la cuenta principal (falló la API) ·
-    // 'secondary' = desde una cuenta secundaria nuestra cargada en Cierres · 'external' (default, como antes) = otro banco, la plata no salió de nuestras cuentas.
-    const _via = String((req.body && req.body.via) || 'external');
-    let _pv = 'other_bank', _pacc = null, _pLbl = 'OTRO BANCO (externo)';
-    if (_via === 'same_bank') { _pv = 'same_bank_manual'; _pacc = 'main'; _pLbl = 'la CUENTA PRINCIPAL, a mano'; }
-    else if (_via === 'secondary') {
-      const _acc = (await _bankAccounts()).find((a) => a.id === String(req.body.accountId || '') && a.active !== false);
-      if (!_acc) return res.status(400).json({ error: 'Elegí una cuenta secundaria válida (se cargan en Cierres → Cuentas del cierre).' });
-      _pv = 'secondary'; _pacc = _acc.id; _pLbl = 'la cuenta secundaria ' + _acc.name;
-    }
     const paid = await PendingPayout.findOneAndUpdate(
       { id, status: { $in: ['pending_review', 'failed', 'paying'] } },
       { $set: { status: 'paid', paidVia: _pv, paidAccount: _pacc, paidBy: req.user.username, paidAt: new Date(), error: null } },
@@ -26388,10 +26412,19 @@ function _storyPublic(s, req) {
   };
 }
 // #416 (owner): historias PÚBLICAS para la pantalla de ingreso (sin sesión). Mismo contenido que /active (son pauta).
+// #1003: 'active' = ya hizo una carga real; si no, 'new'. Cache 10 min por cliente (se consulta cada vez que abre las historias).
+const _storySegCache = new Map();
+async function _storySegmentOf(userId) {
+  const c = _storySegCache.get(userId); if (c && Date.now() - c.at < 600000) return c.seg;
+  let seg = 'new';
+  try { if (await Transaction.exists({ userId, type: 'deposit', status: { $nin: ['failed', 'cancelled'] }, 'metadata.source': { $nin: ['install_bonus', 'welcome_gift', 'welcome_code', 'payout_refund'] }, description: { $not: /PRUEBA/i } })) seg = 'active'; } catch (_) {}
+  _storySegCache.set(userId, { at: Date.now(), seg }); if (_storySegCache.size > 20000) _storySegCache.delete(_storySegCache.keys().next().value);
+  return seg;
+}
 app.get('/api/stories/public', async (req, res) => {
   try {
     const now = new Date();
-    const items = await Story.find({ isActive: true, expiresAt: { $gt: now }, audienceUserId: null }).sort({ publishedAt: 1 }).limit(12).lean(); // #886: nunca las personales
+    const items = await Story.find({ isActive: true, expiresAt: { $gt: now }, audienceUserId: null, audience: { $in: ['all', null, 'new'] } }).sort({ publishedAt: 1 }).limit(12).lean(); // #886: nunca las personales · #1003: el visitante es "nuevo"
     res.set('Cache-Control', 'public, max-age=60');
     res.json({ items: items.map((s) => _storyPublic(s, req)) });
   } catch (e) { logger.warn(`[stories] public: ${e.message}`); res.status(500).json({ error: 'Error del servidor' }); }
@@ -26400,8 +26433,21 @@ app.get('/api/stories/active', authMiddleware, async (req, res) => {
   try {
     const now = new Date();
     // #886: las generales + las PERSONALES de este cliente (bono de bienvenida a los 5/15/30 días); las de otros no se ven.
-    const items = await Story.find({ isActive: true, expiresAt: { $gt: now }, $or: [{ audienceUserId: null }, { audienceUserId: String(req.user.userId) }] }).sort({ publishedAt: 1 }).limit(30).lean();
-    res.json({ items: items.map((s) => _storyPublic(s, req)) });
+    // #1003: + segmento — los NUEVOS (todavía sin carga) ven las informativas; los ACTIVOS (ya cargaron), las de rotación. 'all' = todos.
+    const seg = await _storySegmentOf(String(req.user.userId));
+    const items = await Story.find({ isActive: true, expiresAt: { $gt: now }, audience: { $in: ['all', null, seg] }, $or: [{ audienceUserId: null }, { audienceUserId: String(req.user.userId) }] }).sort({ publishedAt: 1 }).limit(30).lean();
+    const out = items.map((s) => _storyPublic(s, req));
+    // #1003: historia del CÓDIGO SORPRESA ⇒ estado en vivo (lugares que quedan, quiénes ya reclamaron, si este cliente ya lo canjeó).
+    const cdIds = items.filter((s) => s.codeDropId).map((s) => s.codeDropId);
+    if (cdIds.length) {
+      try {
+        const [drops, claims] = await Promise.all([CodeDrop.find({ id: { $in: cdIds } }).lean(), CodeDropClaim.find({ dropId: { $in: cdIds }, status: 'credited' }).sort({ at: 1 }).select('dropId userId username').lean()]);
+        out.forEach((o, i) => { const s = items[i]; const d = s.codeDropId && drops.find((x) => x.id === s.codeDropId); if (!d) return;
+          const cl = claims.filter((c) => c.dropId === d.id);
+          o.codeDrop = { code: s.autoKind === 'codigo' ? d.code : null, amount: d.amount, maxClaims: d.maxClaims, left: Math.max(0, d.maxClaims - d.claims), endsAt: d.endsAt, status: d.status === 'active' && new Date(d.endsAt) > now ? 'active' : d.status, mine: cl.some((c) => c.userId === String(req.user.userId)), winners: cl.map((c) => _cdMask(c.username)) }; });
+      } catch (_) {}
+    }
+    res.json({ items: out });
   } catch (e) { logger.warn(`[stories] active: ${e.message}`); res.status(500).json({ error: 'Error del servidor' }); }
 });
 app.post('/api/stories/:id/view', authMiddleware, async (req, res) => {
@@ -26724,7 +26770,22 @@ async function _storyAutoCtx(dayKey) {
   }
   let firstPct = 0; try { firstPct = await getFirstDepositBonusPct(); } catch (_) {}
   let rolloverX = 5; try { rolloverX = await _giftRolloverX(); } catch (_) {}
-  return { firstPct, dow, favorite, weeklyBonus: STORY_AUTO_BONUS, bonusDays: [3], rolloverX }; // #968 · #978: SEMANAL (miércoles), fuerte
+  // #1003: contenido de los ACTIVOS (ganadores de ayer + slot del día). Se arma UNA vez por día y se guarda: el plan se recalcula cada 5 min
+  // y tiene que dar siempre lo mismo (los títulos sirven para reconocer la historia ya publicada).
+  let act = null; try { act = await getConfig('storyActiveCtx', null); } catch (_) {}
+  if (!act || act.dayKey !== dayKey) {
+    const d0 = new Date(new Date(dayKey + 'T00:00:00-03:00').getTime() - 86400000), d1 = new Date(dayKey + 'T00:00:00-03:00');
+    let winners = [];
+    try {
+      const rows = await PendingPayout.aggregate([{ $match: { status: 'paid', paidAt: { $gte: d0, $lt: d1 }, amount: { $gte: 10000 } } }, { $group: { _id: '$userId', username: { $first: '$username' }, amount: { $max: '$amount' } } }, { $sort: { amount: -1 } }, { $limit: 6 }]);
+      const bad = new Set((await User.find({ id: { $in: rows.map((r) => r._id) }, $or: [{ isBlocked: true }, { duplicateOf: { $ne: null } }, { 'fraudReview.status': 'watch' }] }).select('id').lean()).map((u) => u.id));
+      winners = rows.filter((r) => !bad.has(r._id) && !/test|prueba/i.test(r.username || '')).slice(0, 3).map((r) => ({ username: r.username, amount: Math.round(r.amount) }));
+    } catch (_) {}
+    let games = []; try { games = await storyAuto.popularSlots(); } catch (_) {}
+    act = { dayKey, winners, games };
+    try { await Config.set('storyActiveCtx', act, 'historias-auto'); } catch (_) {}
+  }
+  return { firstPct, dow, favorite, weeklyBonus: STORY_AUTO_BONUS, bonusDays: [3], rolloverX, winners: act.winners || [], games: act.games || [] }; // #968 · #978: SEMANAL (miércoles), fuerte
 }
 // #909 (owner 2026-10-23: "no vamos a publicar aún los partidos de fútbol, quiero ir primero con publicaciones explicando la app"):
 // los PARTIDOS del día salen sólo con la llave `Config['storyAutoMatches']` encendida (panel → Historias automáticas → ⚽ Partidos).
@@ -26879,7 +26940,7 @@ async function _storyAutoTick(opts) {
           linkUrl: it.link || '', linkLabel: String(it.label || '').slice(0, 40), durationSec: 7, hours: 24,
           publishedAt: at, expiresAt: new Date(at.getTime() + 24 * 3600 * 1000), isActive: true,
           bonusPct, bonusHours, bonusUntil: bonusPct > 0 ? new Date(at.getTime() + bonusHours * 3600 * 1000) : null, notifyAll: !!it.notifyAll,
-          autoKey, autoKind: it.kind, createdBy: 'automático'
+          autoKey, autoKind: it.kind, audience: it.audience || 'all', createdBy: 'automático' // #1003
         });
       } catch (e) { if (e && e.code === 11000) continue; throw e; }
       logger.info(`[historias-auto] ${today} ${it.time} ${it.kind}: ${it.title}`);
@@ -26898,6 +26959,250 @@ async function _storyAutoTick(opts) {
   } catch (e) { _storyDiag.lastError = e.message; logger.warn('[historias-auto] ' + e.message); } finally { _storyAutoRunning = false; await _storyDiagSave(); }
 }
 setTimeout(() => { _storyAutoTick().catch(() => {}); setInterval(() => { _storyAutoTick().catch(() => {}); }, 5 * 60 * 1000); }, 2 * 60 * 1000);
+
+// ===== #1003 CÓDIGO SORPRESA EN HISTORIAS (owner 2026-11-01): "2 o 3 veces a la semana, a cualquier hora, un código automático por 1 h con
+// tope de $2.000 para los primeros 10 y avisá que estén atentos; cuando se completa, otra historia de bono completado, estate atento al próximo;
+// que lo vean nuevos y viejos; botón Reclamar ahora; que figuren las 10 personas que ya reclamaron". Para canjear hay que haber cargado al menos
+// una vez (owner: evita cuentas armadas sólo para cobrar); cuentas secundarias / bloqueadas / en observación, nunca. Va con el rollover global.
+// Plan de la semana (días + horas al azar) en Config['codeDropPlan']; teaser sin push a la mañana del día; push a todos al salir el código.
+const CodeDrop = require('./src/models/CodeDrop');
+const CodeDropClaim = require('./src/models/CodeDropClaim');
+const CODE_DROP_DEFAULT = { enabled: true, amount: 2000, maxClaims: 10, minutes: 60, perWeekMin: 2, perWeekMax: 3, fromHour: 11, toHour: 22, requireDeposit: true };
+async function getCodeDropConfig() {
+  let c = {}; try { c = (await getConfig('codeDrop', null)) || {}; } catch (_) {}
+  const n = (v, d, lo, hi) => { const x = Math.round(Number(v)); return Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : d; };
+  const D = CODE_DROP_DEFAULT; const mn = n(c.perWeekMin, D.perWeekMin, 0, 7);
+  const fh = n(c.fromHour, D.fromHour, 0, 22);
+  return { enabled: c.enabled !== false, amount: n(c.amount, D.amount, 100, 100000), maxClaims: n(c.maxClaims, D.maxClaims, 1, 200), minutes: n(c.minutes, D.minutes, 10, 360),
+    perWeekMin: mn, perWeekMax: Math.max(mn, n(c.perWeekMax, D.perWeekMax, 0, 7)), fromHour: fh, toHour: Math.max(fh + 1, n(c.toHour, D.toHour, 1, 23)), requireDeposit: c.requireDeposit !== false };
+}
+const _cdMask = (u) => { u = String(u || ''); return u.length <= 3 ? u.slice(0, 1) + '**' : u.slice(0, 2) + '***' + u.slice(-1); };
+const _cdMoney = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
+function _cdNewCode() { const A = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; const b = require('crypto').randomBytes(5); let s = 'ROJA'; for (let i = 0; i < 5; i++) s += A[b[i] % A.length]; return s; }
+function _cdWeekStart(dayKey) { const d = new Date(dayKey + 'T12:00:00Z'); const dow = (d.getUTCDay() + 6) % 7; return new Date(d.getTime() - dow * 86400000).toISOString().slice(0, 10); }
+// Plan al azar de la semana (lunes a domingo ART). Si se arma a mitad de semana, sólo usa los días que quedan.
+async function _cdWeekPlan(today, cfg) {
+  const wk = _cdWeekStart(today); const cur = await getConfig('codeDropPlan', null);
+  if (cur && cur.week === wk && Array.isArray(cur.slots)) return cur;
+  const crypto = require('crypto'); const rnd = (k) => crypto.randomInt(0, k);
+  const skip = await getConfig('codeDropSkipDay', null); // re-sorteo a mitad de semana: hoy ya tuvo su código
+  const days = []; for (let i = 0; i < 7; i++) { const dk = new Date(new Date(wk + 'T12:00:00Z').getTime() + i * 86400000).toISOString().slice(0, 10); if (dk >= today && dk !== skip) days.push(dk); }
+  let count = cfg.perWeekMin + rnd(cfg.perWeekMax - cfg.perWeekMin + 1); count = Math.min(count, days.length);
+  const pick = []; const pool = days.slice(); while (pick.length < count && pool.length) pick.push(pool.splice(rnd(pool.length), 1)[0]);
+  const span = Math.max(1, (cfg.toHour - cfg.fromHour) * 60 - cfg.minutes);
+  const slots = pick.sort().map((day) => { const m = cfg.fromHour * 60 + rnd(span); return { day, time: String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0') }; });
+  const plan = { week: wk, slots, createdAt: new Date().toISOString() };
+  await Config.set('codeDropPlan', plan, 'código sorpresa'); return plan;
+}
+function _cdImg(kind, o) {
+  if (kind === 'drop') return { style: 'page', accent: '#e60023', kicker: 'Código sorpresa · ' + o.minutes + ' min', icon: 'regalo', h1: o.code, h2: _cdMoney(o.amount) + ' para los primeros ' + o.maxClaims,
+    bullets: [['1', 'Tocá "Reclamar ahora"', 'Acá abajo, en esta historia'], ['$', _cdMoney(o.amount) + ' en tu cuenta', 'Se acredita al toque'], ['★', 'Sólo ' + o.maxClaims + ' lugares', 'El que llega primero gana']], cta: 'Reclamar ahora', note: 'Para clientes que ya cargaron · se juega ×' + o.rx + ' (rollover)' };
+  if (kind === 'teaser') return { style: 'page', accent: '#e60023', kicker: 'Hoy hay código sorpresa', icon: 'regalo', h1: 'Estate atento', h2: 'hoy sale un código', bullets: [['🎁', _cdMoney(o.amount) + ' de regalo', 'Para los primeros ' + o.maxClaims], ['⏱', 'Vale ' + o.minutes + ' minutos', 'A cualquier hora del día'], ['🔔', 'Activá las notificaciones', 'Te avisamos cuando sale']], cta: 'Estar atento' };
+  return { style: 'page', accent: '#16a34a', kicker: 'Código completado', icon: 'vip', h1: o.full ? '¡Se completó!' : 'Terminó el código', h2: 'estate atento al próximo',
+    bullets: (o.winners || []).slice(0, 3).map((w, i) => [String(i + 1), _cdMask(w), 'Se llevó ' + _cdMoney(o.amount)]).concat(o.winners && o.winners.length > 3 ? [['+', 'y ' + (o.winners.length - 3) + ' más', 'Mirá la lista completa abajo']] : []), cta: 'Ver próximos bonos' };
+}
+async function _cdStory(fields, img) {
+  const id = uuidv4(); let autoImg = null; try { autoImg = await _storyAutoImgSpec({ img }); } catch (_) {}
+  const at = new Date();
+  await Story.create(Object.assign({ id, mediaType: autoImg ? 'image' : 'none', mediaUrl: autoImg ? _storyImgUrl(id) : '', autoImg, autoImgVer: autoImg ? STORY_IMG_VER : null, bgColor: autoImg ? '#ffffff' : '#be123c',
+    durationSec: 8, publishedAt: at, isActive: true, audience: 'all', createdBy: 'automático' }, fields));
+  return id;
+}
+async function _codeDropLaunch(cfg, dropKey, by) {
+  const now = new Date(); const code = _cdNewCode(); const rx = await _giftRolloverX().catch(() => 5);
+  let drop;
+  try { drop = await CodeDrop.create({ id: uuidv4(), dropKey, code, amount: cfg.amount, maxClaims: cfg.maxClaims, startsAt: now, endsAt: new Date(now.getTime() + cfg.minutes * 60000), createdBy: by || 'automático' }); }
+  catch (e) { if (e && e.code === 11000) return null; throw e; }
+  const o = { code, amount: cfg.amount, maxClaims: cfg.maxClaims, minutes: cfg.minutes, rx };
+  const storyId = await _cdStory({ title: ('🎁 CÓDIGO ' + code + ': ' + _cdMoney(cfg.amount)).slice(0, 60), text: `${_cdMoney(cfg.amount)} para los primeros ${cfg.maxClaims} que lo reclamen. Vale ${cfg.minutes} minutos: tocá "Reclamar ahora" 🔥`,
+    linkUrl: 'app:codigo:' + code, linkLabel: 'Reclamar ahora ›', hours: Math.ceil(cfg.minutes / 60), expiresAt: drop.endsAt, autoKey: 'cd-' + drop.id, autoKind: 'codigo', codeDropId: drop.id }, _cdImg('drop', o));
+  await CodeDrop.updateOne({ id: drop.id }, { $set: { storyId } });
+  try { await Story.updateMany({ autoKey: new RegExp('^cdt-'), isActive: true }, { $set: { isActive: false } }); } catch (_) {} // el teaser ya cumplió
+  logger.info(`[código-sorpresa] ${dropKey} → ${code} ${_cdMoney(cfg.amount)} × ${cfg.maxClaims} (${cfg.minutes} min) por ${by || 'automático'}`);
+  setTimeout(() => {
+    Promise.resolve(sendNotificationToAllUsers(User, `🎁 CÓDIGO ${_cdMoney(cfg.amount)} · primeros ${cfg.maxClaims}`, `Ya salió: entrá a las historias y tocá Reclamar ahora. Vale ${cfg.minutes} min.`, { url: '/?story=' + storyId, storyId, tag: 'codedrop-' + drop.id, type: 'story', kind: 'promo' }))
+      .then((r) => CodeDrop.updateOne({ id: drop.id }, { $set: { pushStats: r || null } }).catch(() => {})).catch((e) => logger.warn('[código-sorpresa] push: ' + e.message));
+  }, 50);
+  return drop;
+}
+async function _codeDropFinish(dropId) {
+  const d = await CodeDrop.findOne({ id: dropId }).lean(); if (!d || d.status !== 'active') return;
+  const full = d.claims >= d.maxClaims; if (!full && new Date(d.endsAt) > new Date()) return;
+  const r = await CodeDrop.updateOne({ id: dropId, status: 'active' }, { $set: { status: full ? 'completed' : 'expired', finishedAt: new Date() } });
+  if (!(r.modifiedCount || r.nModified)) return; // otra instancia ya lo cerró
+  if (d.storyId) await Story.updateOne({ id: d.storyId }, { $set: { isActive: false } }).catch(() => {});
+  const winners = (await CodeDropClaim.find({ dropId, status: 'credited' }).sort({ at: 1 }).select('username').lean()).map((c) => c.username);
+  if (!winners.length) { logger.info(`[código-sorpresa] ${d.code} terminó sin canjes`); return; }
+  const list = winners.map((w, i) => `${i + 1}. ${_cdMask(w)}`).join(' · ');
+  const doneId = await _cdStory({ title: (full ? '✅ ¡Código completado!' : '⏱ Terminó el código') + ' Estate atento al próximo', text: `Ganadores (${_cdMoney(d.amount)} c/u): ${list}. Pronto sale otro código: activá las notificaciones 🔔`.slice(0, 300),
+    linkUrl: '', linkLabel: '', hours: 12, expiresAt: new Date(Date.now() + 12 * 3600000), autoKey: 'cdd-' + d.id, autoKind: 'codigo_ok', codeDropId: d.id }, _cdImg('done', { amount: d.amount, winners, full })).catch((e) => { logger.warn('[código-sorpresa] historia final: ' + e.message); return null; });
+  if (doneId) await CodeDrop.updateOne({ id: dropId }, { $set: { doneStoryId: doneId } });
+  logger.info(`[código-sorpresa] ${d.code} ${full ? 'COMPLETADO' : 'vencido'}: ${winners.length} ganadores`);
+}
+let _cdRunning = false;
+async function _codeDropTick() {
+  if (_cdRunning || process.env.CODE_DROP_DISABLED === '1') return; _cdRunning = true;
+  try {
+    await CodeDropClaim.updateMany({ status: 'claiming', at: { $lt: new Date(Date.now() - 2 * 60000) } }, { $set: { status: 'unknown' } }).catch(() => {}); // canje cortado a la mitad ⇒ reintentable
+    for (const d of await CodeDrop.find({ status: 'active', endsAt: { $lte: new Date() } }).select('id').lean()) await _codeDropFinish(d.id).catch(() => {});
+    const cfg = await getCodeDropConfig(); if (!cfg.enabled) return;
+    if (!(await _cronClaim('codedrop', 90 * 1000))) return;
+    const now = new Date(); const today = _schedArtKey(now); const plan = await _cdWeekPlan(today, cfg);
+    for (const sl of plan.slots.filter((x) => x.day === today)) {
+      const at = new Date(`${sl.day}T${sl.time}:00-03:00`); const key = `cd-${sl.day}-${sl.time}`;
+      // teaser (sin push) desde las 09:00 o 2 h antes, lo que sea antes de la hora del código
+      const teaserAt = new Date(Math.min(at.getTime() - 3600000, Math.max(new Date(`${sl.day}T09:00:00-03:00`).getTime(), at.getTime() - 4 * 3600000)));
+      if (now >= teaserAt && now < at && !(await Story.exists({ autoKey: 'cdt-' + key }))) {
+        try { await _cdStory({ title: '👀 Hoy sale un CÓDIGO SORPRESA', text: `${_cdMoney(cfg.amount)} para los primeros ${cfg.maxClaims}. No sabemos a qué hora 😉: activá las notificaciones y estate atento a las historias.`, linkUrl: '', linkLabel: '', hours: 6, expiresAt: new Date(at.getTime() + cfg.minutes * 60000), autoKey: 'cdt-' + key, autoKind: 'codigo_teaser' }, _cdImg('teaser', cfg)); } catch (e) { if (!(e && e.code === 11000)) logger.warn('[código-sorpresa] teaser: ' + e.message); }
+      }
+      if (now >= at && now - at < cfg.minutes * 60000 && !(await CodeDrop.exists({ dropKey: key }))) await _codeDropLaunch(cfg, key);
+    }
+  } catch (e) { logger.warn('[código-sorpresa] ' + e.message); } finally { _cdRunning = false; }
+}
+setTimeout(() => { _codeDropTick().catch(() => {}); setInterval(() => { _codeDropTick().catch(() => {}); }, 60 * 1000); }, 3 * 60 * 1000);
+// ===== #1003 REGALOS AL AZAR EN HISTORIAS (owner: "no quiero invadir con regalos: bonos en historias al azar, no para todos sino REPARTIDOS,
+// que cada uno pueda entrar y ver un regalo, para generar retención sin invadir"). Cada día, a cada cliente ACTIVO (cargó en los últimos 30 d,
+// sin bloqueo / cuenta secundaria / observación) le toca su día "al azar" (hash del id y de la tanda de `everyDays` días) ⇒ ~1 regalo cada
+// `everyDays` días por cliente, cada uno en un día distinto. Es una HISTORIA PERSONAL (audienceUserId) con +pct% en la próxima carga por
+// `hours` h (mismo "Reclamar ahora" de siempre, con el tope y el rollover). SIN push: lo descubre al entrar a las historias.
+const STORY_GIFTS_DEFAULT = { enabled: true, pct: 30, hours: 8, everyDays: 7, hour: 12, maxPerDay: 800 };
+async function getStoryGiftsConfig() {
+  let c = {}; try { c = (await getConfig('storyGifts', null)) || {}; } catch (_) {}
+  const n = (v, d, lo, hi) => { const x = Math.round(Number(v)); return Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : d; }; const D = STORY_GIFTS_DEFAULT;
+  return { enabled: c.enabled !== false, pct: n(c.pct, D.pct, 1, 200), hours: n(c.hours, D.hours, 1, 48), everyDays: n(c.everyDays, D.everyDays, 2, 60), hour: n(c.hour, D.hour, 0, 22), maxPerDay: n(c.maxPerDay, D.maxPerDay, 1, 20000) };
+}
+function _storyGiftDayFor(userId, dayN, every) { const h = require('crypto').createHash('sha256').update(String(userId) + '|' + Math.floor(dayN / every)).digest(); return h.readUInt32BE(0) % every === dayN % every; }
+let _storyGiftRunning = false;
+async function _storyGiftTick() {
+  if (_storyGiftRunning || process.env.STORY_GIFTS_DISABLED === '1') return; _storyGiftRunning = true;
+  try {
+    const cfg = await getStoryGiftsConfig(); if (!cfg.enabled) return;
+    const now = new Date(); const hourArt = (now.getUTCHours() + 21) % 24; if (hourArt < cfg.hour || hourArt >= 23) return;
+    const today = _schedArtKey(now); const last = await getConfig('storyGiftsLast', null); if (last && last.day === today) return;
+    if (!(await _cronClaim('storygifts', 10 * 60000))) return;
+    const dayN = Math.floor(new Date(today + 'T12:00:00Z').getTime() / 86400000);
+    const ids = await Transaction.distinct('userId', { type: 'deposit', status: { $nin: ['failed', 'cancelled'] }, 'metadata.source': { $nin: ['install_bonus', 'welcome_gift', 'welcome_code', 'payout_refund'] }, timestamp: { $gte: new Date(now.getTime() - 30 * 86400000) } });
+    const mine = ids.filter((id) => id && _storyGiftDayFor(id, dayN, cfg.everyDays));
+    const users = mine.length ? await User.find({ id: { $in: mine }, role: 'user', isBlocked: { $ne: true }, isActive: { $ne: false }, duplicateOf: null, 'fraudReview.status': { $ne: 'watch' } }).select('id username fraudFlags').lean() : [];
+    const rx = await _giftRolloverX().catch(() => 5), dx = await getDepositRolloverX().catch(() => 1);
+    let made = 0;
+    for (const u of users) {
+      if (made >= cfg.maxPerDay) break; if (_isFlagged(u)) continue;
+      const at = new Date(); const id = uuidv4();
+      const img = { style: 'page', accent: '#e60023', kicker: 'Regalo para vos', icon: 'regalo', h1: `Te tocó un +${cfg.pct}%`, h2: `por ${cfg.hours} horas`, bullets: [['✓', 'Tocá "Reclamar ahora"', 'Acá, en esta historia'], ['$', 'Tu próxima carga', `Lleva +${cfg.pct}% EXTRA automático`], ['★', 'Sólo vos lo ves', 'Hoy te tocó a vos']], cta: 'Reclamar ahora', note: `El bono se juega ×${rx} y la carga ×${dx} (rollover)` };
+      let autoImg = null; try { autoImg = await _storyAutoImgSpec({ img }); } catch (_) {}
+      try {
+        await Story.create({ id, title: `🎁 Hoy te tocó a vos: +${cfg.pct}%`, text: `Regalo sorpresa sólo para vos: tocá "Reclamar ahora" y tu próxima carga lleva +${cfg.pct}% extra. Vale ${cfg.hours} horas.`,
+          mediaType: autoImg ? 'image' : 'none', mediaUrl: autoImg ? _storyImgUrl(id) : '', autoImg, autoImgVer: autoImg ? STORY_IMG_VER : null, bgColor: autoImg ? '#ffffff' : '#be123c',
+          durationSec: 8, hours: cfg.hours, publishedAt: at, expiresAt: new Date(at.getTime() + cfg.hours * 3600000), isActive: true, bonusPct: cfg.pct, bonusHours: cfg.hours, bonusUntil: new Date(at.getTime() + cfg.hours * 3600000),
+          audienceUserId: u.id, audience: 'all', autoKey: `rg-${today}-${u.id}`, autoKind: 'regalo_azar', createdBy: 'automático' });
+        made++;
+      } catch (e) { if (!(e && e.code === 11000)) logger.warn('[regalo-azar] ' + u.username + ': ' + e.message); }
+    }
+    await Config.set('storyGiftsLast', { day: today, at: now.toISOString(), candidates: users.length, made, of: ids.length }, 'regalo-azar');
+    logger.info(`[regalo-azar] ${today}: ${made} regalos personales (de ${ids.length} activos, les tocaba a ${users.length})`);
+  } catch (e) { logger.warn('[regalo-azar] ' + e.message); } finally { _storyGiftRunning = false; }
+}
+setTimeout(() => { _storyGiftTick().catch(() => {}); setInterval(() => { _storyGiftTick().catch(() => {}); }, 10 * 60 * 1000); }, 4 * 60 * 1000);
+app.get('/api/admin/story-gifts', authMiddleware, adminMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+  try {
+    const since = new Date(Date.now() - 30 * 86400000);
+    const agg = await Story.aggregate([{ $match: { autoKind: 'regalo_azar', publishedAt: { $gte: since } } }, { $group: { _id: null, n: { $sum: 1 }, views: { $sum: '$views' }, claims: { $sum: '$bonusClaims' }, uses: { $sum: '$bonusUses' }, bonus: { $sum: '$bonusUsedTotal' }, dep: { $sum: '$bonusDepositTotal' } } }]);
+    res.json({ success: true, config: await getStoryGiftsConfig(), last: await getConfig('storyGiftsLast', null), stats30: agg[0] || null });
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.post('/api/admin/story-gifts', authMiddleware, adminMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+  try {
+    const b = req.body || {}; const next = Object.assign({}, (await getConfig('storyGifts', null)) || {});
+    for (const k of ['pct', 'hours', 'everyDays', 'hour', 'maxPerDay']) if (b[k] !== undefined && b[k] !== '') next[k] = Number(b[k]);
+    if (b.enabled !== undefined) next.enabled = !!b.enabled;
+    await Config.set('storyGifts', next, req.user.username); res.json({ success: true, config: await getStoryGiftsConfig() });
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+// Revisión #1003: limitador propio POR CLIENTE (el de login va por IP: con la push a todos, los que comparten la IP de la operadora se frenaban entre sí).
+const codeDropLimiter = rateLimit({ windowMs: 60 * 1000, max: 8, standardHeaders: true, legacyHeaders: false, keyGenerator: (req) => (req.user && req.user.userId) ? ('u:' + req.user.userId) : req.ip, validate: { keyGeneratorIpFallback: false }, store: makeRateStore('codedrop'), message: { error: 'Esperá unos segundos y probá de nuevo.' } });
+app.post('/api/code-drop/claim', authMiddleware, codeDropLimiter, async (req, res) => {
+  try {
+    if (!req.user || req.user.role !== 'user') return res.status(403).json({ error: 'Sólo clientes' });
+    const code = String((req.body && req.body.code) || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 20);
+    if (!code) return res.status(400).json({ error: 'Escribí el código' });
+    const now = new Date(); const d = await CodeDrop.findOne({ code }).sort({ startsAt: -1 }).lean();
+    if (!d || d.startsAt > now) return res.status(404).json({ error: 'Ese código no existe. Revisá que esté bien escrito.', code: 'NOT_FOUND' });
+    const _mine = await CodeDropClaim.findOne({ dropId: d.id, userId: String(req.user.userId) }).select('status').lean();
+    if (_mine && _mine.status === 'credited') return res.status(409).json({ error: 'Ya canjeaste este código ✅', code: 'ALREADY' });
+    if (!(_mine && _mine.status === 'unknown') && (d.status !== 'active' || d.endsAt <= now || d.claims >= d.maxClaims)) return res.status(410).json({ error: d.claims >= d.maxClaims ? `Llegaste tarde: ya se lo llevaron los ${d.maxClaims} primeros. ¡Estate atento al próximo!` : 'Este código ya venció. ¡Estate atento al próximo!', code: 'GONE' });
+    const user = await User.findOne({ id: req.user.userId }).select('id username isBlocked isActive duplicateOf fraudFlags fraudReview').lean();
+    if (!user || user.isBlocked || user.isActive === false) return res.status(403).json({ error: 'Tu cuenta no puede canjear códigos. Escribinos a Soporte.' });
+    if (user.duplicateOf || _isFlagged(user) || (user.fraudReview && user.fraudReview.status === 'watch')) return res.status(403).json({ error: 'Esta cuenta no participa de los códigos. Escribinos a Soporte si creés que es un error.', code: 'NOT_ELIGIBLE' });
+    const cfg = await getCodeDropConfig();
+    if (cfg.requireDeposit) { _storySegCache.delete(user.id); if ((await _storySegmentOf(user.id)) !== 'active') return res.status(403).json({ error: 'Los códigos son para clientes que ya cargaron. Hacé tu primera carga y participás del próximo 🎁', code: 'NEEDS_DEPOSIT' }); }
+    const reference = `vip-cdrop-${d.id}-${user.id}`;
+    // Un canje que quedó a medias (falló la red con 1girox o se reinició el server) ya tiene su LUGAR: al reintentar se vuelve a acreditar con la
+    // MISMA reference (1girox responde duplicate si ya había entrado), sin ocupar otro lugar.
+    let slot = null;
+    try { await CodeDropClaim.create({ dropId: d.id, userId: user.id, username: user.username, amount: d.amount, reference }); }
+    catch (e) {
+      if (!(e && e.code === 11000)) throw e;
+      const c = await CodeDropClaim.findOne({ dropId: d.id, userId: user.id }).lean();
+      if (c && c.status === 'credited') return res.status(409).json({ error: 'Ya canjeaste este código ✅', code: 'ALREADY' });
+      if (!c || c.status !== 'unknown') return res.status(409).json({ error: 'Tu canje se está procesando, esperá unos segundos.' });
+      slot = await CodeDrop.findOne({ id: d.id }).lean(); // reintento de un canje con lugar ya tomado
+    }
+    if (!slot) {
+      slot = await CodeDrop.findOneAndUpdate({ id: d.id, status: 'active', claims: { $lt: d.maxClaims }, endsAt: { $gt: new Date() } }, { $inc: { claims: 1 } }, { new: true }).lean();
+      if (!slot) { await CodeDropClaim.deleteOne({ dropId: d.id, userId: user.id }); return res.status(410).json({ error: `Llegaste tarde: ya se lo llevaron los ${d.maxClaims} primeros. ¡Estate atento al próximo!`, code: 'GONE' }); }
+    }
+    let credit; try { credit = await girox.creditGift(user.username, d.amount, { description: `Código sorpresa ${d.code}`, reference, rolloverX: await _giftRolloverX() }); } catch (e) { credit = { success: false, error: e.message }; }
+    if (!credit || !credit.success) {
+      // Rechazo DEFINITIVO (cuenta sin regalos, jugador inexistente, validación, 4xx) ⇒ se libera el lugar. Si no (timeout, 5xx, red), pudo haber
+      // entrado: el lugar queda tomado y el canje en 'unknown' para que el reintento use la misma reference (nunca acredita dos veces).
+      const hs = Number(credit && credit.httpStatus) || 0; const cd = String((credit && credit.code) || '');
+      const definitive = cd === 'gifts_blocked' || /not_found|validation|invalid/i.test(cd) || (hs >= 400 && hs < 500 && hs !== 408 && hs !== 429);
+      if (definitive) { await CodeDrop.updateOne({ id: d.id }, { $inc: { claims: -1 } }); await CodeDropClaim.deleteOne({ dropId: d.id, userId: user.id }); }
+      else await CodeDropClaim.updateOne({ dropId: d.id, userId: user.id }, { $set: { status: 'unknown' } });
+      logger.warn(`[código-sorpresa] ${user.username} ${d.code}: no se acreditó (${definitive ? 'definitivo' : 'reintentable'}): ${(credit && credit.error) || '?'}`);
+      return res.status(503).json({ error: cd === 'gifts_blocked' ? 'Esta cuenta no participa de los códigos.' : (definitive ? 'No pudimos acreditarlo. Escribinos a Soporte.' : 'Se cortó la conexión: tocá "Reclamar ahora" de nuevo, tu lugar está guardado.') });
+    }
+    await CodeDropClaim.updateOne({ dropId: d.id, userId: user.id }, { $set: { status: 'credited', creditedAs: credit.creditedAs || null } });
+    try { await Transaction.create({ id: uuidv4(), type: 'code_drop', platform: 'girox', amount: d.amount, username: user.username, userId: user.id, description: `Código sorpresa ${d.code} (${slot.claims}/${d.maxClaims})`, transactionId: (credit.data && (credit.data.transfer_id || credit.data.transferId)) || null, metadata: { codeDropId: d.id, reference, creditedAs: credit.creditedAs || null }, timestamp: new Date() }); } catch (e) { logger.warn('[código-sorpresa] tx: ' + e.message); }
+    _emitAdminOnlyChatNote(user.id, user.username, `🎁 Canjeó el CÓDIGO SORPRESA ${d.code}: ${_cdMoney(d.amount)} acreditado automático (${slot.claims}/${d.maxClaims}). No hay que hacer nada.`).catch(() => {});
+    if (slot.claims >= d.maxClaims) setImmediate(() => _codeDropFinish(d.id).catch(() => {}));
+    const rx = await _giftRolloverX().catch(() => 5);
+    res.json({ success: true, amount: d.amount, position: slot.claims, maxClaims: d.maxClaims, rolloverX: rx, message: `🎉 ¡Ganaste ${_cdMoney(d.amount)}! Sos el ${slot.claims}° de ${d.maxClaims}. Ya está en tu cuenta (se juega ×${rx}).` });
+  } catch (e) { logger.error('[código-sorpresa] claim ' + e.message); res.status(500).json({ error: 'Error del servidor' }); }
+});
+// Panel → Historias automáticas → 🎁 Código sorpresa: config, plan de la semana, últimos códigos con sus ganadores, lanzar uno ahora.
+app.get('/api/admin/code-drops', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const drops = await CodeDrop.find({}).sort({ startsAt: -1 }).limit(15).lean();
+    const claims = await CodeDropClaim.find({ dropId: { $in: drops.map((x) => x.id) }, status: 'credited' }).sort({ at: 1 }).select('dropId username at').lean();
+    const items = drops.map((x) => Object.assign(x, { winners: claims.filter((c) => c.dropId === x.id).map((c) => ({ username: c.username, at: c.at })) }));
+    res.json({ success: true, config: await getCodeDropConfig(), plan: await getConfig('codeDropPlan', null), items });
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.post('/api/admin/code-drops/config', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const b = req.body || {}; const prev = (await getConfig('codeDrop', null)) || {};
+    const next = Object.assign({}, prev); for (const k of ['amount', 'maxClaims', 'minutes', 'perWeekMin', 'perWeekMax', 'fromHour', 'toHour']) if (b[k] !== undefined && b[k] !== '') next[k] = Number(b[k]);
+    for (const k of ['enabled', 'requireDeposit']) if (b[k] !== undefined) next[k] = !!b[k];
+    await Config.set('codeDrop', next, req.user.username);
+    // se vuelve a sortear la semana en la próxima pasada, SIN el día de hoy si hoy ya tocaba (si no, podía salir un segundo código hoy)
+    if (b.replan) { const cur = await getConfig('codeDropPlan', null); const today = _schedArtKey(new Date()); await Config.set('codeDropPlan', null, req.user.username); if (cur && Array.isArray(cur.slots) && cur.slots.some((x) => x.day === today)) await Config.set('codeDropSkipDay', today, req.user.username); }
+    res.json({ success: true, config: await getCodeDropConfig() });
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.post('/api/admin/code-drops/now', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    if (await CodeDrop.exists({ status: 'active' })) return res.status(409).json({ error: 'Ya hay un código activo.' });
+    const d = await _codeDropLaunch(await getCodeDropConfig(), 'cd-manual-' + Date.now(), req.user.username);
+    res.json({ success: true, code: d && d.code });
+  } catch (e) { logger.error('[código-sorpresa] now ' + e.message); res.status(500).json({ error: 'Error del servidor' }); }
+});
 
 // ===== #886 BONO DE BIENVENIDA POR DÍAS (owner 2026-10-23): "a los clientes nuevos, que lo vean sólo los nuevos: notificación + bono de 50%
 // con el mismo rollover, en historias, el día 5, el 15 y el 30 desde que se registró; el resto no lo ve. 'Tenés un 50% activo, 2 hs para

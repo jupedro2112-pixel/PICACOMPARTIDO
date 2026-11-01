@@ -21,7 +21,7 @@ const transactionSchema = new mongoose.Schema({
     // publicistas/clientes cuenta cargas reales. En 1girox todos estos regalos
     // van como BONO (ver ARCHITECTURE §4.5); `metadata.creditedAs` guarda cómo
     // salió de verdad ('bonus' | 'deposit' si hubo fallback).
-    enum: ['deposit', 'withdrawal', 'bonus', 'refund', 'transfer', 'referral_commission', 'fire_reward', 'rakeback', 'vip_levelup', 'roulette', 'install_gift', 'mission', 'review_gift'], // review_gift (#875): 20% por dejar su opinión tras la 5ª carga · install_gift (#283): carga GRATIS por instalar la app · mission (#504): premio de misión semanal (regalo, no es carga real)
+    enum: ['deposit', 'withdrawal', 'bonus', 'refund', 'transfer', 'referral_commission', 'fire_reward', 'rakeback', 'vip_levelup', 'roulette', 'install_gift', 'mission', 'review_gift', 'code_drop'], // review_gift (#875): 20% por dejar su opinión tras la 5ª carga · install_gift (#283): carga GRATIS por instalar la app · mission (#504): premio de misión semanal (regalo, no es carga real)
     required: true,
     index: true
   },

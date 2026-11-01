@@ -1597,6 +1597,15 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
   Siguen: login, alta desde el panel (`/api/users`, `/api/admin/users`, publisher-admin) y la creación local de un jugador que YA existe en 1girox.
 - Test: `node scripts/test-fraud-auto.js` (10 casos).
 
+### Historias por segmento, código sorpresa y regalos al azar #1003 (2026-11-01)
+- `Story.audience` 'all'|'new'|'active' (+ `audienceUserId` personal). `/api/stories/active` filtra por `_storySegmentOf` (carga real ⇒ active);
+  `/api/stories/public` = 'new'. Una consulta NUEVA de historias para clientes tiene que filtrar audience y audienceUserId.
+- `storyAutopilot.planDay` → slots 0..4 'new' (`NEW_KEYS`) + `planActive` 'a0'..'a4' (ganadores/slot del día desde `Config['storyActiveCtx']`).
+- Código sorpresa: `CodeDrop` (dropKey único), `CodeDropClaim` (dropId+userId único); autoKeys `cdt-` (teaser), `cd-` (código), `cdd-` (cierre).
+  `Story.codeDropId` ⇒ la PWA recibe `codeDrop {code, left, winners, mine, status}` y muestra "Reclamar ahora". Link `/?codigo=XXXX` canjea.
+- Regalos al azar: Story `rg-<día>-<userId>` personal con `bonusPct` (usa el `claim-bonus` de siempre ⇒ `User.storyBonus`).
+- giroxService.getPlayerStats: rango cerrado (to < hoy ART) cacheado 30 min; `_statsInflight` une pedidos iguales; `fresh`/`includeRaw` siempre van a la red.
+
 ### Retiro nuevo reemplaza al anterior #1002 (2026-11-01)
 - Un pedido de retiro nuevo anula los `PendingPayout` anteriores del cliente que siguen en `pending_review` sin fichas descontadas ni envío al
   banco vivo (`paidVia:'replaced'`, `replacedBy` = id nuevo). Nunca toca `paying`, `debitConfirmed:true` ni `hgStatus` UNKNOWN/PENDING.

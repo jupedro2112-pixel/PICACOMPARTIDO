@@ -253,7 +253,10 @@ VIP.refunds = (function () {
 
             if (diff <= 0) {
                 timerElement.textContent = '¡Listo!';
-                loadRefundStatus();
+                // #1003 (velocidad): a medianoche todos los teléfonos pedían el estado en el mismo minuto (avalancha a 1girox):
+                // se corta este contador y se pide UNA vez, en un momento al azar de los próximos 2 minutos.
+                if (VIP.state.refundTimers[type]) { clearInterval(VIP.state.refundTimers[type]); VIP.state.refundTimers[type] = null; }
+                if (!VIP.state._refundReloadT) VIP.state._refundReloadT = setTimeout(() => { VIP.state._refundReloadT = null; loadRefundStatus(); }, Math.round(Math.random() * 120000));
                 return;
             }
 

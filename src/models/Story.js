@@ -55,6 +55,9 @@ const storySchema = new mongoose.Schema({
   // #886 (owner): historia PERSONAL (sólo la ve ese cliente): bono de bienvenida a los N días de registrarse (5 / 15 / 30).
   audienceUserId: { type: String, default: null, index: true },
   newbieDay: { type: Number, default: null, index: true },
+  // #1003: segmento que la ve — 'all' | 'new' (todavía sin carga real) | 'active' (ya cargó). Las automáticas de servicio van a 'new' y las de rotación a 'active'.
+  audience: { type: String, default: 'all' },
+  codeDropId: { type: String, default: null }, // #1003: historia del código sorpresa (o de su cierre)
   autoKey: { type: String, default: undefined },
   autoKind: { type: String, default: null },
   // #834: FOTO de la historia automática (spec para storyImage.renderSvg, con los escudos/fotos ya embebidos en base64). Se sirve en

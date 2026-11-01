@@ -2991,6 +2991,7 @@ async function _payoutPost(id, action, body) {
     if (r.status === 409) {
         const j = await r.clone().json().catch(function () { return {}; });
         if (j.code === 'BANK_UNKNOWN' && confirm('⚠️ ' + j.error + '\n\n¿Ya revisaste el extracto del banco y este retiro NO salió? (Si salió, tocá Cancelar.)')) r = await send({ bankChecked: true });
+        else if (j.code === 'REPLACED' && confirm('⚠️ ' + j.error + '\n\nTocá Aceptar SÓLO si ya hiciste la transferencia de este retiro: se registra como pagado y se avisa que el nuevo hay que revisarlo antes de pagarlo.')) r = await send({ replacedOk: true }); // #1003
     }
     return r;
 }
@@ -5034,7 +5035,7 @@ function switchSection(section) {
     if (section === 'datos2') { datosIaGate('Datos 2.0').then(function (ok) { if (ok) loadDatos2(); }); } // #743 clave
     if (section === 'notifications') loadNotificationsPanel();
     if (section === 'cronograma') loadCronograma(); // #190
-    if (section === 'cronohist') { loadStoriesAuto(); loadNewbieOffers(); } // #871 · #886
+    if (section === 'cronohist') { loadStoriesAuto(); loadNewbieOffers(); loadCodeDrops(); loadStoryGifts(); } // #871 · #886 · #1003
     if (section === 'fraud') loadFraud(); // #873
     if (section === 'inicio') loadInicio(); // #876
     if (section === 'notifCenter') loadNotifCenter(); // #971/#973
@@ -6404,6 +6405,7 @@ async function loadPayReview() {
             return '<div style="padding:12px;border-radius:10px;background:rgba(255,255,255,0.04);border-left:4px solid ' + color + ';font-size:12.5px;line-height:1.6;">' +
                 '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline;"><div><b style="font-size:16px;">' + fmtARS(p.amount) + '</b> · <b>' + escapeHtml(p.username) + '</b> · ' + escapeHtml(p.platform || 'girox') + (p.status === 'failed' ? ' · <span style="color:#ff8080;">FALLÓ: ' + escapeHtml(p.error || '') + '</span>' : (p.reviewRequired ? ' · <span style="color:#ffb347;">en revisión</span>' : ' · <span style="color:#aaa;">pago automático pendiente</span>')) + '</div><div style="color:#888;font-size:11px;">' + fmtFechaHoraAR(p.createdAt) + '</div></div>' +
                 (p.reviewReason ? '<div style="color:#ffb347;">🛡️ ' + escapeHtml(p.reviewReason) + '</div>' : '') + // #881
+                ((p.whyNotAuto || []).length ? '<div style="color:#93c5fd;">🔎 Por qué no salió solo: ' + p.whyNotAuto.map(escapeHtml).join(' · ') + '</div>' : '') + // #1003
                 _prEvidenceHtml(p.fraudEvidence) + // #996: detalle de lo que detectó el antifraude
                 '<div style="color:#aaa;">CBU/alias: <code>' + escapeHtml(p.cbu || p.alias || '—') + '</code> · titular: ' + escapeHtml(p.titular || '—') + ' · saldo al pedir: ' + fmtARS(p.balanceBefore || 0) + '</div>' +
                 '<div style="color:#aaa;">Cliente: ' + (rk.daysOld !== null && rk.daysOld !== undefined ? rk.daysOld + ' días' : '—') + ' · cargó ' + rk.deposits + ' veces (' + fmtARS(rk.depositsTotal) + ') · retiró ' + rk.withdrawalsPaid + ' veces (' + fmtARS(rk.withdrawalsTotal) + ') · celular ' + (rk.phoneVerified ? '✅' : '❌') + (rk.acquisitionSource ? ' · origen ' + escapeHtml(rk.acquisitionSource) : '') + '</div>' +
@@ -16382,6 +16384,50 @@ function _naRender(j) {
 }
 window.naYesterday = naYesterday; window.naKindChange = naKindChange; window.naShift = naShift; window.naPickDay = naPickDay; window.loadNotifAnalysis = loadNotifAnalysis;
 // ═══ #827: HISTORIAS AUTOMÁTICAS — hoy (publicadas, con respuesta), próximos días y cómo respondió la gente a la historia con bono ═══
+// ═══ #1003: CÓDIGO SORPRESA + REGALOS AL AZAR ═══
+async function loadCodeDrops() {
+    const box = document.getElementById('cdBody'); if (!box) return;
+    try {
+        const r = await authFetch('/api/admin/code-drops'); const j = await r.json(); if (!r.ok) { box.textContent = j.error || 'Error'; return; }
+        const c = j.config || {}, pl = j.plan || {};
+        const fd = (d) => new Date(d).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+        const inp = (id, v, w, t) => '<label style="font-size:.78rem">' + t + ' <input type="number" id="' + id + '" value="' + escapeHtml(String(v)) + '" style="width:' + w + 'px"></label>';
+        const ST = { active: '🟢 activo', completed: '✅ completado', expired: '⏱ vencido' };
+        box.innerHTML = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px"><label style="font-size:.8rem"><input type="checkbox" id="cdOn" ' + (c.enabled ? 'checked' : '') + '> Encendido</label>' +
+            inp('cdAmt', c.amount, 90, 'Monto $') + inp('cdMax', c.maxClaims, 60, 'Primeros') + inp('cdMin', c.minutes, 60, 'Minutos') + inp('cdWmin', c.perWeekMin, 50, 'Por semana: de') + inp('cdWmax', c.perWeekMax, 50, 'a') + inp('cdFh', c.fromHour, 50, 'Entre las') + inp('cdTh', c.toHour, 50, 'y las') +
+            '<label style="font-size:.8rem"><input type="checkbox" id="cdDep" ' + (c.requireDeposit ? 'checked' : '') + '> Sólo clientes que ya cargaron</label><button class="btn btn-primary btn-sm" onclick="cdSave(false)">Guardar</button><button class="btn btn-secondary btn-sm" onclick="cdSave(true)" title="Vuelve a sortear los días y horarios de esta semana">🎲 Re-sortear semana</button></div>' +
+            '<div style="margin-bottom:6px">📅 <b>Esta semana:</b> ' + ((pl.slots || []).length ? pl.slots.map(function (x) { return escapeHtml(x.day + ' ' + x.time); }).join(' · ') : 'se sortea en la próxima pasada') + ' <small style="opacity:.75">(lo ve sólo el admin)</small></div>' +
+            ((j.items || []).length ? '<div style="overflow-x:auto"><table class="data-table" style="width:100%;font-size:.78rem"><thead><tr><th>Salió</th><th>Código</th><th>Monto</th><th>Canjes</th><th>Estado</th><th>Ganadores</th></tr></thead><tbody>' + j.items.map(function (x) {
+                return '<tr><td>' + fd(x.startsAt) + '</td><td><b>' + escapeHtml(x.code) + '</b></td><td>' + fmtARS(x.amount) + '</td><td>' + x.claims + '/' + x.maxClaims + '</td><td>' + (ST[x.status] || escapeHtml(x.status)) + '</td><td>' + (x.winners || []).map(function (w) { return escapeHtml(w.username); }).join(', ') + '</td></tr>'; }).join('') + '</tbody></table></div>' : '<div style="opacity:.75">Todavía no salió ningún código.</div>');
+    } catch (_) { box.textContent = 'Error de conexión'; }
+}
+async function cdSave(replan) {
+    const v = (id) => (document.getElementById(id) || {}).value;
+    const body = { enabled: document.getElementById('cdOn').checked, requireDeposit: document.getElementById('cdDep').checked, amount: v('cdAmt'), maxClaims: v('cdMax'), minutes: v('cdMin'), perWeekMin: v('cdWmin'), perWeekMax: v('cdWmax'), fromHour: v('cdFh'), toHour: v('cdTh'), replan: !!replan };
+    try { const r = await authFetch('/api/admin/code-drops/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); const j = await r.json(); if (!r.ok) { showToast(j.error || 'No se pudo', 'error'); return; } showToast(replan ? 'Guardado: la semana se vuelve a sortear en un minuto' : 'Guardado', 'success'); loadCodeDrops(); } catch (_) { showToast('Error de conexión', 'error'); }
+}
+async function cdLaunchNow() {
+    if (!confirm('¿Lanzar un CÓDIGO SORPRESA ahora? Sale la historia con el código y una notificación a todos.')) return;
+    try { const r = await authFetch('/api/admin/code-drops/now', { method: 'POST' }); const j = await r.json(); if (!r.ok) { showToast(j.error || 'No se pudo', 'error'); return; } showToast('Código ' + (j.code || '') + ' lanzado ✅', 'success'); loadCodeDrops(); } catch (_) { showToast('Error de conexión', 'error'); }
+}
+async function loadStoryGifts() {
+    const box = document.getElementById('sgBody'); if (!box) return;
+    try {
+        const r = await authFetch('/api/admin/story-gifts'); const j = await r.json(); if (!r.ok) { box.textContent = j.error || 'Error'; return; }
+        const c = j.config || {}, l = j.last || {}, st = j.stats30 || {};
+        const inp = (id, v, w, t) => '<label style="font-size:.78rem">' + t + ' <input type="number" id="' + id + '" value="' + escapeHtml(String(v)) + '" style="width:' + w + 'px"></label>';
+        box.innerHTML = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px"><label style="font-size:.8rem"><input type="checkbox" id="sgOn" ' + (c.enabled ? 'checked' : '') + '> Encendido</label>' +
+            inp('sgPct', c.pct, 60, '+%') + inp('sgHours', c.hours, 50, 'Vale (h)') + inp('sgEvery', c.everyDays, 50, '1 cada (días)') + inp('sgHour', c.hour, 50, 'Sale a las') + inp('sgMax', c.maxPerDay, 70, 'Máx. por día') +
+            '<button class="btn btn-primary btn-sm" onclick="sgSave()">Guardar</button></div>' +
+            '<div>Última tanda: <b>' + escapeHtml(l.day || '—') + '</b> · ' + (l.made || 0) + ' regalos (de ' + (l.of || 0) + ' clientes activos)</div>' +
+            '<div>Últimos 30 días: ' + (st.n || 0) + ' regalos · ' + (st.views || 0) + ' vistas · ' + (st.claims || 0) + ' reclamados · ' + (st.uses || 0) + ' usados en una carga · bono dado ' + fmtARS(st.bonus || 0) + ' · cargado ' + fmtARS(st.dep || 0) + '</div>';
+    } catch (_) { box.textContent = 'Error de conexión'; }
+}
+async function sgSave() {
+    const v = (id) => (document.getElementById(id) || {}).value;
+    try { const r = await authFetch('/api/admin/story-gifts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: document.getElementById('sgOn').checked, pct: v('sgPct'), hours: v('sgHours'), everyDays: v('sgEvery'), hour: v('sgHour'), maxPerDay: v('sgMax') }) }); const j = await r.json(); if (!r.ok) { showToast(j.error || 'No se pudo', 'error'); return; } showToast('Guardado', 'success'); loadStoryGifts(); } catch (_) { showToast('Error de conexión', 'error'); }
+}
+window.loadCodeDrops = loadCodeDrops; window.cdSave = cdSave; window.cdLaunchNow = cdLaunchNow; window.loadStoryGifts = loadStoryGifts; window.sgSave = sgSave;
 async function loadStoriesAuto() {
     const box = document.getElementById('stAutoBody'); if (!box) return;
     try {
@@ -17198,6 +17244,7 @@ function _drvSetBadge(n) {
     b.textContent = n > 99 ? '99+' : String(n); b.style.display = n > 0 ? '' : 'none';
 }
 async function pollDepositReviewsBadge() {
+    if (document.hidden) return; // #1003: pestaña oculta = no consulta (se actualiza al volver)
     try {
         const r = await authFetch('/api/admin/deposit-reviews/count');
         if (!r.ok) return; const j = await r.json(); _drvSetBadge(Number(j.pending) || 0);
@@ -17352,6 +17399,7 @@ function spOnNewMessage(data) {
 }
 function _spSetBadge(n) { const b = document.getElementById('supportBadge'); if (!b) return; b.textContent = n > 99 ? '99+' : String(n); b.style.display = n > 0 ? '' : 'none'; }
 async function pollSupportBadge() {
+    if (document.hidden) return; // #1003: pestaña oculta = no consulta (se actualiza al volver)
     try {
         const r = await authFetch('/api/admin/support/conversations'); if (!r.ok) return; const j = await r.json();
         let g = 0; try { const rg = await authFetch('/api/admin/guest-support'); if (rg.ok) { const jg = await rg.json(); g = jg.unreadTotal || 0; } } catch (_) {} // #414

@@ -578,6 +578,9 @@ const _playerInvalidatedAt = new Map(); // usernameLower → ts de la última in
 // Cache de stats/netwin (getPlayerStats) — status de reembolso. Ver getPlayerStats.
 const STATS_CACHE_TTL_MS = Number(process.env.GIROX_STATS_CACHE_MS || 90000);
 const _statsCache = new Map();         // "user|from|to" → { data, ts }
+// #1003 (velocidad): un rango YA CERRADO (termina antes de hoy, hora ART) no cambia ⇒ 30 min; y dos pedidos iguales a la vez salen UNA vez.
+const STATS_CLOSED_TTL_MS = Number(process.env.GIROX_STATS_CLOSED_CACHE_MS || 30 * 60000);
+const _statsInflight = new Map();
 
 /** Borra el saldo cacheado de un usuario (se llama tras cada operación de plata)
  *  y registra CUÁNDO se invalidó, para que una lectura que venía en vuelo no
@@ -603,7 +606,7 @@ function _maybeCachePlayer(key, data, startTs) {
 const _playerCachePrune = setInterval(() => {
   const now = Date.now();
   for (const [k, v] of _playerCache) if (now - v.ts >= PLAYER_CACHE_TTL_MS) _playerCache.delete(k);
-  for (const [k, v] of _statsCache) if (now - v.ts >= STATS_CACHE_TTL_MS) _statsCache.delete(k);
+  for (const [k, v] of _statsCache) if (now - v.ts >= Math.max(STATS_CACHE_TTL_MS, STATS_CLOSED_TTL_MS)) _statsCache.delete(k); // #1003: los cerrados viven 30 min
   // Los timestamps de invalidación se guardan más tiempo que la peor lectura en
   // vuelo posible (timeout + reintentos ~80s) para no reactivar la race.
   for (const [k, ts] of _playerInvalidatedAt) if (now - ts >= 300000) _playerInvalidatedAt.delete(k);
@@ -1390,11 +1393,19 @@ async function getPlayerStats(username, fromDate, toDate, label = 'stats', opts 
   // 2026-08-18). El rango del status es un período ya cerrado → el netwin es
   // estable, cachear es seguro. La RECLAMACIÓN (plata) pasa {fresh:true}.
   const _statsKey = String(username).toLowerCase() + '|' + from + '|' + to;
+  const _closed = to.slice(0, 10) < formatStatsDate(new Date()).slice(0, 10);
   if (!(opts && opts.fresh)) {
     const _c = _statsCache.get(_statsKey);
-    if (_c && (Date.now() - _c.ts) < STATS_CACHE_TTL_MS) return _c.data;
+    if (_c && (Date.now() - _c.ts) < (_closed ? STATS_CLOSED_TTL_MS : STATS_CACHE_TTL_MS)) return _c.data;
+    const _f = !(opts && opts.includeRaw) && _statsInflight.get(_statsKey);
+    if (_f) return _f;
   }
-
+  if (opts && (opts.fresh || opts.includeRaw)) return _getPlayerStatsNet(username, from, to, label, opts, _statsKey);
+  const _p = _getPlayerStatsNet(username, from, to, label, opts, _statsKey).finally(() => _statsInflight.delete(_statsKey));
+  _statsInflight.set(_statsKey, _p);
+  return _p;
+}
+async function _getPlayerStatsNet(username, from, to, label, opts, _statsKey) {
   const r = await _request({
     method: 'get',
     path: `/players/${encodeURIComponent(String(username))}/stats?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,

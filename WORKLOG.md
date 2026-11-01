@@ -8,7 +8,39 @@
 
 ## Sesión 2026-11-01
 
-### 1002. 🔁 RETIRO NUEVO ANULA EL ANTERIOR — queda vigente sólo el último — admin SW v216
+### 1003. 📖 HISTORIAS por segmento + 🎁 CÓDIGO SORPRESA + 🎲 regalos al azar + velocidad + guía de retiros — PWA v652 · admin SW v217
+**Pedido (owner):** "para los nuevos, historias informativas del servicio; los que ya son activos, más rotación (ganadores, contenido atractivo)
+así no se cansan; un código automático por 1 h, $2.000 para los primeros 10, 2-3 veces por semana a cualquier hora, avisar que estén atentos,
+y al completarse otra historia 'bono completado, estate atento al próximo' con los 10 que reclamaron; bonos al azar REPARTIDOS sin invadir;
+revisar la velocidad (sin lag); detallar bien en retiros cuándo alguien puede estar estafando y cómo funciona todo de punta a punta".
+Decisiones del owner: el código sólo para clientes que ya cargaron; Telegram por ahora no (no hay bot: queda listo el link `?codigo=`).
+- **Segmentos:** `Story.audience` ('all' | 'new' | 'active'); `_storySegmentOf` = 'active' si tiene una carga real (cache 10 min).
+  `planDay` arma las 5 de siempre para los NUEVOS (sólo `NEW_KEYS`) + `planActive` (slots 'a0'..'a4': Soporte, 🏆 ganadores de ayer
+  —retiros pagados ≥ $10.000, usuario enmascarado, sin bloqueados/secundarias/observación—, 🎰 slot del día, temas que rotan). Partidos,
+  bono de la semana y código sorpresa = 'all'. Contexto del día guardado en `Config['storyActiveCtx']` (el plan tiene que dar igual cada 5 min).
+- **Código sorpresa** (`CodeDrop` / `CodeDropClaim`, `_codeDropTick` cada 1 min): plan semanal al azar en `Config['codeDropPlan']`
+  (`Config['codeDrop']`: 2-3/semana, 11-22 h, 60 min, $2.000 × 10). Teaser sin push a la mañana → historia con el código + push a todos
+  (kind promo) → canje `POST /api/code-drop/claim` (lugar atómico `$inc` con `claims < max`, canje único por cliente, `creditGift` con
+  rollover global, ref `vip-cdrop-<drop>-<user>`, Transaction `code_drop` en `CASHBACK_GIFT_TX_TYPES`; si no acredita, libera el lugar) →
+  al 10° o al vencer, historia "✅ Código completado · estate atento al próximo" con los ganadores. La historia muestra en vivo "quedan X" y
+  "ya reclamaron". Panel → Cronograma/Historias → 🎁 Código sorpresa (config, semana sorteada, historial, "Lanzar uno ahora").
+- **Regalos al azar** (`_storyGiftTick`, `Config['storyGifts']`: +30% por 8 h, 1 cada 7 días por cliente activo, 12 h, máx 800/día):
+  historia PERSONAL sin push, cada cliente en un día distinto (hash id + tanda). Panel → 🎲 Regalos al azar (con resultados de 30 días).
+- **Velocidad** (auditoría): stats de 1girox de rangos cerrados en caché 30 min + pedidos iguales en vuelo unidos (`getPlayerStats`);
+  la avalancha de medianoche del contador de reembolsos se reparte en 2 min; socket.io minificado; `_fireMiniSync` y los contadores del
+  panel no corren con la pestaña oculta.
+- **Guía Antifraude:** "💸 Un retiro, de punta a punta" + tabla de TODAS las señales con puntos y qué verificar.
+- Tests: `scripts/test-story-segments.js`.
+- **Revisión independiente antes del deploy (arreglado):** `code_drop` faltaba en el enum de `Transaction.type` (el regalo no quedaba
+  registrado) · #1001: con cuenta secundaria inválida el retiro quedaba trabado en 'paying' con fichas descontadas (ahora se valida antes) ·
+  #1002: no se anula un retiro que un agente tocó en los últimos 30 min, y si ya se transfirió a mano uno anulado, "Pagado a mano" avisa
+  (`REPLACED`) y lo registra con confirmación · los 'failed' sin fichas descontadas también se reemplazan · canje del código: sólo un
+  rechazo DEFINITIVO libera el lugar (timeout/5xx ⇒ 'unknown', reintento con la misma reference) y limitador propio por cliente ·
+  re-sortear la semana no saca un segundo código hoy.
+- **Pagos a confirmar:** cada retiro dice "🔎 Por qué no salió solo" (falló el pago automático / supera el monto / no es cliente de
+  confianza: días, cargas…), también para los retiros viejos sin motivo guardado.
+
+ — queda vigente sólo el último — admin SW v216
 **Pedido (owner):** "si pido 5k de retiro y después gano y pido 10k, quedan los dos en Pagos a confirmar; que el primero se anule si el jugador
 pone otro monto y quede siempre el último vigente, para que los agentes no se mareen".
 - `_withdrawalRequestHandler`: después de crear el retiro nuevo, los anteriores del cliente en `pending_review` con fichas SIN descontar

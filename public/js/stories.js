@@ -121,7 +121,15 @@
             // #827: "app:play:/play/<agg>/<juego>" → casino directo en ESE juego (slot de la semana).
             const playPath = /^app:play:(\/play\/[\w.\/-]+)$/i.exec(s.linkUrl || '');
             // #742 (owner): historia con BONO → botón "Reclamar ahora +X%": reclama, cierra y va directo a Girox (carga rápida).
-            if (s.bonusActive && Number(s.bonusPct) > 0) {
+            const cd = s.codeDrop; // #1003: código sorpresa
+            if (cd && cd.code && cd.status === 'active' && !cd.mine && cd.left > 0) {
+                link.href = '#'; link.style.display = ''; link.classList.add('st-bonus');
+                link.textContent = '🎁 Reclamar ahora $' + Number(cd.amount).toLocaleString('es-AR') + ' · quedan ' + cd.left + ' de ' + cd.maxClaims;
+                link.onclick = (ev) => { ev.preventDefault(); claimCode(cd.code); };
+            } else if (cd && cd.code && (cd.mine || cd.left <= 0 || cd.status !== 'active')) {
+                link.href = '#'; link.style.display = ''; link.classList.remove('st-bonus'); link.onclick = (ev) => ev.preventDefault();
+                link.textContent = cd.mine ? '✅ Ya lo canjeaste' : '⏱ Ya se completó · estate atento al próximo';
+            } else if (s.bonusActive && Number(s.bonusPct) > 0) {
                 link.href = '#'; link.style.display = ''; link.classList.add('st-bonus');
                 link.textContent = '🎁 Reclamar ahora +' + s.bonusPct + '% en tu próxima carga ›';
                 link.onclick = (ev) => { ev.preventDefault(); claimBonus(s.id, s.bonusPct); };
@@ -140,7 +148,9 @@
                 setTimeout(() => { try { VIP.ui._casinoGamePath = playPath[1]; VIP.home.openPlatform('girox', { embed: true }); } catch (e) { console.warn('[stories] play', e); } }, wait); }; }
             else if (s.linkUrl) { link.href = s.linkUrl; link.onclick = null; link.textContent = s.linkLabel || 'Ver más ›'; link.style.display = ''; }
             else link.style.display = 'none';
-            if (!(s.bonusActive && Number(s.bonusPct) > 0)) link.classList.remove('st-bonus');
+            if (!(s.bonusActive && Number(s.bonusPct) > 0) && !(cd && cd.code && cd.status === 'active' && !cd.mine && cd.left > 0)) link.classList.remove('st-bonus');
+            // #1003: quiénes ya reclamaron el código (enmascarados)
+            try { if (cap && cd && cd.winners && cd.winners.length) { cap.textContent = (cap.textContent ? cap.textContent + '\n' : '') + '🏆 Ya reclamaron: ' + cd.winners.join(' · '); cap.style.display = ''; } } catch (_) {}
         }
         try { _paintReact(s); } catch (_) {} // #971
         _markSeen(s.id);
@@ -148,6 +158,25 @@
         _arm(dur);
     }
 
+    // #1003: canjear el CÓDIGO SORPRESA (desde la historia o desde un link ?codigo=XXXX). Acredita directo en la cuenta.
+    let _cdBusy = false;
+    async function claimCode(code) {
+        if (_cdBusy) return; _cdBusy = true;
+        try {
+            if (!(VIP.state && VIP.state.currentToken)) { try { VIP.ui.showToast('Entrá a tu cuenta para canjear el código', 'error'); } catch (_) {} return; }
+            const r = await fetch(VIP.config.API_URL + '/api/code-drop/claim', { method: 'POST', headers: { 'Authorization': 'Bearer ' + VIP.state.currentToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ code: code }) });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok) { try { VIP.ui.showToast((r.status === 410 ? '⏱ ' : '❌ ') + (j.error || 'No se pudo canjear'), 'error'); } catch (_) {} try { load(); } catch (_) {} return; }
+            close();
+            try { VIP.ui.showToast(j.message || '🎉 ¡Código canjeado!', 'success'); } catch (_) {}
+            try { if (VIP.ui && typeof VIP.ui.syncBalance === 'function') VIP.ui.syncBalance(); } catch (_) {}
+        } catch (_) { try { VIP.ui.showToast('Error de conexión', 'error'); } catch (e) {} } finally { _cdBusy = false; }
+    }
+    // Link externo (p. ej. Telegram más adelante): picaroja.com/?codigo=ROJAXXXXX ⇒ al entrar con sesión, se canjea.
+    function _codeFromUrl() {
+        try { const u = new URL(location.href); const c = u.searchParams.get('codigo'); if (!c) return; u.searchParams.delete('codigo'); history.replaceState(null, '', u.pathname + (u.search || '') + u.hash);
+            const go = () => { if (VIP.state && VIP.state.currentToken) claimCode(c); else setTimeout(go, 1500); }; setTimeout(go, 1200); } catch (_) {}
+    }
     // #742: reclamar el bono de la historia → pendiente para la próxima carga; cierra y abre Girox directo con la Carga rápida.
     async function claimBonus(id, pct) {
         try {
@@ -227,6 +256,7 @@
 
     let _deepLinked = false;
     function init() {
+        try { _codeFromUrl(); } catch (_) {} // #1003
         // #742: con la app abierta, el service worker avisa el toque en la notificación de una historia
         try { if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', (e) => { const d = e && e.data; if (d && d.type === 'vip-open' && d.url) { const m = /[?&]story=([\w-]+)/.exec(d.url); if (m) openById(m[1]); } }); } catch (_) {}
         const v = _el('storyViewer'); if (!v) return;
@@ -265,5 +295,5 @@
         ring.title = _items.length + ' historia' + (_items.length === 1 ? '' : 's');
         ring.style.display = '';
     }
-    VIP.stories = { init, load, loadPublic, open, openById, claimBonus, close, next, prev, pause, resume };
+    VIP.stories = { init, load, loadPublic, open, openById, claimBonus, claimCode, close, next, prev, pause, resume };
 })();

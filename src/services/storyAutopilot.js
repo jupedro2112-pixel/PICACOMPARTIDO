@@ -120,6 +120,18 @@ const THEMES = [
   { key: 'seguro', title: '🔒 Tu cuenta, segura', text: 'Verificación por SMS y retiros sólo a cuentas a tu nombre. Tu plata y tus datos, cuidados.', link: 'app:verificar', label: 'Verificar mi celular ›', bg: '#0c4a6e', img: { style: 'page', accent: '#0284c7', kicker: 'Tu cuenta, segura', icon: 'seguro', h1: 'Verificá tu', h2: 'teléfono', bullets: [['✓', 'Verificación por SMS', 'Sólo vos confirmás tus retiros'], ['$', 'Retiros a tu nombre', 'Sólo a cuentas tuyas'], ['★', 'Datos cuidados', 'Tu plata y tus datos protegidos']], cta: 'Verificar mi celular' } },
   { key: 'primera', title: '🎁 Bienvenida para los nuevos', text: 'Si es tu primera carga, te sumamos un {pct}% extra automático. Todos los días se suman jugadores nuevos.', link: 'app:cargar', label: 'Hacer mi primera carga ›', bg: '#be123c', img: { style: 'page', accent: '#e60023', kicker: 'Bienvenida', icon: 'regalo', h1: 'Tu primera carga con', h2: '+{pct}% extra', bullets: [['$', '+{pct}% automático', 'En tu primera carga'], ['★', 'Después, más regalos', 'Instalando la app y activando notificaciones'], ['✓', 'Todos los días', 'Se suman jugadores nuevos']], cta: 'Hacer mi primera carga', note: 'El bono se juega ×{rx} (rollover) para retirarlo' } }
 ];
+// #1003 (owner 2026-11-01): "para los NUEVOS, historias informativas del servicio; para los que ya son ACTIVOS, más rotación de contenido
+// así no se cansan". NEW_KEYS = lo que ve quien todavía no cargó; los activos rotan por ACTIVE_KEYS + estos temas propios.
+const NEW_KEYS = ['como', 'carga', 'retiro', 'seguro', 'app', 'primera', 'reembolso'];
+const ACTIVE_KEYS = ['reembolso', 'misiones', 'vip', 'referidos', 'juegos', 'deportes', 'favoritos', 'semana', 'retiro'];
+const ACTIVE_THEMES = [
+  { key: 'favoritos', title: '⭐ Tus juegos, a un toque', text: 'En el Inicio tenés tus juegos favoritos: agregá los que más te gustan y entrá directo, sin buscar.', link: 'app:juegos', label: 'Ver mis juegos ›', bg: '#9d174d', img: { style: 'page', accent: '#e60023', kicker: 'Tus favoritos', icon: 'app', h1: 'Tus juegos', h2: 'a un toque', bullets: [['★', 'Armá tu lista', 'Desde el Inicio de la app'], ['✓', 'Entrás directo', 'Sin buscar el juego'], ['$', 'Cargá y jugá', 'Tus fichas al instante']], cta: 'Ver mis juegos' } },
+  { key: 'semana', title: '📅 Tu semana en Pica Roja', text: 'Misiones nuevas, reembolso semanal y el slot más jugado: entrá a la app y fijate qué tenés para esta semana.', link: 'app:misiones', label: 'Ver mi semana ›', bg: '#4c1d95', img: { style: 'page', accent: '#7c3aed', kicker: 'Esta semana', icon: 'misiones', h1: 'Tu semana', h2: 'con premios', bullets: [['🎯', 'Misiones nuevas', 'Se acreditan solas al cumplirlas'], ['%', 'Reembolso semanal', 'Parte de lo que jugaste vuelve'], ['★', 'Niveles VIP', 'Cada nivel trae su regalo']], cta: 'Ver mi semana' } }
+];
+const ACTIVE_ALTS = {
+  favoritos: [{ title: '🎰 Entrá directo a tu juego', text: 'Guardá tus slots favoritos en el Inicio y abrilos en un toque cada vez que entrás.' }],
+  semana: [{ title: '🗓️ ¿Qué tenés esta semana?', text: 'Revisá tus misiones, tu reembolso y tu nivel VIP: todo lo de la semana está en la app.' }]
+};
 // #909 (owner 2026-10-24: "que publique 5 historias todos los días y que las rote, siempre eran nuevas historias"): cada tema tiene
 // OTRAS redacciones; cuando el tema vuelve a tocar (cada ~3 días) sale con la siguiente, así ningún día repite texto con el anterior.
 // Textos de SERVICIO (nunca ruleta ni plata/sueldos). `{pct}` = bono de la primera carga (Config).
@@ -211,7 +223,7 @@ function planDay(dayKey, matches, ctx) {
   //    nunca son los de ayer. Y cada vuelta completa del catálogo (`cycle`) usa OTRA redacción del tema (ALTS), así tampoco se repite el texto.
   // #931 (owner): "siempre quiero que vaya del lado de la atención" ⇒ el primer lugar de cada día es SIEMPRE Soporte/atención (con sus
   //    redacciones rotando); los otros 4 rotan por el resto del catálogo.
-  const rot = themes.filter((t) => t.key !== 'soporte'); const sop = themes.find((t) => t.key === 'soporte');
+  const rot = themes.filter((t) => t.key !== 'soporte' && (ctx.segmented === false || NEW_KEYS.includes(t.key))); const sop = themes.find((t) => t.key === 'soporte'); // #1003: los 5 de siempre = para los NUEVOS
   const n = rot.length;
   // paso 5 por día aunque se usen 4: con 12 temas (coprimos) hay 12 combinaciones distintas y los de hoy nunca son los de ayer (4/día ⇒ sólo 3)
   const STEP = SLOTS.length;
@@ -230,7 +242,52 @@ function planDay(dayKey, matches, ctx) {
   // {pct} = bono de la 1ª carga, {rx} = rollover global (Config): nunca fijos en el texto.
   const rx = ctx.rolloverX > 0 ? ctx.rolloverX : 5;
   const fill = (v) => (typeof v === 'string' ? v.replace(/\{pct\}/g, String(pct)).replace(/\{rx\}/g, String(rx)) : (Array.isArray(v) ? v.map(fill) : (v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fill(x)])) : v))); // #845: también listas (beneficios)
-  return matchItems.concat(out.map((x, i) => Object.assign({ slot: i, time: SLOTS[i] }, x))).map((x) => (x.img ? Object.assign(x, { img: fill(x.img) }) : x));
+  const segOn = ctx.segmented !== false;
+  const base = out.map((x, i) => Object.assign({ slot: i, time: SLOTS[i], audience: segOn && x.kind === 'servicio' ? 'new' : 'all' }, x));
+  const active = segOn ? planActive(dayKey, ctx, ms.length > 0, themes, pct) : [];
+  return matchItems.map((x) => Object.assign({ audience: 'all' }, x)).concat(base, active).map((x) => (x.img ? Object.assign(x, { img: fill(x.img) }) : x));
 }
 
-module.exports = { topMatches, planDay, favoriteSlot, SLOTS, THEMES, ALTS, MATCH_TIME };
+/** #1003: las 5 de los clientes ACTIVOS (ya cargaron): Soporte primero (#931), los GANADORES de ayer (retiros grandes pagados, usuario
+ *  enmascarado; sólo si hay), el SLOT DEL DÍA (rota por los más jugados del catálogo) y temas que rotan con sus redacciones. Slots 'a0'..'a4'. */
+const MASK = (u) => { u = String(u || ''); return u.length <= 3 ? u.slice(0, 1) + '**' : u.slice(0, 2) + '***' + u.slice(-1); };
+function planActive(dayKey, ctx, hasMatches, themes, pct) {
+  const dayN = Math.floor(new Date(dayKey + 'T12:00:00Z').getTime() / 86400000);
+  const out = []; const T = (s, x) => out.push(Object.assign({ slot: 'a' + out.length, time: SLOTS[Math.min(out.length, SLOTS.length - 1)], audience: 'active' }, x));
+  const money = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
+  const sop = themes.find((t) => t.key === 'soporte');
+  if (sop) { const alts = ALTS.soporte || []; const v = (dayN + 1) % (alts.length + 1); const tt = v > 0 && alts[v - 1] ? Object.assign({}, sop, alts[v - 1]) : sop; T(0, { kind: 'servicio', theme: 'soporte', variant: v, title: tt.title, text: tt.text, link: sop.link, label: sop.label, bg: sop.bg, img: sop.img ? Object.assign({}, sop.img) : null }); }
+  const w = (ctx.winners || []).filter((x) => Number(x.amount) > 0).slice(0, 3);
+  if (w.length) {
+    T(0, { kind: 'ganadores', title: `🏆 Los que cobraron ayer: hasta ${money(w[0].amount)}`.slice(0, 60),
+      text: w.map((x, i) => `${['🥇', '🥈', '🥉'][i]} ${MASK(x.username)} retiró ${money(x.amount)}`).join('\n') + '\nRetiros reales, directo a su cuenta. ¿Sos el próximo? 🍀',
+      link: 'app:juegos', label: 'Jugar ahora ›', bg: '#713f12',
+      img: { style: 'page', accent: '#b45309', kicker: 'Ganadores de ayer', icon: 'vip', h1: 'Cobraron ayer', h2: 'hasta ' + money(w[0].amount),
+        bullets: w.map((x, i) => [String(i + 1), MASK(x.username) + ' · ' + money(x.amount), 'Retiro pagado a su cuenta']), cta: 'Jugar ahora' } });
+  }
+  const games = (ctx.games || []).filter((g) => g && g.name && g.path);
+  if (games.length) {
+    const g = games[dayN % games.length];
+    T(0, { kind: 'slot', title: `🎰 El slot del día: ${g.name}`.slice(0, 60), text: `Hoy te recomendamos ${g.name}${g.provider ? ' (' + g.provider + ')' : ''}, de los más jugados de la comunidad. Entrá directo y probá suerte 🍀`,
+      link: 'app:play:' + g.path, label: 'Jugar ' + String(g.name).slice(0, 22) + ' ›', bg: '#9d174d', game: g,
+      img: { style: 'page', accent: '#e60023', kicker: 'El slot del día', photos: [g.image || ''], h1: g.name, h2: 'el de hoy', bullets: [['★', g.name, g.provider || 'De los más jugados'], ['✓', 'Elegido para hoy', 'Cambia todos los días'], ['$', 'Entrá directo', 'Un toque y estás jugando']], cta: 'Jugar ahora' } });
+  }
+  const pool = themes.filter((t) => ACTIVE_KEYS.includes(t.key) && !(t.key === 'deportes' && hasMatches)).concat(ACTIVE_THEMES);
+  const n = pool.length; let ti = (dayN * 3) % n; const cycle = Math.floor((dayN * 3) / n);
+  while (out.length < SLOTS.length && n) {
+    const t = pool[ti % n]; ti++;
+    const alts = ALTS[t.key] || ACTIVE_ALTS[t.key] || []; const v = (cycle + 1) % (alts.length + 1);
+    const tt = v > 0 && alts[v - 1] ? Object.assign({}, t, alts[v - 1]) : t;
+    T(0, { kind: 'servicio', theme: t.key, variant: v, title: tt.title, text: tt.text.replace('{pct}', String(pct)), link: t.link, label: t.label, bg: t.bg, img: t.img ? Object.assign({}, t.img) : null });
+  }
+  return out;
+}
+
+/** #1003: los más jugados del catálogo público de 1girox (para "el slot del día" de los activos). */
+async function popularSlots() {
+  const j = await _fetchJson('https://admin.1girox.com/api/games?sort=popular&per_page=24');
+  return ((j && j.games) || []).filter((g) => /slot/i.test(String(g.category || 'slots')) && g.aggregator_id && g.game_id).slice(0, 12)
+    .map((g) => ({ name: String(g.name || '').replace(/™/g, '').trim(), path: '/play/' + g.aggregator_id + '/' + g.game_id, image: g.image_url || g.thumbnail || '', provider: g.provider_name || g.provider || '' }));
+}
+
+module.exports = { topMatches, planDay, planActive, popularSlots, favoriteSlot, SLOTS, THEMES, ALTS, ACTIVE_THEMES, NEW_KEYS, ACTIVE_KEYS, MATCH_TIME };
