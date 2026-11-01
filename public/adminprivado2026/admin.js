@@ -16443,9 +16443,40 @@ async function loadWeeklyReview() {
             + ((d.recommendations || []).length ? '<h3 class="in-h">💡 Dónde está el problema de fondo (no automático)</h3><div class="card"><ul style="margin:0 0 0 1rem;padding:0;font-size:.85rem">' + d.recommendations.map((x) => '<li style="margin:.2rem 0">' + escHtml(x) + '</li>').join('') + '</ul></div>' : '')
             + (m.segments ? '<h3 class="in-h">📊 Segmentos del recorrido (último día)</h3><div class="in-grid">' + Object.keys(m.segments).map((k) => box1('', k, n(m.segments[k]), '', '#64748b')).join('') + '</div>' : '')
             + _inicioCohortsHtml(m.cohorts, n)
+            + _wrLogHtml(j.log || [])
             + ((rep.history || []).length ? '<h3 class="in-h">🗓️ Historial</h3><div class="card" style="padding:.4rem .6rem;overflow:auto"><table class="data-table" style="width:100%;font-size:.82rem"><thead><tr><th>Semana</th><th>Decisión</th><th>Nivel</th><th>Cargadores</th><th>Volvieron</th><th>Regalos/dep.</th><th>Recorrido</th></tr></thead><tbody>' + rep.history.map((x) => '<tr><td>' + x.weekKey + '</td><td>' + (V[x.verdict] || x.verdict || '—') + '</td><td>' + (x.level == null ? '—' : x.level) + '</td><td>' + n(x.depositors) + ' · ' + money(x.amount) + '</td><td>' + pc(x.repeatRate) + '</td><td>' + pc(x.giftRatio) + '</td><td>' + (x.journey ? n(x.journey.converted) + '/' + n(x.journey.targets) : '—') + '</td></tr>').join('') + '</tbody></table></div>' : '')
             + '<details style="margin-top:1rem"><summary style="cursor:pointer"><b>📋 Informe en texto</b> (para copiar y analizar afuera)</summary><textarea readonly style="width:100%;min-height:260px;font-family:monospace;font-size:.75rem;margin-top:.4rem">' + escHtml(_wrText) + '</textarea></details>';
     } catch (e) { box.innerHTML = '<span style="color:#f87171">' + escHtml(e.message) + '</span>'; }
+}
+// #998: MEDICIONES GUARDADAS — cada "Medir ahora" (y la del lunes) queda acá con su resumen; cada fila se compara con la anterior.
+function _wrLogHtml(log) {
+    if (!log.length) return '';
+    const n = (v) => v == null ? '—' : Number(v).toLocaleString('es-AR'); const pc = (v) => v == null ? '—' : (Math.round(v * 1000) / 10).toLocaleString('es-AR') + ' %';
+    const V = { impulsar: '🚀 Impulsar', frenar: '🛑 Frenar', mantener: '✅ Mantener' };
+    // up = true si subir es bueno (regalos/depósitos: bajar es bueno)
+    const cmp = (cur, prev, fmt, up, pts) => {
+        if (cur == null) return '—'; let s = fmt(cur);
+        if (prev != null) { const diff = cur - prev; const eps = pts ? 0.005 : 0; if (Math.abs(diff) > eps) { const good = up ? diff > 0 : diff < 0;
+            s += ' <span style="color:' + (good ? '#22c55e' : '#ef4444') + ';font-weight:800">' + (diff > 0 ? '▲' : '▼') + (pts ? (Math.round(Math.abs(diff) * 1000) / 10).toLocaleString('es-AR') + ' pts' : Math.abs(Math.round(diff)).toLocaleString('es-AR')) + '</span>'; } }
+        return s;
+    };
+    const fd = (d) => new Date(d).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const rows = log.map((e, i) => { const p = log[i + 1] || {}; const conv = (x) => x.newRegs ? x.firstDeposits / x.newRegs : null;
+        let good = 0, bad = 0; const sc = (c, pv, up) => { if (c == null || pv == null || c === pv) return; ((up ? c > pv : c < pv) ? good++ : bad++); };
+        if (log[i + 1]) { sc(e.depositors, p.depositors, true); sc(e.repeatRate, p.repeatRate, true); sc(e.giftRatio, p.giftRatio, false); sc(conv(e), conv(p), true); sc(e.appPct, p.appPct, true); sc(e.journeyRate, p.journeyRate, true); }
+        const sem = !log[i + 1] ? '⚪' : good > bad ? '🟢 mejor' : bad > good ? '🔴 peor' : '🟡 igual';
+        return '<tr><td style="white-space:nowrap"><b>' + escHtml(fd(e.at)) + '</b><div style="color:#9ab;font-size:.72rem">' + (e.forced ? 'manual' : 'automática') + ' · semana ' + escHtml(e.weekKey || '') + '</div></td>' +
+            '<td>' + sem + '</td><td>' + escHtml(V[e.verdict] || e.verdict || '—') + '<div style="color:#9ab;font-size:.72rem">nivel ' + n(e.prevLevel) + ' → ' + n(e.level) + '</div></td>' +
+            '<td>' + cmp(e.depositors, p.depositors, n, true) + '<div style="color:#9ab;font-size:.72rem">$' + n(e.amount) + '</div></td>' +
+            '<td>' + cmp(e.repeatRate, p.repeatRate, pc, true, 1) + '</td><td>' + cmp(e.giftRatio, p.giftRatio, pc, false, 1) + '</td>' +
+            '<td>' + n(e.newRegs) + ' → ' + n(e.firstDeposits) + '<div>' + cmp(conv(e), conv(p), pc, true, 1) + '</div></td>' +
+            '<td>' + cmp(e.appPct, p.appPct, pc, true, 1) + '</td><td>' + cmp(e.journeyRate, p.journeyRate, pc, true, 1) + '</td><td>' + cmp(e.campaignRate, p.campaignRate, pc, true, 1) + '</td></tr>' +
+            ((e.reasons || []).length ? '<tr><td colspan="10" style="color:#9ab;font-size:.75rem;padding-top:0">📝 ' + e.reasons.map(escHtml).join(' · ') + '</td></tr>' : '');
+    }).join('');
+    const first = log[log.length - 1], last = log[0];
+    const vsFirst = log.length > 1 ? '<div style="font-size:.8rem;margin:.3rem 0 .5rem;color:#9ab">Desde la primera medición guardada (' + escHtml(fd(first.at)) + '): cargaron ' + n(first.depositors) + ' → <b>' + n(last.depositors) + '</b> · volvieron ' + pc(first.repeatRate) + ' → <b>' + pc(last.repeatRate) + '</b> · regalos/depósitos ' + pc(first.giftRatio) + ' → <b>' + pc(last.giftRatio) + '</b> · con la app ' + pc(first.appPct) + ' → <b>' + pc(last.appPct) + '</b></div>' : '';
+    return '<h3 class="in-h">🗂️ Mediciones guardadas (' + log.length + ')</h3><div style="font-size:.78rem;color:#9ab">Cada vez que tocás ▶ Medir ahora (y la del lunes) queda guardada acá. Cada fila se compara con la anterior: <span style="color:#22c55e">▲▼ verde = mejor</span>, <span style="color:#ef4444">rojo = peor</span> (en Regalos / depósitos bajar es bueno).</div>' + vsFirst +
+        '<div class="card" style="padding:.4rem .6rem;overflow:auto"><table class="data-table" style="width:100%;font-size:.8rem"><thead><tr><th>Medición</th><th>¿Vamos?</th><th>Decisión</th><th>Cargaron</th><th>Volvieron</th><th>Regalos / depósitos</th><th>Registrados → 1ª carga</th><th>Con la app</th><th>Recorrido</th><th>Campaña</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
 async function wrRun() {
     if (!confirm('¿Medir la semana AHORA y aplicar la decisión? (Normalmente corre sola los lunes a las 10 h.)')) return;

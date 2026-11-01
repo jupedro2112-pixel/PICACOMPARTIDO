@@ -1597,6 +1597,11 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
   Siguen: login, alta desde el panel (`/api/users`, `/api/admin/users`, publisher-admin) y la creación local de un jugador que YA existe en 1girox.
 - Test: `node scripts/test-fraud-auto.js` (10 casos).
 
+### Mediciones guardadas de la Revisión semanal #998 (2026-11-01)
+- `_weeklyReviewTick` además de pisar `Config['weeklyReview']` (informe completo vigente) agrega `_weeklySnapshot(rep)` a `Config['weeklyReviewLog']`
+  (array, la más nueva primero, máx. 100). `GET /api/admin/inicio/weekly-review` devuelve `log`; el panel lo dibuja con `_wrLogHtml` (compara
+  cada fila con la siguiente; en giftRatio bajar es bueno). Un número nuevo de la revisión que se quiera comparar va a `_weeklySnapshot` y a `_wrLogHtml`.
+
 ### Push cortas #997 (2026-11-01)
 - `src/utils/pushText.js → concise(title, body, data)` corre en `_sanitizeAndCapPayload` (todos los envíos FCM). Título ≤ 45 (bono adelante si
   el texto lo trae y el título no), cuerpo ≤ 100 (sin aclaraciones; prioriza la oración del bono). `tag` chat/support ⇒ sólo recorte.

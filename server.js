@@ -27023,6 +27023,17 @@ async function _weeklyMetrics(now) {
     app: { depositors30: dep30.length, withApp, appPct: dep30.length ? withApp / dep30.length : null }, newRegs: regs, firstDeposits: firstAgg[0] ? firstAgg[0].n : 0, totalUsers, cohortM1, cohorts, segments: (jl && jl.segments) || null };
 }
 let _weeklyRunning = false;
+// #998: resumen de UNA medición para el historial (números clave + decisión + motivos).
+function _weeklySnapshot(rep) {
+  const m = rep.metrics || {}, d = rep.decision || {}; const r = (o) => (o && o.targets ? o.converted / o.targets : null);
+  return { at: rep.at, weekKey: rep.weekKey, forced: !!rep.forced, verdict: d.verdict || null, prevLevel: d.prevLevel, level: d.level,
+    week: m.week || null, depositors: m.deposits ? m.deposits.users : null, deposits: m.deposits ? m.deposits.count : null, amount: m.deposits ? m.deposits.amount : null,
+    repeatRate: m.repeatRate == null ? null : m.repeatRate, giftRatio: m.giftRatio == null ? null : m.giftRatio,
+    regalos: m.gifts ? m.gifts.regalos : null, depositos: m.gifts ? m.gifts.depositos : null,
+    newRegs: m.newRegs == null ? null : m.newRegs, firstDeposits: m.firstDeposits == null ? null : m.firstDeposits,
+    appPct: m.app ? m.app.appPct : null, journeyRate: r(m.journey), campaignRate: r(m.campaigns),
+    reasons: (d.reasons || []).slice(0, 6).map((x) => String(x).slice(0, 240)) };
+}
 async function _weeklyReviewTick(force) {
   if (_weeklyRunning) return null; _weeklyRunning = true;
   try {
@@ -27041,13 +27052,21 @@ async function _weeklyReviewTick(force) {
     if (cur && cur.weekKey && cur.weekKey !== weekKey && cur.metrics) hist.unshift({ weekKey: cur.weekKey, at: cur.at, level: cur.tuning && cur.tuning.level, verdict: cur.decision && cur.decision.verdict, giftRatio: cur.metrics.giftRatio, repeatRate: cur.metrics.repeatRate, depositors: cur.metrics.deposits && cur.metrics.deposits.users, amount: cur.metrics.deposits && cur.metrics.deposits.amount, journey: cur.metrics.journey && { targets: cur.metrics.journey.targets, converted: cur.metrics.journey.converted } });
     const rep = { weekKey, at: now.toISOString(), forced: !!force, metrics, decision, tuning: decision.tuning, history: hist.slice(0, 12) };
     await Config.set('weeklyReview', rep, 'system');
+    // #998 (owner): "cada vez que aprieto Medir ahora se borra la anterior; quiero que quede guardada abajo con el resumen para comparar fecha a
+    // fecha si vamos bien o mal" ⇒ CADA medición (manual o la del lunes) queda en Config['weeklyReviewLog'] (las últimas 100, la más nueva primero).
+    try {
+      const log = await getConfig('weeklyReviewLog', []); const arr = Array.isArray(log) ? log.slice(0, 99) : [];
+      arr.unshift(_weeklySnapshot(rep)); await Config.set('weeklyReviewLog', arr, 'system');
+    } catch (e) { logger.warn('[revisión-semanal] no se guardó la medición en el historial: ' + e.message); }
     logger.info(`[revisión-semanal] ${weekKey}: ${decision.verdict} (nivel ${decision.prevLevel} → ${decision.level})`);
     return rep;
   } catch (e) { logger.warn('[revisión-semanal] ' + e.message); return null; } finally { _weeklyRunning = false; }
 }
 setTimeout(() => { _weeklyReviewTick().catch(() => {}); setInterval(() => { _weeklyReviewTick().catch(() => {}); }, 30 * 60 * 1000); }, 11 * 60 * 1000);
 app.get('/api/admin/inicio/weekly-review', authMiddleware, adminMiddleware, async (req, res) => {
-  try { const rep = await getConfig('weeklyReview', null); const tuning = await getJourneyTuning(); res.json({ success: true, report: rep, tuning, text: weeklyReview.reportText(rep), levels: { min: weeklyReview.LEVEL_MIN, max: weeklyReview.LEVEL_MAX } }); }
+  try { const rep = await getConfig('weeklyReview', null); const tuning = await getJourneyTuning(); let log = await getConfig('weeklyReviewLog', []); if (!Array.isArray(log)) log = [];
+    if (!log.length && rep && rep.metrics) log = [_weeklySnapshot(rep)]; // #998: la medición que ya estaba (de antes del historial) también se ve
+    res.json({ success: true, report: rep, tuning, log, text: weeklyReview.reportText(rep), levels: { min: weeklyReview.LEVEL_MIN, max: weeklyReview.LEVEL_MAX } }); }
   catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
 });
 app.post('/api/admin/inicio/weekly-review/run', authMiddleware, adminMiddleware, async (req, res) => {

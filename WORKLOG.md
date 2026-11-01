@@ -8,6 +8,14 @@
 
 ## Sesión 2026-11-01
 
+### 998. 🗂️ Revisión semanal: cada medición queda guardada y se compara con la anterior — admin SW v213
+**Pedido (owner):** "Medir ahora siempre borra el que estaba; quiero que cada vez quede guardado abajo con el resumen, para ir viendo cómo
+avanza y comparar fecha a fecha si vamos bien o mal".
+**Hecho:** `_weeklySnapshot(rep)` guarda CADA corrida (manual o la del lunes) en `Config['weeklyReviewLog']` (últimas 100). Panel → Principal →
+Revisión semanal → "🗂️ Mediciones guardadas": fecha y hora, manual/automática, decisión y nivel, cargaron, volvieron, regalos/depósitos,
+registrados → 1ª carga, app, recorrido y campaña, con ▲▼ verde/rojo contra la medición anterior, semáforo "¿Vamos?" (🟢 mejor / 🔴 peor / 🟡 igual)
+y una línea "desde la primera medición guardada". La medición que ya estaba antes de este cambio aparece como la primera.
+
 ### 997. 📲 Notificaciones cortas y con el BONO adelante
 **Pedido (owner):** "cuando la gente recibe una en el teléfono, que sea resumida y concisa, que se entienda pero no tan cargada; si es bono,
 remarcar esa parte" (lo que más le interesa).
