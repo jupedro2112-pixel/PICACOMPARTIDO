@@ -1597,6 +1597,11 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
   Siguen: login, alta desde el panel (`/api/users`, `/api/admin/users`, publisher-admin) y la creación local de un jugador que YA existe en 1girox.
 - Test: `node scripts/test-fraud-auto.js` (10 casos).
 
+### Push cortas #997 (2026-11-01)
+- `src/utils/pushText.js → concise(title, body, data)` corre en `_sanitizeAndCapPayload` (todos los envíos FCM). Título ≤ 45 (bono adelante si
+  el texto lo trae y el título no), cuerpo ≤ 100 (sin aclaraciones; prioriza la oración del bono). `tag` chat/support ⇒ sólo recorte.
+  `PUSH_CONCISE=0` lo apaga. Un texto NUEVO de push ya debería nacer corto: título con el bono, cuerpo de una idea.
+
 ### Fraude con bonos y bloqueo manual #996 (2026-11-01)
 - **Reglas** en `src/services/fraudRadar.js → bonusRules(ctx, cfg)` (pura, testeada en `scripts/test-bonus-fraud.js`): `bonus_flat_play`,
   `sports_flat`, `mirror_group`, `bonus_hunter`. Están en `FRAUD_BEHAVIOR_RULES` (server.js). Datos: `stats` batch de 1girox de la ventana

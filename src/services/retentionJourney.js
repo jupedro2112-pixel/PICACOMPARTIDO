@@ -34,44 +34,44 @@ const STEPS = [
   // (#977, owner: a las 5 cargas NO hay regalo especial: el cliente del registro abierto simplemente pasa a recibir lo mismo que cualquier otro.)
   // nuevo (desde el registro)
   { id: 'new-1', segment: 'nuevo', day: 1, capped: true, name: 'Bienvenida día 1', gift: { type: 'none', hours: 24 },
-    title: '👋 ¡Bienvenido a Pica Roja!', text: 'Tu cuenta ya está lista. Cargás por transferencia y las fichas entran solas en segundos; retirás cuando quieras a tu CBU. Si tenés cualquier duda, el Soporte está adentro de la app, de verdad te contestamos. ¡Te esperamos! 🔴' },
+    title: '👋 ¡Bienvenido a Pica Roja!', text: 'Cargás por transferencia y las fichas entran solas en segundos. ¿Dudas? Soporte en la app.' },
   { id: 'new-3', segment: 'nuevo', day: 3, capped: true, needsWelcome: true, name: 'Primera carga con bono', gift: { type: 'none', hours: 24 },
-    title: '🎁 Tu primera carga lleva +{first}%', text: 'Todavía no hiciste tu primera carga: cuando la hagas, te sumamos +{first}% automático (con el tope de bonos). Desde ${min} ya estás jugando. Entrá a la app, tocá Cargar y listo 🚀' },
+    title: '🎁 BONO +{first}% en tu primera carga', text: 'Se suma solo cuando cargás. Desde ${min} ya jugás 🚀' },
   { id: 'new-10', segment: 'nuevo', day: 10, capped: true, name: 'Recordatorio día 10', gift: { type: 'none', hours: 24 },
-    title: '🔴 Pica Roja te está esperando', text: 'Reembolso diario del {daily}% sobre lo que pierdas, misiones semanales, niveles VIP, sorteos con ranking en vivo y referidos que pagan todos los meses. Todo eso te espera desde tu primera carga. ¿Arrancamos hoy? 😉' },
+    title: '🔴 Tu cuenta te espera', text: 'Cargá y tenés reembolso diario del {daily}% sobre lo que pierdas.' },
   { id: 'new-21', segment: 'nuevo', day: 21, capped: true, needsWelcome: true, name: 'Último aviso de bienvenida', gift: { type: 'none', hours: 24 },
-    title: '💬 ¿Te quedó alguna duda?', text: 'Vimos que todavía no cargaste. Si algo no te cerró o tuviste un problema, escribinos por Soporte y lo resolvemos en el momento. Tu bono de primera carga (+{first}%) sigue guardado para vos 🎁' },
+    title: '🎁 Tu BONO +{first}% sigue guardado', text: '¿Algo no te cerró? Escribinos por Soporte y lo resolvemos.' },
   // (#972, owner: "lo de instalar a los 2 o 9 días no sirve: muchos ya pierden el contacto si no tienen la app; tiene que ser EN EL
   //  MOMENTO" ⇒ no hay pasos de instalar la app acá: eso lo hace la propia app al entrar — activar avisos + 50 % EXTRA por instalar en la
   //  primera carga (installGift). Si en el futuro se quiere un recordatorio, va como paso 'sinapp' y pickStep ya lo soporta.)
   // enfriando (desde la última carga)
   { id: 'cool-7', segment: 'enfriando', day: 7, capped: true, name: 'Te extrañamos · 7 días', gift: { type: 'percent', pct: 30, hours: 24 },
-    title: '🔴 Te extrañamos: +{pct}% hoy', text: 'Hace una semana que no te vemos. Cargá en las próximas {h} horas y te sumamos +{pct}% automático en esa carga (con el tope de bonos). Las fichas entran solas en segundos ⚡' },
+    title: '🎁 BONO +{pct}% hoy', text: 'Cargá en las próximas {h} h y se suma solo ⚡' },
   { id: 'cool-11', segment: 'enfriando', day: 11, capped: true, name: 'Vuelta · 11 días', gift: { type: 'percent', pct: 50, hours: 24 },
-    title: '🎁 +{pct}% para que vuelvas', text: 'Te guardamos un +{pct}% en tu próxima carga, válido {h} horas. Tocá Cargar, transferí y el bono se aplica solo. Y acordate: lo que pierdas, el {daily}% vuelve al otro día 💸' },
+    title: '🎁 BONO +{pct}% para que vuelvas', text: 'Válido {h} h. Cargá y se aplica solo 💸' },
   // inactivo
   { id: 'inact-14', segment: 'inactivo', day: 14, capped: false, name: 'Bono fuerte · 14 días', gift: { type: 'percent', pct: 60, hours: 48 },
-    title: '🔥 +{pct}% durante {h} horas', text: 'Dos semanas sin jugar es mucho 😢 Volvé con un +{pct}% en tu próxima carga, válido {h} horas. Carga automática, retiro al toque y Soporte real, como siempre.' },
+    title: '🎁 BONO +{pct}% por {h} h', text: 'Volvé hoy: se suma solo en tu próxima carga 🔥' },
   { id: 'inact-21', segment: 'inactivo', day: 21, capped: false, name: 'Fichas de regalo · 21 días', gift: { type: 'fixed', mult: 1, hours: 48 },
-    title: '🎁 Te regalamos ${monto} en fichas', text: 'Queremos que vuelvas: te acreditamos ${monto} en fichas de regalo, ya están en tu cuenta. Entrá, jugalas y si te va mal, tu reembolso diario te espera al otro día 🔴' },
+    title: '🎁 ${monto} en fichas GRATIS', text: 'Ya están en tu cuenta. Entrá y jugalas 🔴' },
   // perdido
   { id: 'lost-30', segment: 'perdido', day: 30, capped: false, name: 'Duplicamos · 30 días', gift: { type: 'percent', pct: 100, hours: 48 },
-    title: '💥 Te DUPLICAMOS la carga', text: 'Un mes sin verte. Cargá en las próximas {h} horas y te sumamos el +{pct}% automático (con el tope de bonos). Tu cuenta, tu nivel VIP y tus referidos siguen intactos 🔴' },
+    title: '🎁 Te DUPLICAMOS la carga (+{pct}%)', text: 'Cargá en las próximas {h} h y se suma solo 💥' },
   { id: 'lost-45', segment: 'perdido', day: 45, capped: false, name: 'Fichas · 45 días', gift: { type: 'fixed', mult: 1.5, hours: 48 },
-    title: '🎁 ${monto} en fichas, de regalo', text: 'Te acreditamos ${monto} en fichas para que vuelvas a jugar hoy. Ya están en tu cuenta. Y seguís teniendo reembolso diario, misiones y sorteos todos los meses 🏆' },
+    title: '🎁 ${monto} en fichas GRATIS', text: 'Ya están en tu cuenta para jugar hoy 🏆' },
   { id: 'lost-60', segment: 'perdido', day: 60, capped: false, name: 'Duplicamos · 60 días', gift: { type: 'percent', pct: 100, hours: 72 },
-    title: '💥 +{pct}% por {h} horas', text: 'Pica Roja cambió mucho desde la última vez: sorteos con ranking en vivo, misiones, niveles VIP. Volvé con el +{pct}% en tu próxima carga, válido {h} horas 🔴' },
+    title: '🎁 BONO +{pct}% por {h} h', text: 'Volvé hoy: se suma solo en tu próxima carga 💥' },
   { id: 'lost-75', segment: 'perdido', day: 75, capped: false, name: 'Fichas fuertes · 75 días', gift: { type: 'fixed', mult: 2, hours: 48 },
-    title: '🎁 ${monto} en fichas para vos', text: 'Te extrañamos en serio: te acreditamos ${monto} en fichas de regalo. Entrá a la app y jugalas cuando quieras 🎰' },
+    title: '🎁 ${monto} en fichas GRATIS', text: 'Ya están en tu cuenta. Jugalas cuando quieras 🎰' },
   // lejano
   { id: 'far-90', segment: 'lejano', day: 90, capped: false, name: 'Duplicamos · 90 días', gift: { type: 'percent', pct: 100, hours: 72 },
-    title: '💥 Volvé con el doble', text: 'Tres meses sin verte 😢 Te DUPLICAMOS tu próxima carga (+{pct}%, con el tope de bonos) durante {h} horas. Tu cuenta sigue activa, con todo lo tuyo adentro.' },
+    title: '🎁 Te DUPLICAMOS la carga (+{pct}%)', text: 'Válido {h} h. Tu cuenta sigue activa 💥' },
   { id: 'far-120', segment: 'lejano', day: 120, capped: false, name: 'Fichas · 120 días', gift: { type: 'fixed', mult: 2, hours: 72 },
-    title: '🎁 ${monto} en fichas, sin cargar', text: 'Te acreditamos ${monto} en fichas de regalo para que vuelvas a probar la app. Ya están en tu cuenta 🔴' },
+    title: '🎁 ${monto} en fichas GRATIS', text: 'Ya están en tu cuenta, sin cargar nada 🔴' },
   { id: 'far-150', segment: 'lejano', day: 150, capped: false, name: 'Duplicamos · 150 días', gift: { type: 'percent', pct: 100, hours: 72 },
-    title: '💥 +{pct}% durante {h} horas', text: 'Seguimos acá, con carga automática, retiro al toque y reembolso diario del {daily}%. Volvé con el +{pct}% en tu próxima carga 🔴' },
+    title: '🎁 BONO +{pct}% por {h} h', text: 'Volvé hoy: se suma solo en tu próxima carga 🔴' },
   { id: 'far-180', segment: 'lejano', day: 180, capped: false, name: 'Último intento · 180 días', gift: { type: 'fixed', mult: 2, hours: 72 },
-    title: '🎁 Un último regalo: ${monto}', text: 'Te acreditamos ${monto} en fichas de regalo. Si volvés, genial; si no, igual gracias por habernos elegido alguna vez 🔴' }
+    title: '🎁 Último regalo: ${monto} en fichas', text: 'Ya están en tu cuenta. ¡Gracias por elegirnos! 🔴' }
 ];
 
 function valueTier(avgDeposit) { const a = Number(avgDeposit) || 0; return VALUE_TIERS.find((t) => a < t.max) || VALUE_TIERS[VALUE_TIERS.length - 1]; }
@@ -116,6 +116,9 @@ function pickStep(state, now, tuning) {
   return { step: ok[0].st, key: ok[0].key, segment: c.segment, days: c.days, tier: tier.key, giftType: g.type, amount, hours: g.hours || 24 };
 }
 
+// #997 (owner): "que la notificación sea resumida y concisa; si es bono, remarcar esa parte" ⇒ título con el bono adelante (≤ 40) y
+// cuerpo de una idea (≤ 90). Paso de FICHAS convertido a % (registro abierto, #976): usa este texto, no el de las fichas.
+const PCT_INSTEAD_OF_CHIPS = { title: '🎁 BONO +{pct}% en tu próxima carga', text: 'Válido {h} h. Se suma solo al cargar 🔴' };
 // Texto con variables. vars: { first, daily, min } (porcentajes y mínimo globales); monto/pct/h salen del paso.
 function render(pick, vars) {
   const v = Object.assign({ first: 50, daily: 10, min: '5.000' }, vars || {});
@@ -123,7 +126,8 @@ function render(pick, vars) {
   const fill = (t) => String(t || '')
     .replace(/\{h\}/g, String(pick.hours)).replace(/\{pct\}/g, String(pick.giftType === 'percent' ? pick.amount : v.first))
     .replace(/\{monto\}/g, money(pick.amount)).replace(/\{first\}/g, String(v.first)).replace(/\{daily\}/g, String(v.daily)).replace(/\{min\}/g, String(v.min));
-  return { title: fill(pick.step.title).slice(0, 100), message: fill(pick.step.text).slice(0, 500) };
+  const src = pick.step.gift && pick.step.gift.type === 'fixed' && pick.giftType === 'percent' ? PCT_INSTEAD_OF_CHIPS : pick.step;
+  return { title: fill(src.title).slice(0, 100), message: fill(src.text).slice(0, 500) };
 }
 
 // Cuerpo del lote para `_createNotifBatchFromBody` (modo ventana: el regalo se activa solo para todos los del lote).

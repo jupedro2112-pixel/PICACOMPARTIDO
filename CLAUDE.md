@@ -314,6 +314,8 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`). Git user: j
   totales del panel de 1girox que carga el owner (`DailyClose.giroxPanel`). Un flujo NUEVO que mueva fichas tiene que dejar Transaction con
   `platform` y el `type` correcto (si no, el cierre con 1girox no cuadra). **AGENTES (#889):** depositor/withdrawer ven 8 secciones
   (`AGENT_SECTIONS` en admin.js). (La clave temporal del panel de #889 se revirtió en #892.)
+- **PUSH CORTAS (#997, owner):** toda push pasa por `src/utils/pushText.js` (título ≤ 45 con "🎁 BONO +N%" adelante, cuerpo ≤ 100). Un texto
+  nuevo de push nace así (test `scripts/test-push-text.js`); el detalle largo va al mensaje del chat, no a la push.
 - **FRAUDE CON BONOS + BLOQUEO MANUAL (#996):** reglas `bonus_flat_play` / `sports_flat` / `mirror_group` / `bonus_hunter` en `fraudRadar.bonusRules`
   (test `scripts/test-bonus-fraud.js`; 1girox NO da apuesta por apuesta: se detecta el rastro y cada señal dice QUÉ VERIFICAR en admin.1girox.com).
   El antifraude NO bloquea solo salvo `Config['fraudAuto'].autoBlock` (owner: "que sea manual"): deja observación PRIORIDAD ALTA + `PendingPayout.fraudEvidence`.

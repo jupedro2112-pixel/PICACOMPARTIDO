@@ -56,6 +56,8 @@ function _truncateToBytes(str, maxBytes) {
 }
 
 function _sanitizeAndCapPayload(title, body, data) {
+  // #997 (owner): toda push corta y con el bono adelante (src/utils/pushText.js). Kill switch: PUSH_CONCISE=0.
+  if (process.env.PUSH_CONCISE !== '0') { try { const c = require('../utils/pushText').concise(title, body, data); title = c.title; body = c.body; } catch (_) {} }
   const safeTitle = String(title || '');
   let safeBody = String(body || '');
   if (_byteLen(safeBody) > FCM_BODY_MAX_BYTES) {

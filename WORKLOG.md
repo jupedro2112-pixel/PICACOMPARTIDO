@@ -8,6 +8,17 @@
 
 ## Sesión 2026-11-01
 
+### 997. 📲 Notificaciones cortas y con el BONO adelante
+**Pedido (owner):** "cuando la gente recibe una en el teléfono, que sea resumida y concisa, que se entienda pero no tan cargada; si es bono,
+remarcar esa parte" (lo que más le interesa).
+**Hecho:** textos reescritos (título ≤ 40 con "🎁 BONO +N%" / "$X en fichas GRATIS" / "DUPLICAMOS" adelante; cuerpo de una idea ≤ 90):
+recorrido de retención (16 pasos), autopiloto (7 temas + inicio/mitad/cierre de mes, reembolso, te extrañamos), feriados (se arman con
+`spText`: bono + nombre del día), carga/retiro/bonificación/nivel VIP (montos con puntos). Arreglo: en el registro abierto un paso de FICHAS
+convertido a % decía "Te regalamos $50 en fichas" ⇒ ahora `PCT_INSTEAD_OF_CHIPS`. **Filtro final** `src/utils/pushText.js → concise` dentro de
+`notificationService._sanitizeAndCapPayload` (TODA push, también lo escrito en el panel): saca "(con el tope de bonos)" / "ya está activo en el
+botón…", título ≤ 45 con el bono adelante, cuerpo ≤ 100 priorizando la oración del bono; chat sólo recorta. Kill switch `PUSH_CONCISE=0`.
+Test `scripts/test-push-text.js`. El texto del CHAT (mensaje dentro de la app) sigue completo.
+
 ### 996. 🎰 Fraude con bonos (cubrir los dos lados, grupos espejo, cazadores) + bloqueo MANUAL con historial — admin SW v212
 **Pedido (owner):** detectar clientes que estafan con los bonos (baccarat, ruleta, deportes), ver si gente vinculada repite la apuesta en el
 mismo horario, que no puedan retirar, que en el retiro diga lo detectado para rechazar y bloquear, que todo quede en un historial de

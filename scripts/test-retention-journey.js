@@ -42,7 +42,12 @@ p = j.pickStep(Object.assign({}, base, { lastDepositAt: ago(30) }), now, { pctMu
 p = j.pickStep(Object.assign({}, base, { lastDepositAt: ago(21), avgDeposit: 30000 }), now);
 const b = j.batchBody(p, ['juan', 'ana'], { monthlyCap: 12, rolloverX: 5, vars: { first: 100, daily: 10, min: '5.000' } });
 assert.strictEqual(b.giftType, 'fixed'); assert.strictEqual(b.amount, 5000); assert.strictEqual(b.rolloverX, 5); assert.strictEqual(b.monthlyCap, null, 'recuperación sin tope mensual'); assert.strictEqual(b.dailyCap, 1);
-assert.ok(b.message.includes('$5.000') && !/\{/.test(b.message) && !/\{/.test(b.title), b.message);
+assert.ok(b.title.includes('$5.000') && !/\{/.test(b.message) && !/\{/.test(b.title), b.title); // #997: el regalo va en el TÍTULO
+// #997: textos cortos (título ≤ 40 con el bono adelante, cuerpo ≤ 90) y paso de fichas convertido a % sin decir "fichas"
+for (const s of j.STEPS) { assert.ok(s.title.length <= 40, 'título largo ' + s.id); assert.ok(s.text.length <= 90, 'cuerpo largo ' + s.id); if (s.gift.type !== 'none') assert.ok(/^🎁/.test(s.title), 'el bono no está adelante ' + s.id); }
+{ const pu = j.pickStep(Object.assign({}, base, { lastDepositAt: ago(21), avgDeposit: 30000, noWelcome: true, deposits: 1 }), now);
+  const bu = j.batchBody(pu, ['x'], { monthlyCap: 12, vars: { first: 100, daily: 10, min: '5.000' } });
+  assert.strictEqual(bu.giftType, 'percent'); assert.ok(/\+50%/.test(bu.title) && !/fichas/i.test(bu.title + bu.message), bu.title); }
 const b2 = j.batchBody(j.pickStep({ createdAt: ago(3), deposits: 0, hasApp: true, sent: [] }, now), ['x'], { monthlyCap: 12, vars: { first: 100, daily: 10, min: '5.000' } });
 assert.strictEqual(b2.giftType, 'none'); assert.strictEqual(b2.monthlyCap, 12); assert.ok(b2.title.includes('+100%'));
 for (const s of j.STEPS) { assert.ok(!/ruleta|sueldo|aguinaldo|cobraste/i.test(s.title + s.text), s.id); assert.ok(s.text.length <= 400, s.id); }

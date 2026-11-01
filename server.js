@@ -11181,11 +11181,12 @@ async function _agentDepositHandler(req, res, body) {
       // mensaje del chat, no engañamos al usuario sobre lo que recibió).
       {
         const depositPushTitle = (bonusRequested && bonusActuallyApplied)
-          ? `💰 Depósito + bonus acreditado`
-          : `💰 Depósito acreditado`;
+          ? `✅ Carga + 🎁 BONO acreditados`
+          : `✅ Carga acreditada`; // #997: corto y con el bono marcado
+        const _m = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
         const depositPushBody = newBalance !== null
-          ? `$${amount} acreditados en tu cuenta. Nuevo saldo: $${newBalance}.`
-          : `$${amount} acreditados en tu cuenta.`;
+          ? `${_m(amount)} en tu cuenta. Saldo: ${_m(newBalance)}`
+          : `${_m(amount)} en tu cuenta.`;
         sendPushIfOffline(user, depositPushTitle, depositPushBody, { tag: 'deposit' }).catch((e) => {
           logger.warn(`[FCM] sendPushIfOffline (deposit) falló para ${user.username}: ${e.message}`);
         });
@@ -11428,8 +11429,8 @@ app.post('/api/admin/withdrawal', authMiddleware, withdrawerMiddleware, async (r
 
       // Push FCM para usuarios offline.
       const withdrawalPushBody = newBalance !== null
-        ? `$${amount} enviados. Nuevo saldo: $${newBalance}.`
-        : `$${amount} enviados.`;
+        ? `${'$' + Math.round(Number(amount) || 0).toLocaleString('es-AR')} enviados a tu cuenta. Saldo: ${'$' + Math.round(Number(newBalance) || 0).toLocaleString('es-AR')}`
+        : `${'$' + Math.round(Number(amount) || 0).toLocaleString('es-AR')} enviados a tu cuenta.`; // #997
       sendPushIfOffline(user, '💸 Retiro procesado', withdrawalPushBody, { tag: 'withdrawal' }).catch((e) => {
         logger.warn(`[FCM] sendPushIfOffline (withdrawal) falló para ${user.username}: ${e.message}`);
       });
@@ -11622,7 +11623,7 @@ app.post('/api/admin/bonus', authMiddleware, depositorMiddleware, async (req, re
 
         // Push FCM para usuarios offline (bonus).
         const bonusBalance = newBalance !== null ? newBalance : '—';
-        sendPushIfOffline(bonusUser, '🎁 Bonificación acreditada', `$${bonusAmount} de bonus en tu cuenta. Saldo: $${bonusBalance}.`, { tag: 'bonus' }).catch((e) => {
+        sendPushIfOffline(bonusUser, `🎁 BONO de $${Math.round(Number(bonusAmount) || 0).toLocaleString('es-AR')} acreditado`, (newBalance !== null ? `Ya está en tu cuenta. Saldo: $${Math.round(Number(newBalance) || 0).toLocaleString('es-AR')}` : 'Ya está en tu cuenta.'), { tag: 'bonus' }).catch((e) => {
           logger.warn(`[FCM] sendPushIfOffline (bonus) falló para ${bonusUser.username}: ${e.message}`);
         });
       }
@@ -25568,8 +25569,8 @@ async function _notifyVipLevelUp(userLean, level) {
     const full = await User.findOne({ id: userLean.id })
       .select('id username fcmToken fcmTokens').lean();
     if (full) {
-      await sendPushIfOffline(full, `${level.emoji} ¡Subiste a ${level.name}!`,
-        `Tu bono de $${level.levelUpBonusArs.toLocaleString('es-AR')} ya está acreditado. Entrá a verlo.`,
+      await sendPushIfOffline(full, `🎁 BONO $${level.levelUpBonusArs.toLocaleString('es-AR')} · Subiste a ${level.name} ${level.emoji}`, // #997
+        'Ya está acreditado en tu cuenta.',
         { tag: 'vip-levelup' });
     }
   } catch (e) {
@@ -29712,6 +29713,11 @@ function _autopilotMonthItemsRaw(month, cfg) {
   const base = { mode: 'window', validHours: H, appOnly: cfg.appOnly, monthlyCap: cfg.cap, dailyCap: 1 }; // #971: nunca 2 lotes el mismo día
   const bono = (pct, title, message, extra) => Object.assign({}, base, { giftType: 'percent', amount: pct, applyMode: 'auto', applyScope: 'first', title: fill(title), message: fill(message) }, extra || {});
   const aviso = (title, message, extra) => Object.assign({}, base, { giftType: 'none', amount: 0, title: fill(title), message: fill(message) }, extra || {});
+  // #997 (owner): "resumida y concisa, que se entienda; si es bono, remarcar esa parte" ⇒ título con el BONO adelante (≤ 40) y cuerpo de
+  // una sola idea (≤ 90). Los feriados se arman acá (no con el texto largo de arCalendar): bono + nombre del día.
+  const spText = (sp, pct) => [('🎁 ' + (pct >= 100 ? 'DUPLICAMOS tu carga' : 'BONO +' + pct + '%') + ' · ' + sp.name + ' ' + (sp.emoji || '')).trim(),
+    pct >= 100 ? 'Cargá en las próximas {h} h: +100% que se suma solo.' : 'Cargá en las próximas {h} h y se suma solo.'];
+  const spBono = (sp, pct, aud) => { const t = spText(sp, pct); return bono(pct, t[0], t[1], aud); };
   // 1) Clasificar los días.
   const days = [];
   for (let d = 1; d <= daysIn; d++) {
@@ -29732,9 +29738,9 @@ function _autopilotMonthItemsRaw(month, cfg) {
     let it;
     if (x.forAll) {
       const aud = { audienceType: 'all' };
-      if (sp && last) it = { kind: 'todos', reason: sp.name + ' + cierre de mes', payload: bono(Math.max(100, sp.pct), sp.title, sp.message, aud) };
-      else if (sp) it = { kind: 'todos', reason: sp.name, payload: bono(sp.pct, sp.title, sp.message, aud) };
-      else it = { kind: 'todos', reason: 'Cierre de mes', payload: bono(100, '🎁 Cierre de mes: +100%', 'Gracias por elegir Pica Roja 🔴 Para cerrar el mes, cargá en las próximas {h} horas y te DUPLICAMOS la carga automático (con el tope de bonos). Ya está activo en el botón CARGAR AHORA.', aud) };
+      if (sp && last) it = { kind: 'todos', reason: sp.name + ' + cierre de mes', payload: spBono(sp, Math.max(100, sp.pct), aud) };
+      else if (sp) it = { kind: 'todos', reason: sp.name, payload: spBono(sp, sp.pct, aud) };
+      else it = { kind: 'todos', reason: 'Cierre de mes', payload: bono(100, '🎁 Cierre de mes: DUPLICAMOS tu carga', 'Cargá en las próximas {h} h: +100% que se suma solo 🔴', aud) };
     } else {
       const g = rot % groups; rot++;
       const aud = groups > 1 ? { audienceType: 'all', rotGroup: { n: groups, k: g } } : { audienceType: 'all' };
@@ -29743,26 +29749,26 @@ function _autopilotMonthItemsRaw(month, cfg) {
       // #821 (owner): "nada de 'ya cobraste' ni sueldos: no sabés la economía del país; acá es más servicial, del producto, no buscando su
       // bolsillo" ⇒ los mensajes cuentan lo que ofrece la app (carga automática, retiros, soporte, juegos, misiones, VIP, referidos) y el
       // bono va como regalo del día. Los montos siguen la estrategia: fin de mes el más fuerte, el 5 más chico.
-      const TH = [
-        (pct) => ['⚡ Cargá en segundos: +' + pct + '%', 'Transferís, mandás la foto y se acredita solo. Hoy tenés +' + pct + '% EXTRA en tu carga por {h} horas: ya está activo en el botón CARGAR AHORA.'],
-        (pct) => ['🎮 Los juegos más jugados te esperan: +' + pct + '%', 'Mirá el Top juegos de la semana en Pica Roja. Si cargás en las próximas {h} horas te sumamos +' + pct + '% EXTRA automático.'],
-        (pct) => ['💸 Retirás rápido y sin vueltas: +' + pct + '%', 'Tus premios van directo a tu cuenta. Y hoy, +' + pct + '% EXTRA en tu carga por {h} horas (ya activo en CARGAR AHORA).'],
-        (pct) => ['🛟 Estamos para ayudarte: +' + pct + '%', 'Nuestro soporte te responde desde la app todos los días. Y para hoy: +' + pct + '% EXTRA en tu carga por {h} horas.'],
-        (pct) => ['🎯 Misiones de la semana: +' + pct + '%', 'Completá tus misiones y sumá premios. Hoy además tenés +' + pct + '% EXTRA en tu carga por {h} horas.'],
-        (pct) => ['💎 Subí de nivel VIP: +' + pct + '%', 'Cada carga te acerca al próximo nivel VIP y sus beneficios. Hoy +' + pct + '% EXTRA en tu carga por {h} horas.'],
-        (pct) => ['🤝 Jugá con tus amigos: +' + pct + '%', 'Invitá a tus amigos con tu link y ganá por lo que juegan. Hoy tenés +' + pct + '% EXTRA en tu carga por {h} horas.']
+      const TH = [ // #997: bono adelante en el título; el cuerpo, una idea del servicio + cuánto dura
+        (pct) => ['🎁 BONO +' + pct + '% en tu carga hoy', 'Válido {h} h. Transferís y se acredita solo ⚡'],
+        (pct) => ['🎁 BONO +' + pct + '% · Top juegos', 'Cargá en las próximas {h} h y se suma solo 🎮'],
+        (pct) => ['🎁 BONO +' + pct + '% en tu carga', 'Válido {h} h. Y retirás rápido, sin vueltas 💸'],
+        (pct) => ['🎁 BONO +' + pct + '% en tu carga hoy', 'Válido {h} h. ¿Dudas? Soporte en la app 🛟'],
+        (pct) => ['🎁 BONO +' + pct + '% · Misiones', 'Cargá en las próximas {h} h y sumá premios 🎯'],
+        (pct) => ['🎁 BONO +' + pct + '% · Nivel VIP', 'Cargá en las próximas {h} h: suma para tu VIP 💎'],
+        (pct) => ['🎁 BONO +' + pct + '% en tu carga', 'Válido {h} h. Invitá amigos y ganá por lo que juegan 🤝']
       ];
       const tb = (pct0, reason, extra) => { const pct = Math.max(10, Math.min(100, pct0 + (_apBoost(month) ? AUTOPILOT_BOOST.pctPlus : 0) + (_tuningCache.apPctPlus || 0))); /* #973: ± de la revisión semanal */ const t = TH[(d * 3 + mo) % TH.length](pct); return { reason, payload: bono(pct, t[0], t[1], extra || aud) }; }; // #968: +10 en el refuerzo
-      if (sp) it = { reason: sp.name, payload: bono(sp.pct || 20, sp.title, sp.message, aud) };
-      else if (d <= 4) it = { reason: 'Inicio de mes', payload: bono(30, '🎉 Mes nuevo en Pica Roja: +30%', 'Arrancamos el mes con todo: carga automática en segundos, retiros rápidos y soporte en la app. Cargá en las próximas {h} horas y te sumamos +30% EXTRA.', aud) };
+      if (sp) it = { reason: sp.name, payload: spBono(sp, sp.pct || 20, aud) };
+      else if (d <= 4) it = { reason: 'Inicio de mes', payload: bono(30, '🎁 BONO +30% · Mes nuevo', 'Cargá en las próximas {h} h y se suma solo 🎉', aud) };
       else if (d === 5) it = tb(20, 'Día 5 (más chico)');
-      else if (d === 15) it = { reason: 'Mitad de mes', payload: bono(50, '🌟 Mitad de mes: +50%', 'Llegamos a la mitad del mes con un regalo: cargá en las próximas {h} horas y te sumamos +50% EXTRA automático. Ya está activo en el botón CARGAR AHORA.', aud) };
-      else if (penult) it = { reason: 'Antes del cierre de mes', payload: bono(50, '⏳ Mañana cerramos el mes: +50%', 'Se viene el cierre de mes en Pica Roja. Cargá en las próximas {h} horas y te sumamos +50% EXTRA automático.', aud) };
-      else if (d === 10 || d === 20) it = { reason: 'Aviso de reembolso', payload: aviso('🔁 Tu reembolso te espera', 'En Pica Roja te devolvemos parte de lo que jugás. Entrá a la app y reclamalo desde Reembolso: se acredita al toque 🔴', aud) };
+      else if (d === 15) it = { reason: 'Mitad de mes', payload: bono(50, '🎁 BONO +50% · Mitad de mes', 'Cargá en las próximas {h} h y se suma solo 🌟', aud) };
+      else if (penult) it = { reason: 'Antes del cierre de mes', payload: bono(50, '🎁 BONO +50% · Mañana cierra el mes', 'Cargá en las próximas {h} h y se suma solo ⏳', aud) };
+      else if (d === 10 || d === 20) it = { reason: 'Aviso de reembolso', payload: aviso('💸 Tenés reembolso para reclamar', 'Entrá a la app → Reembolso. Se acredita al toque 🔴', aud) };
       else if (dow === 5) it = tb(50, 'Viernes');
       else if (dow === 6) it = tb(30, 'Sábado');
       else if (dow === 0) it = tb(20, 'Domingo');
-      else if (dow === 3) it = { reason: 'Te extrañamos (sin entrar 4+ días)', payload: bono(30, '👋 ¡Te extrañamos! +30%', 'Tu cuenta en Pica Roja te espera con novedades. Volvé hoy: tenés +30% EXTRA en tu carga por {h} horas 🔴', audInact) };
+      else if (dow === 3) it = { reason: 'Te extrañamos (sin entrar 4+ días)', payload: bono(30, '🎁 BONO +30% para que vuelvas', 'Válido {h} h. Se suma solo al cargar 👋', audInact) };
       else it = tb(20, 'Promo del día');
       it.kind = 'grupo'; it.group = g + 1; it.groups = groups;
     }
