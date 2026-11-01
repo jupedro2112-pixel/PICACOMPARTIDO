@@ -6321,8 +6321,15 @@ async function loadPayReview() {
         if (st) st.textContent = j.hgcashEnabled ? '' : '⚠️ Banco no configurado: todo queda en revisión y se paga a mano.';
         const review = _prItems.filter(function (p) { return p.reviewRequired || p.status === 'failed'; });
         const badge = document.getElementById('payReviewBadge'); if (badge) { badge.textContent = String(review.length); badge.style.display = review.length ? '' : 'none'; }
-        if (!_prItems.length) { box.innerHTML = '<span style="color:#aaa;font-size:12px;">No hay retiros esperando confirmación.</span>'; return; }
-        box.innerHTML = _prItems.map(function (p) {
+        // #1000: los de 🚨 prioridad alta del antifraude, primero.
+        const _prHi = function (p) { return /PRIORIDAD ALTA/.test(p.reviewReason || '') ? 1 : 0; };
+        _prItems = _prItems.map(function (p, i) { return { p: p, i: i }; }).sort(function (a, b) { return (_prHi(b.p) - _prHi(a.p)) || (a.i - b.i); }).map(function (x) { return x.p; });
+        // #1000: pestaña "Retiros frenados" de Antifraude = los mismos, sólo los que frenó el antifraude.
+        const _fxItems = _prItems.filter(function (p) { return (p.fraudEvidence && p.fraudEvidence.reasons && p.fraudEvidence.reasons.length) || /^antifraude/i.test(p.reviewReason || ''); });
+        try { const fc = document.getElementById('fxCntRet'); if (fc) fc.textContent = _fxItems.length ? '(' + _fxItems.length + ')' : ''; const fb = document.getElementById('fraudBadge'); if (fb) { fb.textContent = String(_fxItems.length); fb.style.display = _fxItems.length ? '' : 'none'; } } catch (_) {}
+        const fxBox = document.getElementById('fxPayList');
+        if (!_prItems.length) { box.innerHTML = '<span style="color:#aaa;font-size:12px;">No hay retiros esperando confirmación.</span>'; if (fxBox) fxBox.innerHTML = '<div class="card" style="color:#22c55e">✅ No hay retiros frenados por el antifraude.</div>'; return; }
+        const _prItemHtml = function (p) {
             const rk = p.risk || {}; const warn = p.warnings || [];
             const color = warn.length >= 2 ? '#ff5050' : (warn.length ? '#ffb347' : '#66ff99');
             return '<div style="padding:12px;border-radius:10px;background:rgba(255,255,255,0.04);border-left:4px solid ' + color + ';font-size:12.5px;line-height:1.6;">' +
@@ -6340,7 +6347,9 @@ async function loadPayReview() {
                 '<button type="button" class="btn-secondary btn-small" onclick="payReviewRejectBlock(\'' + p.id + '\')" style="color:#fff;background:#b3001b;border-color:#b3001b;" title="Rechaza el retiro y bloquea la cuenta (cierra la sesión). Queda en el historial con tu usuario y el motivo.">🚫 Rechazar y bloquear</button>' + // #996
                 '<button type="button" class="btn-secondary btn-small" onclick="try{viewUserChat(\'' + p.userId + '\')}catch(e){showSection(\'chats\')}">💬 Ver chat</button>' +
                 '</div></div>';
-        }).join('');
+        };
+        box.innerHTML = _prItems.map(_prItemHtml).join('');
+        if (fxBox) fxBox.innerHTML = _fxItems.length ? '<div style="display:grid;gap:10px;">' + _fxItems.map(_prItemHtml).join('') + '</div>' : '<div class="card" style="color:#22c55e">✅ No hay retiros frenados por el antifraude.</div>';
     } catch (_) { box.innerHTML = '<span style="color:#ff8080;">Error de conexión</span>'; }
 }
 // #904 (owner): "en pagos pendientes, aceptar el pago descontando fichas pero que diga que se pagó de banco externo". Usa la misma ruta que
@@ -17692,7 +17701,9 @@ async function loadFraud(fresh) {
     } catch (e) { box.innerHTML = '<span style="color:#f87171">No se pudo cargar: ' + escHtml(e.message) + '</span>'; }
     loadFraudAuto();
     try { loadFraudBonus(); } catch (_) {} // #996
-    try { const hc = document.getElementById('frHistCard'); if (hc) hc.style.display = currentAdmin && currentAdmin.role === 'admin' ? '' : 'none'; } catch (_) {} // #996: el historial es sólo del admin
+    try { const isAd = currentAdmin && currentAdmin.role === 'admin'; document.querySelectorAll('#fxTabs .fx-admin').forEach(function (b) { b.style.display = isAd ? '' : 'none'; }); } catch (_) {} // #996/#1000: historial y ajustes sólo del admin
+    try { if (!window._fxInit) { window._fxInit = true; let t = 'casos'; try { t = localStorage.getItem('fx_tab') || 'casos'; } catch (_) {} fxTab(t, true); } } catch (_) {}
+    try { loadPayReview(); } catch (_) {} // #1000: contador de Retiros frenados
 }
 // #993 ANTIFRAUDE AUTOMÁTICO (config + última pasada)
 async function loadFraudAuto() {
@@ -17775,15 +17786,68 @@ async function loadBlockHistory(more) {
     } catch (_) { box.innerHTML = '<span style="color:#ff8080;">Error de conexión</span>'; }
 }
 window.loadBlockHistory = loadBlockHistory;
+// ═══ #1000: ANTIFRAUDE CENTRAL — pestañas ═══
+function fxTab(name, quiet) {
+    const isAd = currentAdmin && currentAdmin.role === 'admin';
+    if ((name === 'hist' || name === 'ajustes') && !isAd) name = 'casos';
+    if (!document.getElementById('fxPane-' + name)) name = 'casos';
+    document.querySelectorAll('#fraudSection .fx-pane').forEach(function (el) { el.hidden = el.id !== 'fxPane-' + name; });
+    document.querySelectorAll('#fxTabs .fx-tab').forEach(function (b) { const on = b.dataset.fx === name; b.classList.toggle('btn-primary', on); b.classList.toggle('btn-secondary', !on); });
+    try { localStorage.setItem('fx_tab', name); } catch (_) {}
+    if (name === 'retiros') loadPayReview();
+    else if (name === 'dups') fxLoadDups();
+    else if (name === 'hist') loadBlockHistory();
+    else if (name === 'ajustes') { loadFraudAuto(); loadFraudBonus(); fxLoadOtherCfg(); }
+    else if (name === 'casos' && !quiet) renderFraud();
+}
+function fxRefresh() {
+    let t = 'casos'; try { t = localStorage.getItem('fx_tab') || 'casos'; } catch (_) {}
+    if (t === 'casos') loadFraud(true); else fxTab(t);
+}
+async function fxLoadDups() {
+    const box = document.getElementById('fxDupList'); if (!box) return;
+    box.innerHTML = 'Cargando…';
+    try {
+        const r = await authFetch('/api/admin/fraud/dup-accounts'); const j = await r.json();
+        if (!r.ok) { box.innerHTML = '<span style="color:#ff8080;">' + escapeHtml(j.error || 'Error') + '</span>'; return; }
+        const items = j.items || []; const c = document.getElementById('fxCntDup'); if (c) c.textContent = items.length ? '(' + items.length + ')' : '';
+        if (!items.length) { box.innerHTML = '<div class="card" style="color:#22c55e">✅ No hay cuentas secundarias marcadas.</div>'; return; }
+        const fd = (d) => d ? new Date(d).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+        box.innerHTML = '<div class="card" style="padding:.4rem .6rem;overflow:auto"><table class="data-table" style="width:100%;font-size:.8rem"><thead><tr><th>Cuenta secundaria</th><th>Cuenta principal</th><th>Por qué</th><th>Marcada</th><th></th></tr></thead><tbody>' +
+            items.map(function (u) { const d = u.duplicateOf || {};
+                return '<tr><td><b>' + escapeHtml(u.username) + '</b>' + (u.isBlocked ? ' <span style="color:#f87171">(bloqueada)</span>' : '') + '<div style="color:#9ab;font-size:.72rem">creada ' + fd(u.createdAt) + '</div></td><td>' + escapeHtml(d.username || '—') + '</td><td>' + escapeHtml(d.reason || '—') + '</td><td>' + fd(d.at) + '</td>' +
+                    '<td style="white-space:nowrap"><button class="btn btn-secondary btn-sm" onclick="openFraudCase(\'' + escapeHtml(u.id) + '\')">🔍 Ver caso</button> ' + (j.canEdit ? '<button class="btn btn-secondary btn-sm" onclick="fraudDupClear(\'' + escapeHtml(u.id) + '\',\'' + escapeHtml(u.username) + '\').then(fxLoadDups)">Quitar marca</button>' : '') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+    } catch (_) { box.innerHTML = '<span style="color:#ff8080;">Error de conexión</span>'; }
+}
+// Candados anti-estafa que viven en otras secciones: cómo están hoy + botón para ir a cambiarlos.
+async function fxLoadOtherCfg() {
+    const box = document.getElementById('fxOtherCfg'); if (!box) return;
+    const money = (v) => '$' + Math.round(Number(v) || 0).toLocaleString('es-AR');
+    const get = async (u) => { try { const r = await authFetch(u); return r.ok ? await r.json() : null; } catch (_) { return null; } };
+    const [pr, cf, ro] = await Promise.all([get('/api/admin/payouts/review'), get('/api/admin/install-bonus-config'), get('/api/admin/strategy/rollover')]);
+    const row = (ico, title, state, help, sec) => '<div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;padding:7px 0;border-top:1px dashed rgba(255,255,255,.12)"><div style="flex:1;min-width:220px"><b>' + ico + ' ' + title + '</b> — <span style="color:#fbbf24">' + state + '</span><div style="color:#9ab;font-size:.75rem">' + help + '</div></div><button class="btn btn-secondary btn-sm" onclick="switchSection(\'' + sec + '\')">Ir a cambiarlo ↗</button></div>';
+    const c = (pr && pr.config) || {};
+    box.innerHTML =
+        row('💸', 'Retiros que siempre revisa una persona', pr ? 'mayores a ' + money(c.minArs) + (c.autoBelow === false ? ' · ⚠️ ningún retiro sale solo' : '') : '—', 'Los más chicos salen solos por el banco (si pasan el antifraude).', 'payReview') +
+        row('🤝', 'Pago automático sólo a clientes de confianza', pr ? (c.trustedOnly !== false ? 'ENCENDIDO · cuenta de más de ' + (c.trustedDays || 7) + ' días y ' + (c.trustedMinDeposits != null ? c.trustedMinDeposits : '?') + ' cargas' : 'apagado') : '—', 'Si no cumple, el retiro espera a una persona aunque sea chico.', 'payReview') +
+        row('📱', 'Código SMS en cada retiro', cf ? (cf.withdrawOtpRequired !== false ? 'ENCENDIDO' : 'apagado (sólo teléfono verificado una vez)') : '—', 'Frena a quien entra a una cuenta ajena: el código llega al celular del dueño.', 'commands') +
+        row('🏧', 'Retiro mínimo', cf && cf.withdrawMinArs != null ? money(cf.withdrawMinArs) : '—', 'Evita retiros chiquitos de prueba / de cuentas armadas.', 'commands') +
+        row('🎯', 'Rollover de los regalos', ro ? 'bonos ×' + ro.bonos + ' · cargas ×' + (ro.depositX != null ? ro.depositX : '?') : '—', 'Todo regalo hay que jugarlo antes de retirarlo: es la defensa principal contra el abuso de bonos.', 'strategy');
+}
+window.fxTab = fxTab; window.fxRefresh = fxRefresh; window.fxLoadDups = fxLoadDups; window.fxLoadOtherCfg = fxLoadOtherCfg;
 function _frMoney(n) { return '$' + Math.round(Number(n) || 0).toLocaleString('es-AR'); }
 function renderFraud() {
     const box = document.getElementById('frList'); if (!box || !_frData) return;
     const lv = (document.getElementById('frLevel') || {}).value || '';
     let list = _frData.alerts || [];
-    if (lv === 'alto' || lv === 'medio') list = list.filter((a) => a.level === lv && !a.isBlocked);
+    const _hi = (a) => !!(a.review && a.review.status === 'watch' && a.review.priority === 'high'); // #1000
+    if (lv === 'pend') list = list.filter((a) => !a.isBlocked && !(a.review && a.review.status === 'legit') && (a.level === 'alto' || _hi(a) || (a.review && a.review.status === 'watch'))).sort((x, y) => (_hi(y) - _hi(x)) || (y.score - x.score));
+    else if (lv === 'high') list = list.filter((a) => !a.isBlocked && _hi(a)).sort((x, y) => y.score - x.score);
+    else if (lv === 'alto' || lv === 'medio') list = list.filter((a) => a.level === lv && !a.isBlocked);
     else if (lv === 'watch') list = list.filter((a) => a.review && a.review.status === 'watch');
     else if (lv === 'blocked') list = list.filter((a) => a.isBlocked);
     const all = _frData.alerts || [];
+    try { const nPend = all.filter((a) => !a.isBlocked && !(a.review && a.review.status === 'legit') && (a.level === 'alto' || (a.review && a.review.status === 'watch'))).length; const c = document.getElementById('fxCntCasos'); if (c) c.textContent = nPend ? '(' + nPend + ')' : ''; } catch (_) {} // #1000
     const sm = document.getElementById('frSummary');
     if (sm) sm.innerHTML = '🔎 ' + (_frData.scanned || 0) + ' clientes revisados · <b style="color:#f87171">' + all.filter((a) => a.level === 'alto' && !a.isBlocked).length + ' riesgo alto</b> · <b style="color:#f59e0b">' + all.filter((a) => a.level === 'medio' && !a.isBlocked).length + ' medio</b> · ' + all.filter((a) => a.isBlocked).length + ' ya bloqueados' + (_frData.cached ? ' <span style="color:#666">(hace instantes)</span>' : '');
     if (!list.length) { box.innerHTML = '<div class="card" style="color:#22c55e">✅ No hay alertas con este filtro.</div>'; return; }
@@ -17792,6 +17856,7 @@ function renderFraud() {
         return '<div class="card" style="margin-bottom:.6rem;border-left:4px solid ' + col + '">' +
             '<div style="display:flex;justify-content:space-between;gap:.5rem;flex-wrap:wrap;align-items:center">' +
               '<div><b style="font-size:1rem">' + escHtml(a.username) + '</b> <span style="background:' + col + ';color:#fff;border-radius:999px;padding:1px 9px;font-size:.75rem;font-weight:800">' + (a.isBlocked ? 'BLOQUEADO' : 'RIESGO ' + a.level.toUpperCase()) + ' · ' + a.score + ' pts</span>' +
+                (_hi(a) ? ' <span style="background:#b3001b;color:#fff;border-radius:999px;padding:1px 8px;font-size:.72rem;font-weight:900">🚨 PRIORIDAD ALTA</span>' : '') + // #1000
                 (a.review && a.review.status === 'watch' ? ' <span style="color:#a5b4fc;font-size:.75rem">👁 en observación (' + escHtml(a.review.by || '') + ')</span>' : '') +
                 '<div style="color:#888;font-size:.75rem;margin-top:2px">Cuenta de ' + a.ageDays + ' días · ' + (a.phoneVerified ? '📱 verificado' : '📵 sin verificar') + (a.campaign ? ' · vino por ' + escHtml(a.campaign) : '') +
                 ' · cargó ' + _frMoney(a.deposits.total) + ' (' + a.deposits.n + ') · regalos ' + _frMoney(a.gifts.total) + ' · pidió retirar ' + _frMoney(a.withdrawals.askedTotal) + (a.withdrawals.pending ? ' · <b style="color:#f59e0b">' + a.withdrawals.pending + ' retiro(s) pendiente(s)</b>' : '') + '</div></div>' +

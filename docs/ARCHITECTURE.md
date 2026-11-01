@@ -1597,6 +1597,13 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
   Siguen: login, alta desde el panel (`/api/users`, `/api/admin/users`, publisher-admin) y la creación local de un jugador que YA existe en 1girox.
 - Test: `node scripts/test-fraud-auto.js` (10 casos).
 
+### Antifraude central #1000 (2026-11-01)
+- `#fraudSection` (nav "🛡️ Antifraude", grupo Manejo) = pestañas `.fx-pane` (`fxTab(name)`, recuerda `localStorage fx_tab`): casos (`renderFraud`,
+  filtro `pend`/`high` usa `review.priority`), retiros (`#fxPayList`, lo dibuja `loadPayReview` con el mismo `_prItemHtml` filtrando por
+  `fraudEvidence` o `reviewReason` "antifraude…"), dups (`fxLoadDups` → `GET /api/admin/fraud/dup-accounts`), hist / ajustes (sólo admin;
+  `fxLoadOtherCfg` LEE `/payouts/review`, `/install-bonus-config`, `/strategy/rollover`: esos candados se siguen guardando en su sección),
+  guía estática. Una herramienta antifraude NUEVA va como pestaña acá, no como sección suelta.
+
 ### Cruce comprobante ↔ banco por COELSA / CBU / CUIT #999 (2026-11-01)
 - La IA extrae `coelsa_id` y `cuit_origen` además del N° de operación. `_comprobanteMatchesMovement` (lo usan las DOS direcciones: comprobante
   que llega y movimiento que llega) prueba en orden: N° de operación vs coelsaCode/externalId → COELSA del comprobante (exacto, en externalId o

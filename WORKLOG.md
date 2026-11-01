@@ -8,6 +8,19 @@
 
 ## Sesión 2026-11-01
 
+### 1000. 🛡️ ANTIFRAUDE CENTRAL — todo en un lugar, con pestañas — admin SW v214
+**Pedido (owner):** "hay varios antifraude y no me quiero marear; unificá todo en un lugar y dejalo organizado ahí adentro, central, para que
+la empresa no se maree y no haya problemas en la atención".
+**Antes:** casos en "Alertas de estafa" (con ajustes e historial mezclados arriba de la lista), evidencia de retiros sólo en Pagos a confirmar,
+cuentas secundarias sólo dentro del caso de cada cliente, candados anti-estafa sueltos en Configuración / Pagos / Estrategia.
+**Ahora:** menú → 🎯 Manejo → **🛡️ Antifraude** (al lado de Pagos a confirmar, con contador de retiros frenados). Pestañas:
+🚨 **Casos** (filtro por defecto "Para revisar", prioridad alta primero con cartel 🚨) · 💸 **Retiros frenados** (los de Pagos a confirmar que frenó el
+antifraude, mismos botones; en Pagos a confirmar también van primero los de prioridad alta) · 👥 **Cuentas secundarias** (nueva ruta
+`GET /api/admin/fraud/dup-accounts`, quitar marca = admin) · 📜 **Historial** y ⚙️ **Ajustes** (sólo admin: antifraude automático, fraude con
+bonos y "otros candados" = estado actual de umbral de revisión, clientes de confianza, SMS por retiro, retiro mínimo y rollover, con botón
+"Ir a cambiarlo") · 📖 **Cómo funciona** (guía para el equipo: 4 capas, qué hacer con un retiro frenado, qué es fraude con bonos, reglas).
+Las notas internas del chat ya dicen "🛡️ Antifraude". Todos los ids viejos se mantienen.
+
 ### 999. 🧾 Comprobantes de billeteras (Fiwind, Naranja X…) que no entraban solos: COELSA ID + CBU/CUIT de origen
 **Pedido (owner):** dos comprobantes (uno de Fiwind, otro de Naranja X) no se leían para la carga automática.
 **Causa:** la IA sólo extraía un "número de operación" genérico. Esas billeteras muestran su código interno (un UUID en Naranja X) y el

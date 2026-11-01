@@ -156,6 +156,11 @@ document.addEventListener('change', function (ev) {
 <span>Pagos a confirmar</span>
 <span id="payReviewBadge" style="display:none;background:#ffb347;color:#111;font-size:9px;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:6px;">0</span>
 </a>
+<a href="#" class="nav-item" data-section="fraud" title="Todo el antifraude en un lugar: casos, retiros frenados, cuentas secundarias, historial, ajustes y guía (#1000)">
+<span>🛡️</span>
+<span>Antifraude</span>
+<span id="fraudBadge" style="display:none;background:#ff5050;color:#fff;font-size:9px;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:6px;">0</span>
+</a>
 <a href="#" class="nav-item" data-section="cargasAuto">
 <span>⚡</span>
 <span>Cargas automáticas</span>
@@ -172,10 +177,6 @@ document.addEventListener('change', function (ev) {
 
 <div class="nav-group-title" style="padding:13px 16px 5px;font-size:9.5px;font-weight:900;letter-spacing:1.2px;color:#888;text-transform:uppercase;">⚡ Automático (lo hace solo)</div>
 
-<a href="#" class="nav-item" data-section="fraud" title="Clientes que podrían estar intentando estafar: evidencia y bloqueo">
-<span>🚨</span>
-<span>Alertas de estafa</span>
-</a>
 <a href="#" class="nav-item" data-section="cronograma">
 <span>📅</span>
 <span>Cronograma notis</span>
@@ -2895,17 +2896,65 @@ Responder 2xx. Con 5xx / timeout se reintenta; con 4xx no.</pre>
                 <div class="panel-header"><h2>🏠 INICIO</h2><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input type="date" id="inDay" class="form-input" style="width:auto" onchange="loadInicio()"><button class="btn btn-secondary" onclick="document.getElementById('inDay').value='';loadInicio()">Hoy</button><button class="btn btn-secondary" onclick="inicioAyer()">Ayer</button><button class="btn btn-secondary" onclick="loadInicio()">🔄</button><button class="btn btn-secondary" onclick="inicioChangePin()">🔑 Clave</button></div></div>
                 <div id="inBody">Cargando…</div>
             </section>
+            <!-- #1000 (owner 2026-11-01): "unificá todo el antifraude en un lugar y dejalo organizado ahí adentro, central". UNA sección con pestañas:
+                 Casos (alertas del radar) · Retiros frenados (los de Pagos a confirmar que frenó el antifraude) · Cuentas secundarias · Historial ·
+                 Ajustes (todo lo que se configura + dónde está cada candado) · Cómo funciona (guía para el equipo). Los ids de antes se mantienen. -->
             <section id="fraudSection" class="section">
                 <div class="panel-header">
-                    <h2>🚨 Alertas de estafa</h2>
+                    <h2>🛡️ Antifraude</h2>
                     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                        <select id="frDays" class="form-input" style="width:auto" onchange="loadFraud(true)"><option value="7">Últimos 7 días</option><option value="30" selected>Últimos 30 días</option><option value="90">Últimos 90 días</option></select>
-                        <select id="frLevel" class="form-input" style="width:auto" onchange="renderFraud()"><option value="">Todos</option><option value="alto">Sólo riesgo alto</option><option value="medio">Riesgo medio</option><option value="watch">En observación</option><option value="blocked">Bloqueados</option></select>
-                        <button class="btn btn-secondary" onclick="loadFraud(true)">🔄</button>
+                        <button class="btn btn-secondary" onclick="fxRefresh()" title="Actualizar">🔄</button>
                     </div>
                 </div>
-                <div class="card" style="margin-bottom:1rem;font-size:.8rem;color:#a5b4fc">Cada cliente con movimiento en el período se revisa con reglas (como los sistemas antifraude de las casas grandes): multicuenta por banco, celular o conexión, cargas desde cuentas de terceros, retiros a nombre de otra persona, abuso de bonos, ciclos de carga y retiro sin jugar, cuentas nuevas con retiros grandes y referidos propios. Cada regla suma puntos (60+ = riesgo alto). <b>Nada se bloquea solo</b>: abrí el caso, revisá la evidencia y decidí.</div>
-                <!-- #993 ANTIFRAUDE AUTOMÁTICO: bloquea solo con puntaje muy alto (cierra la sesión) y frena los retiros con puntaje alto -->
+                <div id="fxTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+                    <button class="btn btn-secondary btn-small fx-tab" data-fx="casos" onclick="fxTab('casos')">🚨 Casos <span id="fxCntCasos"></span></button>
+                    <button class="btn btn-secondary btn-small fx-tab" data-fx="retiros" onclick="fxTab('retiros')">💸 Retiros frenados <span id="fxCntRet"></span></button>
+                    <button class="btn btn-secondary btn-small fx-tab" data-fx="dups" onclick="fxTab('dups')">👥 Cuentas secundarias <span id="fxCntDup"></span></button>
+                    <button class="btn btn-secondary btn-small fx-tab fx-admin" data-fx="hist" onclick="fxTab('hist')">📜 Historial</button>
+                    <button class="btn btn-secondary btn-small fx-tab fx-admin" data-fx="ajustes" onclick="fxTab('ajustes')">⚙️ Ajustes</button>
+                    <button class="btn btn-secondary btn-small fx-tab" data-fx="guia" onclick="fxTab('guia')">📖 Cómo funciona</button>
+                </div>
+
+                <!-- 🚨 CASOS: lo que detectó el radar (cada cliente con movimiento en el período, con puntaje y qué verificar) -->
+                <div class="fx-pane" id="fxPane-casos">
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+                        <select id="frLevel" class="form-input" style="width:auto" onchange="renderFraud()"><option value="pend" selected>🚨 Para revisar (prioridad alta primero)</option><option value="high">Sólo prioridad ALTA</option><option value="alto">Riesgo alto</option><option value="medio">Riesgo medio</option><option value="watch">En observación</option><option value="blocked">Bloqueados</option><option value="">Todos</option></select>
+                        <select id="frDays" class="form-input" style="width:auto" onchange="loadFraud(true)"><option value="7">Últimos 7 días</option><option value="30" selected>Últimos 30 días</option><option value="90">Últimos 90 días</option></select>
+                    </div>
+                    <div id="frSummary" style="margin-bottom:.6rem;font-size:.85rem"></div>
+                    <div id="frList">Cargando…</div>
+                </div>
+
+                <!-- 💸 RETIROS FRENADOS: los mismos de Pagos a confirmar, sólo los que frenó el antifraude, con la evidencia y los mismos botones -->
+                <div class="fx-pane" id="fxPane-retiros" hidden>
+                    <div class="card" style="font-size:.8rem;color:#9ab;margin-bottom:8px">Retiros que el antifraude dejó esperando (los mismos que en 💸 Pagos a confirmar, filtrados). Leé <b>🔍 Qué verificar</b>, revisalo en admin.1girox.com y decidí: pagar, rechazar o rechazar y bloquear — siempre con motivo.</div>
+                    <div id="fxPayList">Cargando…</div>
+                </div>
+
+                <!-- 👥 CUENTAS SECUNDARIAS (#992): mismo teléfono / celular / notificaciones / CBU que una cuenta más vieja ⇒ sin bonos -->
+                <div class="fx-pane" id="fxPane-dups" hidden>
+                    <div class="card" style="font-size:.8rem;color:#9ab;margin-bottom:8px">Cuentas que comparten teléfono, celular, notificaciones o CBU con una cuenta más vieja (la principal). <b>No se bloquean</b>: cargan y retiran normal, pero no reciben ningún bono ni regalo. Si es otra persona de verdad (por ejemplo, la pareja con su propio celular), tocá <b>Quitar marca</b>.</div>
+                    <div id="fxDupList">Cargando…</div>
+                </div>
+
+                <!-- 📜 HISTORIAL (#996, sólo admin general) -->
+                <div class="fx-pane" id="fxPane-hist" hidden>
+                    <div class="card" id="frHistCard" style="margin-bottom:1rem;font-size:.82rem">
+                    <div style="color:#9ab;margin-bottom:6px">Quién bloqueó, desbloqueó, rechazó un retiro o marcó legítimo: cuándo, con qué motivo y qué había detectado el sistema. <b>No se puede borrar.</b></div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">
+                        <input type="text" id="bhQ" class="form-input" placeholder="Usuario" style="width:150px">
+                        <select id="bhAction" class="form-input" style="width:auto"><option value="">Todo</option><option value="block">Bloqueos (persona)</option><option value="auto_block">Bloqueos automáticos</option><option value="payout_reject_block">Retiro rechazado + bloqueo</option><option value="payout_reject">Retiros rechazados</option><option value="unblock">Desbloqueos</option><option value="auto_watch">Observación automática</option><option value="watch">Observación (persona)</option><option value="legit">Marcado legítimo</option></select>
+                        <input type="text" id="bhBy" class="form-input" placeholder="Hecho por (agente)" style="width:150px">
+                        <button class="btn btn-secondary btn-small" onclick="loadBlockHistory()">Buscar</button>
+                    </div>
+                    <div id="bhSummary" style="color:#9ab;margin-bottom:6px"></div>
+                    <div id="bhList">Abrilo para cargar…</div>
+                    <button class="btn btn-secondary btn-small" id="bhMore" style="display:none;margin-top:6px" onclick="loadBlockHistory(true)">Ver más</button>
+                    </div>
+                </div>
+
+                <!-- ⚙️ AJUSTES (sólo admin general): lo del antifraude + dónde está cada candado anti-estafa del resto del panel -->
+                <div class="fx-pane" id="fxPane-ajustes" hidden>
                 <div class="card" id="frAutoCard" style="margin-bottom:1rem;font-size:.82rem">
                     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
                         <b>🤖 Antifraude automático</b>
@@ -2918,8 +2967,7 @@ Responder 2xx. Con 5xx / timeout se reintenta; con 4xx no.</pre>
                     <div style="color:#9ab;margin-top:6px;line-height:1.5">Revisa a todos cada 30 min y a cada cliente cuando pide un retiro. <b>El bloqueo es MANUAL</b> (#996): el sistema deja la alerta con la evidencia y <b>qué verificar</b> (por ejemplo, comparar en 1girox las apuestas de dos cuentas en un horario), frena los retiros y un agente decide desde Confirmación de pagos (🚫 Rechazar y bloquear) — todo queda en el 📜 Historial con su usuario y el motivo. <b>Prioridad ALTA</b> (puntaje alto + una conducta: retirar sin jugar, abuso o fraude con bonos, retirar a nombre de otro, pasar plata): revisar primero. <b>En observación</b>: puede jugar, pero sus retiros no salen solos. Si tildás "Bloquear solo", desde la prioridad alta bloquea y cierra la sesión sin esperar a nadie. Si desbloqueás o marcás como legítimo a alguien, el sistema ya no lo vuelve a tocar solo.</div>
                     <div id="frAutoLast" style="color:#9ab;margin-top:4px"></div>
                 </div>
-                <!-- #996 (owner): FRAUDE CON BONOS (baccarat / ruleta / deportes cubriendo los dos lados, grupos que juegan en contra, cazadores de bonos) -->
-                <details class="card" id="frBonusCard" style="margin-bottom:1rem;font-size:.82rem">
+                <details open class="card" id="frBonusCard" style="margin-bottom:1rem;font-size:.82rem">
                     <summary style="cursor:pointer"><b>🎰 Fraude con bonos</b> <span id="frBonusState" style="color:#9ab"></span></summary>
                     <div style="color:#9ab;margin:6px 0;line-height:1.5">1girox no da apuesta por apuesta: se detecta el RASTRO en los números de las últimas horas de quien pide retirar. <b>Juega el bono al ras</b> (cubre Banca y Jugador / rojo y negro: el resultado queda demasiado parejo para lo que apostó) · <b>Deportes al ras</b> · <b>Grupo espejo</b> (cuentas vinculadas que juegan en contra: se marcan todas) · <b>Cazador de bonos</b> (ciclos bono → retiro). Cualquiera de estas frena el retiro para que una persona lo mire; sumadas a otras señales llegan al bloqueo automático.</div>
                     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:6px 12px">
@@ -2939,21 +2987,46 @@ Responder 2xx. Con 5xx / timeout se reintenta; con 4xx no.</pre>
                     </div>
                     <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary btn-small" id="fbSave" onclick="saveFraudBonus()">Guardar</button><button class="btn btn-secondary btn-small" onclick="saveFraudBonus(true)">Volver a los valores recomendados</button></div>
                 </details>
-                <!-- #996 (owner): HISTORIAL DE BLOQUEOS — quién bloqueó / desbloqueó / rechazó, cuándo, motivo y evidencia. Sólo el admin general. -->
-                <details class="card" id="frHistCard" style="margin-bottom:1rem;font-size:.82rem" ontoggle="if(this.open)loadBlockHistory()">
-                    <summary style="cursor:pointer"><b>📜 Historial de bloqueos</b> <span style="color:#9ab">(quién, cuándo, motivo y lo que detectó el sistema — no se puede borrar)</span></summary>
-                    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">
-                        <input type="text" id="bhQ" class="form-input" placeholder="Usuario" style="width:150px">
-                        <select id="bhAction" class="form-input" style="width:auto"><option value="">Todo</option><option value="block">Bloqueos (persona)</option><option value="auto_block">Bloqueos automáticos</option><option value="payout_reject_block">Retiro rechazado + bloqueo</option><option value="payout_reject">Retiros rechazados</option><option value="unblock">Desbloqueos</option><option value="auto_watch">Observación automática</option><option value="watch">Observación (persona)</option><option value="legit">Marcado legítimo</option></select>
-                        <input type="text" id="bhBy" class="form-input" placeholder="Hecho por (agente)" style="width:150px">
-                        <button class="btn btn-secondary btn-small" onclick="loadBlockHistory()">Buscar</button>
+                    <div class="card" style="font-size:.82rem;margin-bottom:1rem">
+                        <b>🔒 Otros candados anti-estafa</b> <span style="color:#9ab">(viven en su sección porque se guardan junto con otros datos; acá ves cómo están y vas directo a cambiarlos)</span>
+                        <div id="fxOtherCfg" style="margin-top:8px">Cargando…</div>
                     </div>
-                    <div id="bhSummary" style="color:#9ab;margin-bottom:6px"></div>
-                    <div id="bhList">Abrilo para cargar…</div>
-                    <button class="btn btn-secondary btn-small" id="bhMore" style="display:none;margin-top:6px" onclick="loadBlockHistory(true)">Ver más</button>
-                </details>
-                <div id="frSummary" style="margin-bottom:.6rem;font-size:.85rem"></div>
-                <div id="frList">Cargando…</div>
+                </div>
+
+                <!-- 📖 CÓMO FUNCIONA: guía para el equipo -->
+                <div class="fx-pane" id="fxPane-guia" hidden>
+                    <div class="card" style="font-size:.85rem;line-height:1.6">
+                        <h3 style="margin:0 0 6px">🛡️ Cómo funciona, en 4 capas</h3>
+                        <ol style="margin:0 0 10px 1.1rem;padding:0">
+                            <li><b>Prevención (sola, siempre):</b> todo regalo tiene rollover (hay que jugarlo antes de retirar); las cuentas secundarias no reciben bonos; registro abierto sin regalos hasta 5 cargas; topes a los regalos de lotes; bono de historia una vez; el teléfono se verifica por SMS.</li>
+                            <li><b>Detección (sola):</b> el radar revisa a todos cada 30 min y a cada cliente cuando pide un retiro: multicuenta por banco o celular, cargas de terceros, retirar a nombre de otro, retirar sin jugar, abuso y fraude con bonos (jugar al ras, grupos que juegan en contra, cazadores de bonos). Cada señal suma puntos.</li>
+                            <li><b>Freno (solo):</b> desde 60 pts el cliente queda <b>en observación</b> (puede jugar, sus retiros no salen solos); desde 90 pts con una conducta, <b>🚨 prioridad alta</b>. Una señal de fraude con bonos frena ese retiro. <b>El sistema NO bloquea</b> (salvo que se tilde "Bloquear solo" en Ajustes).</li>
+                            <li><b>Decisión (una persona):</b> se revisa la evidencia y <b>🔍 Qué verificar</b>, se mira en admin.1girox.com y se decide. Todo queda en el 📜 Historial con usuario, hora y motivo.</li>
+                        </ol>
+                        <h3 style="margin:10px 0 6px">✅ Qué hacer con un retiro frenado</h3>
+                        <ol style="margin:0 0 10px 1.1rem;padding:0">
+                            <li>Abrí <b>💸 Retiros frenados</b> (o Pagos a confirmar). Primero los de 🚨 prioridad alta.</li>
+                            <li>Leé cada señal y su <b>🔍 Qué verificar</b> (dice qué usuarios y qué horario mirar).</li>
+                            <li>Entrá a <b>admin.1girox.com</b> → historial de apuestas de ese cliente (y de las cuentas que nombra) en ese horario.</li>
+                            <li>Decidí: <b>✅ Confirmar y pagar</b> si está bien · <b>⛔ Rechazar</b> si no corresponde pagar pero no es estafa · <b>🚫 Rechazar y bloquear</b> si confirmaste la estafa. Escribí un motivo concreto ("apostó Banca y Jugador en la misma mano con el bono"), nunca "raro".</li>
+                            <li>Si tenés dudas, dejalo como está y avisale al admin: el retiro no sale solo.</li>
+                        </ol>
+                        <h3 style="margin:10px 0 6px">🎰 Qué es fraude con bonos</h3>
+                        <ul style="margin:0 0 10px 1.1rem;padding:0">
+                            <li><b>Jugar al ras:</b> apostar a los dos lados a la vez (Banca y Jugador, rojo y negro, los dos equipos) para cumplir el rollover sin riesgo.</li>
+                            <li><b>Grupo espejo:</b> dos o más cuentas vinculadas que juegan en contra en los mismos minutos: lo que pierde una lo gana la otra.</li>
+                            <li><b>Cazador de bonos:</b> sólo aparece cuando hay regalo y retira apenas cumple el rollover, una y otra vez.</li>
+                        </ul>
+                        <h3 style="margin:10px 0 6px">📌 Reglas del equipo</h3>
+                        <ul style="margin:0 0 0 1.1rem;padding:0">
+                            <li>No se bloquea "por las dudas": primero se verifica.</li>
+                            <li>Toda acción pide motivo y queda registrada con tu usuario (no se puede borrar).</li>
+                            <li>Desbloquear y marcar como legítimo: sólo el admin.</li>
+                            <li>"El chequeo antifraude no terminó a tiempo" no es una sospecha: sólo hay que revisarlo a mano.</li>
+                            <li>La sección vieja "Cuentas sospechosas" (abajo, en "No se usa") quedó reemplazada por esta.</li>
+                        </ul>
+                    </div>
+                </div>
             </section>
             <div id="frCaseModal" class="modal hidden" onclick="if(event.target===this)this.classList.add('hidden')"><div class="modal-content" style="max-width:900px;max-height:90vh;overflow:auto" onclick="event.stopPropagation()"><div id="frCaseBody">Cargando…</div></div></div>
 

@@ -1866,7 +1866,7 @@ async function _dupAccountCheck(userIn, origin, opts = {}) {
       if (!(r && r.modifiedCount)) continue; // otra instancia ya la marcó
       _dupGuardCache.delete(g.username); marked.push(g.username);
       logger.warn(`[dup-account] ${g.username} = secundaria de ${main.username} (${reason}; ${origin || ''})`);
-      _emitAdminOnlyChatNote(g.id, g.username, `🔁 CUENTA SECUNDARIA: ${reason} que ${main.username} (su cuenta principal). Se le avisó al cliente y quedó SIN NINGÚN REGALO (bonos, reembolsos, ruleta, misiones, historias, referidos). Puede cargar y retirar normal. Si es otra persona, desmarcala en Alertas de estafa → caso del cliente → "Quitar marca de cuenta secundaria".`).catch(() => {});
+      _emitAdminOnlyChatNote(g.id, g.username, `🔁 CUENTA SECUNDARIA: ${reason} que ${main.username} (su cuenta principal). Se le avisó al cliente y quedó SIN NINGÚN REGALO (bonos, reembolsos, ruleta, misiones, historias, referidos). Puede cargar y retirar normal. Si es otra persona, desmarcala en 🛡️ Antifraude → caso del cliente → "Quitar marca de cuenta secundaria".`).catch(() => {});
       const text = await renderSystemCommand('/sys_dup_account', DUP_ACCOUNT_MSG_DEFAULT, { principal: main.username, username: g.username });
       if (text) await _sendUserSystemMessage(g, text, { metadata: { kind: 'dup_account', principal: main.username }, push: { title: '⚠️ Ya tenés otra cuenta', body: `Tu cuenta principal es ${main.username}. Volvé a ella para tener todos los beneficios.`, data: { kind: 'personal' } } });
     }
@@ -19856,6 +19856,14 @@ app.get('/api/admin/fraud/case/:id', authMiddleware, adminMiddleware, async (req
   } catch (e) { logger.error('[fraude] caso: ' + e.message); res.status(500).json({ error: 'Error del servidor' }); }
 });
 // #992: quitar la marca de CUENTA SECUNDARIA (era otra persona). Sólo el admin. Queda `dupCleared` ⇒ no se vuelve a marcar sola.
+// #1000: Antifraude central → pestaña "Cuentas secundarias" (las marcadas por #992). Sólo lectura; quitar la marca sigue en /dup-clear (admin).
+app.get('/api/admin/fraud/dup-accounts', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!['admin', 'depositor', 'withdrawer'].includes(req.user.role)) return res.status(403).json({ error: 'Sin acceso' });
+    const items = await User.find({ duplicateOf: { $ne: null } }).select('id username createdAt isBlocked duplicateOf').sort({ 'duplicateOf.at': -1 }).limit(300).lean();
+    res.json({ success: true, items, canEdit: req.user.role === 'admin' });
+  } catch (e) { logger.error('[dup-accounts] ' + e.message); res.status(500).json({ error: 'Error del servidor' }); }
+});
 app.post('/api/admin/users/:id/dup-clear', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Sólo el admin.' });
@@ -19957,7 +19965,7 @@ async function _fraudAutoApply(alerts, source) {
       if (u) {
         out.blocked.push(u.username);
         logger.warn(`[antifraude] BLOQUEADO ${u.username} (${source}): ${why}`);
-        _emitAdminOnlyChatNote(u.id, u.username, `⛔ BLOQUEO AUTOMÁTICO del antifraude (${why}). Se le cerró la sesión y sus retiros pendientes quedaron para revisión. Si es un cliente legítimo, desbloquealo desde Alertas de estafa / Usuarios.`).catch(() => {});
+        _emitAdminOnlyChatNote(u.id, u.username, `⛔ BLOQUEO AUTOMÁTICO del antifraude (${why}). Se le cerró la sesión y sus retiros pendientes quedaron para revisión. Si es un cliente legítimo, desbloquealo desde 🛡️ Antifraude / Usuarios.`).catch(() => {});
       }
     } else if (a.score >= cfg.reviewScore && !(a.review && a.review.status)) {
       // #996: con puntaje de bloqueo (y bloqueo automático apagado) queda en observación con prioridad ALTA: una persona verifica y decide.
@@ -19967,7 +19975,7 @@ async function _fraudAutoApply(alerts, source) {
       if (r && (r.modifiedCount || r.nModified)) {
         out.review.push(a.username);
         await PendingPayout.updateMany({ userId: a.userId, status: { $in: ['pending_review', 'failed'] } }, { $set: { reviewRequired: true, autoPay: false, reviewReason: 'antifraude: ' + pri + ' (' + why.slice(0, 180) + ')', fraudEvidence: _fraudEvidenceOf(a) } }).catch(() => {});
-        _emitAdminOnlyChatNote(a.userId, a.username, `🔎 ${_hi ? '🚨 PRIORIDAD ALTA · ' : ''}EN OBSERVACIÓN automática del antifraude (${why}). Sus retiros no salen solos: revisá el caso (qué verificar) en Confirmación de pagos / Alertas de estafa y decidí.`).catch(() => {});
+        _emitAdminOnlyChatNote(a.userId, a.username, `🔎 ${_hi ? '🚨 PRIORIDAD ALTA · ' : ''}EN OBSERVACIÓN automática del antifraude (${why}). Sus retiros no salen solos: revisá el caso (qué verificar) en Confirmación de pagos / 🛡️ Antifraude y decidí.`).catch(() => {});
         _blockLog({ userId: a.userId, username: a.username, action: 'auto_watch', by: FRAUD_AUTO_ACTOR, role: 'sistema', reason: `Observación automática (${source})${_hi ? ' · PRIORIDAD ALTA (puntaje de bloqueo; el bloqueo es manual)' : ''}: ${why}`, evidence: _fraudEvidenceOf(a) });
       }
     }
@@ -23233,7 +23241,7 @@ async function _payoutTrust(userId, cfg) {
     const days = u.createdAt ? (Date.now() - new Date(u.createdAt).getTime()) / 86400000 : 0;
     if (days < cfg.trustedDays) why.push(`cuenta de ${Math.floor(days)} días (pide ${cfg.trustedDays})`);
     if ((u.fraudFlags || []).length) why.push('marcado por fraude');
-    if (u.fraudReview && u.fraudReview.status === 'watch') why.push('en observación (Alertas de estafa)');
+    if (u.fraudReview && u.fraudReview.status === 'watch') why.push('en observación (🛡️ Antifraude)');
     const REAL = { userId: String(userId), type: 'deposit', status: { $nin: ['failed', 'cancelled'] }, 'metadata.source': { $nin: ['install_bonus', 'welcome_gift', 'welcome_code', 'payout_refund'] } };
     const since7 = new Date(Date.now() - 7 * 86400000);
     const [nDep, recentDep, recentApp, rejected] = await Promise.all([
