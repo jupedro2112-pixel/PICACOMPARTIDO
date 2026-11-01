@@ -684,6 +684,10 @@ const userSchema = new mongoose.Schema({
   dupCleared: { type: { by: String, at: Date }, default: null },
   dailyRoulettePendingPct: { type: Number, default: 0 },
   dailyRoulettePendingLabel: { type: String, default: null },
+  // #1010: el % del giro GRATIS vence a las 00 h del día en que se ganó (null = sin vencimiento, el del giro dorado).
+  dailyRoulettePendingExpiresAt: { type: Date, default: null },
+  // #1010: avisos "tu giro de hoy está listo" seguidos sin girar (a los 3 se deja de avisar hasta que vuelva a girar).
+  rouletteNudge: { n: { type: Number, default: 0 }, lastAt: { type: Date, default: null } },
   // #742: bono reclamado desde una HISTORIA (se consume en la próxima carga antes que cualquier otro bono; vence con la historia)
   storyBonus: {
     storyId: { type: String, default: null },

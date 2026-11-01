@@ -1597,6 +1597,18 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
   Siguen: login, alta desde el panel (`/api/users`, `/api/admin/users`, publisher-admin) y la creación local de un jugador que YA existe en 1girox.
 - Test: `node scripts/test-fraud-auto.js` (10 casos).
 
+### Ruleta: giro gratis + dorado, avisos de reembolso con monto #1010 (2026-11-01)
+- `getDailyRouletteConfig().free` (`_normalizeRouletteFree`: sólo % o nada, tope 50 %, `minDeposits` ≥ 1). `/api/roulette/status` devuelve
+  `mode` ('gold' si cumple los gates de siempre con la carga del día; si no, 'free' si `_rouletteFreeEligible`; si no, null), `freePrizes`,
+  `goldPrizes`, `pendingExpiresAt`. `/api/roulette/spin` elige la tabla según el modo; el % del gratis vence a las 00 h ART
+  (`_rouletteEndOfDayART`, `User.dailyRoulettePendingExpiresAt`, `claimDailyRoulettePercent` filtra vencidos) y no pisa un % mayor vigente.
+  `DailyRouletteSpin.mode`. ⚠️ El guard de push de la ruleta (`notificationService.isRouletteText`) sigue: sólo pasa `data.allowRoulette='1'`
+  (el aviso `_rouletteNudgeTick`). Un aviso nuevo de ruleta tiene que ir con ese flag y respetar `_notifDayCounts`.
+- Avisos de reembolso (`_refundRemindPlan` / `_refundRemindRun` / `_refundReminderTick`): monto por cliente con el MISMO cálculo que el reclamo
+  (si cambia el cálculo del reclamo, cambiarlo acá también), push personal por cliente (`sendPushIfOffline`, `kind:'personal'`), slots
+  `daily` · `daily_last` (20 h) · `weekly` (lun/mar = `canClaimWeeklyRefund`) · `monthly` (7 y 15; el reclamo abre el 7). Resultado en
+  `Config['refundRemindLast'].kinds` (`withRefund`, `amountTotal`, `sent`). Test `scripts/test-roulette-free.js`.
+
 ### Tablero del negocio #1009 (2026-11-01)
 - `GET /api/admin/inicio/negocio?period=week|month|30d` (bajo el gate de clave de INICIO) → `_bizBoard` (server.js): `_bizMoney` (cargas reales,
   retiros `paid` sin `other_bank`, regalos `CASHBACK_GIFT_TX_TYPES`, registrados) del período y del anterior; retención por bloques de 7 días;

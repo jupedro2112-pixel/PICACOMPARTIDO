@@ -176,9 +176,10 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`). Git user: j
   y `BONUS_STRATEGY_DISABLED` (server.js) + `CHARGE_BONUSES_DISABLED`
   (notificationRulesService) + bonos de encuesta con `bDays=[]`. Tope 30% en TODO lo
   automático (cap de lectura en `_getActivePromoBonus` incluido).
-- **Ruleta diaria NO activa → ninguna push la menciona** (owner 2026-08-30): guard
-  `isRouletteText` en `notificationService.js` bloquea toda push con texto de ruleta.
-  No agregar mensajes automáticos que la nombren; si se reactiva, quitar el guard.
+- **Ruleta diaria: GIRO GRATIS + DORADO (#1010).** Gratis = sólo % EXTRA para la carga de HOY (vence 00 h) a quien tiene ≥1 carga real,
+  app y sin cuenta secundaria/marcas (`_rouletteFreeEligible`); dorado = con la carga del día. El guard `isRouletteText` (notificationService)
+  SIGUE bloqueando toda push con texto de ruleta salvo `data.allowRoulette='1'` (sólo el aviso diario `_rouletteNudgeTick`). Los avisos de
+  reembolso calculan el monto igual que el reclamo: si se cambia el cálculo del reclamo, cambiar `_refundRemindRun`. Test `scripts/test-roulette-free.js`.
 - **Multi-instancia (AWS EB):** los crons son `setInterval` en CADA instancia; su
   idempotencia depende de índices únicos (EncuestaFire.slotKey, InactividadFire.fireKey,
   HgcashCharge.chargeKey, DailyRouletteSpin userId+dateKey). No quitar esos índices.

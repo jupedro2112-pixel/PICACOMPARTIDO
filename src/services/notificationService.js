@@ -101,6 +101,8 @@ function _sanitizeAndCapPayload(title, body, data) {
 // ============================================
 const ROULETTE_TEXT_RE = /ruleta|roulette|giro\s+(gratis|del\s+d[ií]a)|\bgir[aá]\b/i;
 function isRouletteText(title, body, data) {
+  // #1010: la ruleta volvió (giro gratis diario). Sólo el aviso propio "tu giro de hoy está listo" (_rouletteNudgeTick) pasa el guard.
+  if (data && typeof data === 'object' && String(data.allowRoulette || '') === '1') return false;
   const t = String(title || '') + ' ' + String(body || '');
   if (ROULETTE_TEXT_RE.test(t)) return true;
   if (data && typeof data === 'object') {

@@ -496,6 +496,12 @@ function setupEventListeners() {
             if (/[?&]open=refund\b/.test(location.search)) { try { history.replaceState(null, '', location.pathname); } catch (_) {} setTimeout(openRefund, 900); }
             if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', (e) => { const d = e && e.data; if (d && d.type === 'vip-open' && /[?&]open=refund\b/.test(String(d.url || ''))) openRefund(); });
         } catch (_) {}
+        // #1010: la push "tu giro de hoy está listo" trae /?open=roulette ⇒ abrir la ruleta.
+        try {
+            const openRl = () => { try { if (VIP.roulette && VIP.roulette.open) { VIP.roulette.loadStatus(); VIP.roulette.open(); } } catch (_) {} };
+            if (/[?&]open=roulette\b/.test(location.search)) { try { history.replaceState(null, '', location.pathname); } catch (_) {} setTimeout(openRl, 1200); }
+            if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', (e) => { const d = e && e.data; if (d && d.type === 'vip-open' && /[?&]open=roulette\b/.test(String(d.url || ''))) openRl(); });
+        } catch (_) {}
 
         // Cambio de contraseña — entrada temporal (fallback cuando el SMS no llega)
         // "Omitir por ahora" el teléfono en el cambio obligatorio de contraseña.

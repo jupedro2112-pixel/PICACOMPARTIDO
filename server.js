@@ -13526,7 +13526,7 @@ async function initializeData() {
     {
       // #970 (owner): aviso diario a los que perdieron ayer y no reclamaron el reembolso diario (push; al tocar abre Reembolso).
       name: '/sys_refund_reminder',
-      description: 'Push automática (una vez por día, 11 h) a quien PERDIÓ ayer y no reclamó el reembolso diario. Variable: {pct} (% diario). Al tocarla la app abre Reembolso. Vacío = no se manda.',
+      description: 'Push automática (11 h + último aviso 20 h) SÓLO a quien tiene reembolso diario para cobrar (mismo cálculo que el reclamo) y no lo reclamó; el título lleva el monto. Variables: {pct} (% diario), {monto}. Al tocarla la app abre Reembolso. Vacío = no se manda.',
       type: 'message',
       response: '🔁 Ayer no fue tu día, pero te devolvemos el {pct}% 💸 Tocá acá y reclamá tu reembolso de ayer: se acredita al toque.'
     },
@@ -13540,15 +13540,22 @@ async function initializeData() {
     {
       // #973: avisos del reembolso SEMANAL (lunes y jueves) y MENSUAL (día 1 y 8) a quien perdió en el período y no reclamó.
       name: '/sys_refund_reminder_weekly',
-      description: 'Push automática (lunes y jueves) a quien PERDIÓ la semana pasada y no reclamó el reembolso semanal. Variable: {pct}. Vacío = no se manda.',
+      description: 'Push automática (lunes + último aviso martes, los días en que se puede reclamar) SÓLO a quien tiene reembolso semanal para cobrar; el título lleva el monto. Variables: {pct}, {monto}. Vacío = no se manda.',
       type: 'message',
       response: '📅 Tenés un reembolso SEMANAL del {pct}% esperándote 💸 Tocá acá y reclamalo: se acredita al toque.'
     },
     {
       name: '/sys_refund_reminder_monthly',
-      description: 'Push automática (día 1 y 8) a quien PERDIÓ el mes pasado y no reclamó el reembolso mensual. Variable: {pct}. Vacío = no se manda.',
+      description: 'Push automática (día 7, cuando abre el reclamo, + recordatorio día 15) SÓLO a quien tiene reembolso mensual para cobrar; el título lleva el monto. Variables: {pct}, {monto}. Vacío = no se manda.',
       type: 'message',
       response: '🗓️ Tu reembolso MENSUAL del {pct}% ya está disponible 💸 Tocá acá y reclamalo antes de que venza.'
+    },
+    {
+      // #1010: aviso diario del giro GRATIS de la ruleta (13–15 h, sólo a quien puede girar y no giró).
+      name: '/sys_roulette_ready',
+      description: 'Push automática (una por día, 13–15 h) a quien puede girar GRATIS la ruleta y todavía no giró (no sale si ese día ya recibió otro aviso masivo; a los 3 sin girar se pausa). Variable: {pct} (% máximo del giro gratis). Vacío = no se manda.',
+      type: 'message',
+      response: 'Entrá y girá: podés ganar hasta +{pct}% EXTRA para tu carga de hoy (se juega en slots).'
     },
     {
       // #916 (owner 2026-10-24): cierre AUTOMÁTICO de Soporte cuando el cliente no contesta en {min} minutos.
@@ -15092,16 +15099,16 @@ async function claimStoryBonusPercent(user, usedBy, amount) {
 async function claimDailyRoulettePercent(user, usedBy) {
   try {
     const prev = await User.findOneAndUpdate(
-      { id: user.id, dailyRoulettePendingPct: { $gt: 0 } },
-      { $set: { dailyRoulettePendingPct: 0, dailyRoulettePendingLabel: null } },
+      { id: user.id, dailyRoulettePendingPct: { $gt: 0 }, $or: [{ dailyRoulettePendingExpiresAt: null }, { dailyRoulettePendingExpiresAt: { $gt: new Date() } }] }, // #1010: el del giro gratis vence a las 00 h
+      { $set: { dailyRoulettePendingPct: 0, dailyRoulettePendingLabel: null, dailyRoulettePendingExpiresAt: null } },
       { new: false }
-    ).select('dailyRoulettePendingPct dailyRoulettePendingLabel').lean();
+    ).select('dailyRoulettePendingPct dailyRoulettePendingLabel dailyRoulettePendingExpiresAt').lean();
     if (!prev || !(prev.dailyRoulettePendingPct > 0)) return { pct: 0, claimed: false };
     const pct = Number(prev.dailyRoulettePendingPct) || 0;
     const label = prev.dailyRoulettePendingLabel || (pct + '% EXTRA');
     return { pct, claimed: true, source: 'daily_roulette', label: `ruleta diaria — ${label}`,
       revert: () => User.updateOne({ id: user.id, dailyRoulettePendingPct: 0 },
-        { $set: { dailyRoulettePendingPct: pct, dailyRoulettePendingLabel: label } }).catch(() => {}) };
+        { $set: { dailyRoulettePendingPct: pct, dailyRoulettePendingLabel: label, dailyRoulettePendingExpiresAt: prev.dailyRoulettePendingExpiresAt || null } }).catch(() => {}) };
   } catch (e) { logger.warn(`[auto-bonus] claim ruleta diaria falló: ${e.message}`); return { pct: 0, claimed: false }; }
 }
 async function claimPromoBonusPercent(user, usedBy, amount) {
@@ -24664,6 +24671,25 @@ const ROULETTE_PRIZES = [
 // #669 (owner): la ruleta se desbloquea con una carga de $20.000 (propia de la ruleta, distinta de la carga mínima general de $5.000)
 // "para no generar tantos regalos". Config['dailyRoulette'].minDepositArs; 0 = usar la carga mínima general.
 const ROULETTE_MIN_DEPOSIT_DEFAULT = 5000; // #955 (owner): $5.000 · // #677 (owner): $10.000 cargados EN EL DÍA (sumando cargas, ej. 2 de $5.000) = 1 giro gratis
+// #1010 (owner 2026-11-01): "impulsar la ruleta diaria para todos, que no se arme multicuentas". GIRO GRATIS todos los días para quien
+// ya hizo al menos `minDeposits` cargas reales (las cuentas de landing sin carga no giran), con la app, sin cuenta secundaria ni marcas
+// de fraude. Premios SÓLO en % EXTRA para la carga de HOY (vence a las 00 h): no cuesta nada si no carga, y va con el tope de bonos.
+// Con la carga del día (minDepositArs) el giro es DORADO (la tabla de siempre, con plata). Un giro por día (índice userId+dateKey).
+const ROULETTE_FREE_PRIZES = [
+  { id: 'f10', type: 'percent', value: 10, weight: 45, emoji: '🎉', label: '10% EXTRA', rolloverX: 0 },
+  { id: 'f15', type: 'percent', value: 15, weight: 25, emoji: '🎁', label: '15% EXTRA', rolloverX: 0 },
+  { id: 'f20', type: 'percent', value: 20, weight: 15, emoji: '🚀', label: '20% EXTRA', rolloverX: 0 },
+  { id: 'f30', type: 'percent', value: 30, weight: 5, emoji: '💎', label: '30% EXTRA', rolloverX: 0 },
+  { id: 'none', type: 'none', value: 0, weight: 10, emoji: '😅', label: 'Casi… mañana de nuevo', rolloverX: 0 }
+];
+const ROULETTE_FREE_DEFAULT = { enabled: true, minDeposits: 1, prizes: ROULETTE_FREE_PRIZES };
+function _normalizeRouletteFree(raw) {
+  const r = raw && typeof raw === 'object' ? raw : {};
+  // sólo % o sin premio: el giro gratis nunca da plata
+  const prizes = _normalizeRoulettePrizes(Array.isArray(r.prizes) ? r.prizes : ROULETTE_FREE_PRIZES).filter((p) => p.type !== 'cash').map((p) => (p.type === 'percent' ? Object.assign({}, p, { value: Math.min(50, p.value) }) : p));
+  const md = Math.round(Number(r.minDeposits));
+  return { enabled: r.enabled !== false, minDeposits: Number.isFinite(md) ? Math.min(50, Math.max(1, md)) : 1, prizes: prizes.length ? prizes : _normalizeRoulettePrizes(ROULETTE_FREE_PRIZES) };
+}
 const DAILY_ROULETTE_DEFAULT = { enabled: true, requireAppInstalled: true, minCargas30d: 10, requireActiveWeek: false, minDepositArs: ROULETTE_MIN_DEPOSIT_DEFAULT, prizes: ROULETTE_PRIZES };
 async function _rouletteMinDepositArs(cfg) {
   const v = Number(cfg && cfg.minDepositArs);
@@ -24745,13 +24771,27 @@ async function getDailyRouletteConfig() {
           minCargas30d: Number.isFinite(min) ? Math.min(1000, Math.max(0, min)) : DAILY_ROULETTE_DEFAULT.minCargas30d,
           requireActiveWeek: raw.requireActiveWeek === true,
           minDepositArs: raw.minDepositArs == null ? ROULETTE_MIN_DEPOSIT_DEFAULT : Math.max(0, Math.round(Number(raw.minDepositArs) || 0)), // #669
-          prizes
+          prizes,
+          free: _normalizeRouletteFree(raw.free) // #1010
         };
       }
     }
   } catch (_) { /* default */ }
-  return { ...DAILY_ROULETTE_DEFAULT };
+  return { ...DAILY_ROULETTE_DEFAULT, free: _normalizeRouletteFree(null) };
 }
+// #1010: ¿puede girar GRATIS? (sin la carga del día). Devuelve { ok, why }. Anti-multicuentas: cargas reales de la vida ≥ minDeposits,
+// no es cuenta secundaria (isGiftBlocked), sin marcas de fraude y no bloqueado. La app instalada la chequea el caller (mismo gate).
+async function _rouletteFreeEligible(userId, username, cfg) {
+  const f = cfg && cfg.free; if (!f || !f.enabled) return { ok: false, why: 'off' };
+  try {
+    if (await girox.isGiftBlocked(username)) return { ok: false, why: 'dup' };
+    const u = await User.findOne({ id: userId }).select('fraudFlags isBlocked duplicateOf').lean();
+    if (!u || u.isBlocked || u.duplicateOf || _isFlagged(u)) return { ok: false, why: 'flag' };
+    const n = await Transaction.countDocuments(Object.assign({ $or: [{ userId }, { username }] }, SCHED_ADAPTER.realDepositMatch()));
+    return n >= f.minDeposits ? { ok: true, deposits: n } : { ok: false, why: 'deposits', deposits: n };
+  } catch (e) { logger.warn(`[roulette] chequeo del giro gratis falló: ${e.message}`); return { ok: false, why: 'error' }; } // fail-closed: es un regalo
+}
+function _rouletteEndOfDayART(now) { return new Date(new Date(_rouletteDateKeyART(now) + 'T23:59:59.999-03:00').getTime()); }
 // Premios para mostrar (cliente/panel): con la probabilidad REAL de cada uno.
 function _prizesPublic(prizes) {
   const total = prizes.reduce((s, p) => s + (Number(p.weight) || 0), 0) || 1;
@@ -24807,7 +24847,8 @@ app.post('/api/admin/daily-roulette', authMiddleware, adminMiddleware, async (re
       minCargas30d: Number.isFinite(min) ? Math.min(1000, Math.max(0, min)) : DAILY_ROULETTE_DEFAULT.minCargas30d,
       requireActiveWeek: body.requireActiveWeek === true,
       minDepositArs: body.minDepositArs == null ? ROULETTE_MIN_DEPOSIT_DEFAULT : Math.max(0, Math.round(Number(body.minDepositArs) || 0)), // #669
-      prizes
+      prizes,
+      free: _normalizeRouletteFree(body.free || (await getDailyRouletteConfig()).free) // #1010: el panel viejo no lo manda ⇒ se conserva
     };
     await Config.set('dailyRoulette', cfgOut, req.user.username);
     logger.info(`[ROULETTE] config guardada por ${req.user.username}: enabled=${cfgOut.enabled} app=${cfgOut.requireAppInstalled} min30d=${cfgOut.minCargas30d} premios=${prizes.map((p) => p.label + '(' + p.weight + ')').join(',')}`);
@@ -24894,12 +24935,17 @@ app.get('/api/roulette/status', authMiddleware, async (req, res) => {
     const dateKey = _rouletteDateKeyART();
     // Gates CONFIGURABLES (panel → Ruleta diaria): app instalada y cargas mínimas en 30d.
     const cfg = await getDailyRouletteConfig();
-    const u = await User.findOne({ id: userId }, { fcmTokenContext: 1, fcmTokens: 1, dailyRoulettePendingPct: 1, dailyRoulettePendingLabel: 1 }).lean();
+    const u = await User.findOne({ id: userId }, { fcmTokenContext: 1, fcmTokens: 1, dailyRoulettePendingPct: 1, dailyRoulettePendingLabel: 1, dailyRoulettePendingExpiresAt: 1 }).lean();
     const appOk = cfg.requireAppInstalled ? _rouletteHasAppInstalled(u) : true;
     const act = await _rouletteIsActiveClient(userId, username, cfg.minCargas30d);
     const _rlMin = await _rouletteMinDepositArs(cfg); // #669
-    const week = cfg.requireActiveWeek ? await _rouletteIsActiveThisWeek(userId, username, _rlMin) : { active: true };
-    const eligible = cfg.enabled && appOk && act.active && week.active;
+    // #1010: lo cargado hoy se mide SIEMPRE (giro dorado + "llevás $X"), aunque requireActiveWeek esté apagado.
+    const week = await _rouletteIsActiveThisWeek(userId, username, _rlMin);
+    const goldReady = !!(cfg.enabled && appOk && act.active && (!cfg.requireActiveWeek || week.active)) && !(await girox.isGiftBlocked(username)); // con la carga del día ⇒ DORADO
+    const free = (cfg.enabled && appOk && !goldReady) ? await _rouletteFreeEligible(userId, username, cfg) : { ok: false };
+    const mode = goldReady ? 'gold' : (free.ok ? 'free' : null);
+    const eligible = !!mode;
+    const _pendOk = u && u.dailyRoulettePendingPct > 0 && (!u.dailyRoulettePendingExpiresAt || new Date(u.dailyRoulettePendingExpiresAt) > new Date());
     const spin = _isRouletteTester(username) ? null : await DailyRouletteSpin.findOne({ userId, dateKey }).lean(); // #390 tester: siempre "sin girar"
     res.json({
       success: true,
@@ -24907,17 +24953,22 @@ app.get('/api/roulette/status', authMiddleware, async (req, res) => {
       eligible,
       needsAppNotifs: !appOk,
       needsActive: appOk && !act.active, // app OK pero no llega a las cargas mínimas
-      needsActiveWeek: appOk && act.active && !week.active, // #228: sin carga esta semana · #677: sin llegar a la carga del día
+      needsActiveWeek: appOk && act.active && !week.active && !eligible, // #228: sin carga esta semana · #677: sin llegar a la carga del día
+      mode, // #1010: 'free' (giro gratis, % para hoy) · 'gold' (con la carga del día) · null
+      goldLocked: mode === 'free', // cargando minDepositArs hoy el giro pasa a DORADO
+      freePrizes: _prizesClient(cfg.free.prizes),
+      goldPrizes: _prizesClient(cfg.prizes),
       todayLoaded: week.sum != null ? week.sum : null, // #677: lo cargado hoy (para "llevás $X")
       requireActiveWeek: cfg.requireActiveWeek === true,
       minCargas: cfg.minCargas30d,
       minDepositArs: _rlMin, // #374/#669: la carga que desbloquea la ruleta ($20.000 propia de la ruleta)
       dateKey,
       // #390: premios SIN probabilidad (interno). Antes se listaban con el %.
-      prizes: _prizesClient(cfg.prizes),
-      // % EXTRA ganado y todavía sin usar (se aplica solo en la próxima carga).
-      pendingPct: (u && u.dailyRoulettePendingPct) || 0,
-      pendingLabel: (u && u.dailyRoulettePendingLabel) || null,
+      prizes: _prizesClient(mode === 'free' ? cfg.free.prizes : cfg.prizes),
+      // % EXTRA ganado y todavía sin usar (se aplica solo en la próxima carga). #1010: el del giro gratis vence a las 00 h.
+      pendingPct: _pendOk ? u.dailyRoulettePendingPct : 0,
+      pendingLabel: _pendOk ? (u.dailyRoulettePendingLabel || null) : null,
+      pendingExpiresAt: _pendOk ? (u.dailyRoulettePendingExpiresAt || null) : null,
       alreadySpun: !!spin,
       spin: spin ? {
         prizeARS: spin.prizeARS,
@@ -24925,6 +24976,7 @@ app.get('/api/roulette/status', authMiddleware, async (req, res) => {
         prizeType: spin.prizeType || (spin.prizeARS > 0 ? 'cash' : 'none'),
         prizePct: spin.prizePct || 0,
         rolloverX: spin.rolloverX || 0,
+        mode: spin.mode || 'gold',
         status: spin.status,
         spunAt: spin.spunAt,
         creditedAt: spin.creditedAt,
@@ -25280,8 +25332,14 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
         });
       }
     }
+    // #1010: sin la carga del día (o sin las cargas de 30 días) ⇒ GIRO GRATIS (sólo % para hoy) si pasa el filtro anti-multicuentas.
+    let spinMode = 'gold', table = cfg.prizes;
+    const act0 = await _rouletteIsActiveClient(userId, username, cfg.minCargas30d);
+    let goldReady = act0.active;
+    if (goldReady && cfg.requireActiveWeek) { const w0 = await _rouletteIsActiveThisWeek(userId, username, await _rouletteMinDepositArs(cfg)); goldReady = w0.active; }
+    if (!goldReady) { const fe = await _rouletteFreeEligible(userId, username, cfg); if (fe.ok) { spinMode = 'free'; table = cfg.free.prizes; } }
     // Gate: solo clientes ACTIVOS (más de N cargas en los últimos 30 días; N editable).
-    const act = await _rouletteIsActiveClient(userId, username, cfg.minCargas30d);
+    const act = spinMode === 'free' ? { active: true } : act0;
     if (!act.active) {
       return res.status(403).json({
         error: `La ruleta es solo para clientes activos. Necesitás más de ${cfg.minCargas30d} cargas en los últimos 30 días.`,
@@ -25290,7 +25348,7 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
       });
     }
     // Gate #228: cliente activo DE LA SEMANA (al menos una carga desde el lunes).
-    if (cfg.requireActiveWeek) {
+    if (cfg.requireActiveWeek && spinMode !== 'free') {
       const minDep = await _rouletteMinDepositArs(cfg); // #669
       const week = await _rouletteIsActiveThisWeek(userId, username, minDep);
       if (!week.active) {
@@ -25317,7 +25375,7 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
 
     // Pick + insert con unique index protegiendo race. El premio puede ser
     // cash (acredita ya), percent (queda pendiente para la próxima carga) o none.
-    let pick = _pickWeightedPrize(cfg.prizes);
+    let pick = _pickWeightedPrize(table);
     let prizeARS = pick.type === 'cash' ? (Number(pick.value) || 0) : 0;
 
     // PACING DE BUDGET DIARIO: si la admin config tiene un budget, evitamos
@@ -25347,7 +25405,7 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
         if ((spentToday + prizeARS) > targetSpent) {
           logger.info(`[ROULETTE] BUDGET PACING — forzando SIN PREMIO para ${username} (gastado $${spentToday}+$${prizeARS} > target $${Math.round(targetSpent)} a las ${h}:${m})`);
           // Degradar a SIN PREMIO si existe; si no, al primer premio en % (no gasta plata).
-          const noPrize = cfg.prizes.find(p => p.type === 'none') || cfg.prizes.find(p => p.type === 'percent');
+          const noPrize = table.find(p => p.type === 'none') || table.find(p => p.type === 'percent');
           if (noPrize) {
             pick = noPrize;
             prizeARS = 0;
@@ -25372,6 +25430,7 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
         prizeType: pick.type,
         prizePct: pick.type === 'percent' ? (Number(pick.value) || 0) : 0,
         rolloverX: pick.type === 'cash' ? (Number(pick.rolloverX) || 0) : 0,
+        mode: spinMode, // #1010
         ipAddress: (req.ip || '').slice(0, 60),
         userAgent: String(req.headers['user-agent'] || '').slice(0, 200),
         status: initialStatus,
@@ -25395,17 +25454,23 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
 
     // % EXTRA → queda PENDIENTE para la próxima carga (pisa un pendiente anterior
     // sin usar) y lo aplica solo la carga (manual o hgcash) con el tope de bonos.
+    User.updateOne({ id: userId }, { $set: { 'rouletteNudge.n': 0 } }).catch(() => {}); // #1010: giró ⇒ vuelve a recibir el aviso diario
     if (pick.type === 'percent') {
       const pct = Number(pick.value) || 0;
-      await User.updateOne({ id: userId }, {
-        $set: { dailyRoulettePendingPct: pct, dailyRoulettePendingLabel: pick.label, dailyRouletteWonAt: new Date() }
+      // #1010: el del giro GRATIS vence a las 00 h de hoy. Nunca pisa un % pendiente MAYOR y vigente (ej. el 100% de un giro dorado).
+      const expiresAt = spinMode === 'free' ? _rouletteEndOfDayART() : null;
+      const cur = await User.findOne({ id: userId }).select('dailyRoulettePendingPct dailyRoulettePendingExpiresAt').lean().catch(() => null);
+      const curOk = cur && cur.dailyRoulettePendingPct > 0 && (!cur.dailyRoulettePendingExpiresAt || new Date(cur.dailyRoulettePendingExpiresAt) > new Date());
+      const keep = curOk && Number(cur.dailyRoulettePendingPct) >= pct;
+      if (!keep) await User.updateOne({ id: userId }, {
+        $set: { dailyRoulettePendingPct: pct, dailyRoulettePendingLabel: pick.label, dailyRouletteWonAt: new Date(), dailyRoulettePendingExpiresAt: expiresAt }
       }).catch(() => {});
       await _emitAdminOnlyChatNote(userId, username,
-        `🎰 Ruleta DIARIA: ganó ${pick.label} (${pct}% EXTRA) para su PRÓXIMA CARGA — PENDIENTE. Se aplica AUTOMÁTICO en la carga (manual o hgcash) con el tope de bonos; si cargás con otro bonus, el sistema lo corrige y avisa acá.`).catch(() => {});
-      logger.info(`[ROULETTE] ${username} → ${pct}% EXTRA pendiente (${dateKey})`);
+        `🎰 Ruleta DIARIA${spinMode === 'free' ? ' (giro GRATIS)' : ''}: ganó ${pick.label} (${pct}% EXTRA) para su ${spinMode === 'free' ? 'carga de HOY (vence a las 00 h)' : 'PRÓXIMA CARGA'} — PENDIENTE${keep ? ' (ya tenía un ' + cur.dailyRoulettePendingPct + '% pendiente mayor: se mantiene ése)' : ''}. Se aplica AUTOMÁTICO en la carga (manual o hgcash) con el tope de bonos; si cargás con otro bonus, el sistema lo corrige y avisa acá.`).catch(() => {});
+      logger.info(`[ROULETTE] ${username} → ${pct}% EXTRA pendiente (${dateKey}, ${spinMode})`);
       return res.json({
         success: true,
-        prize: { type: 'percent', prizeARS: 0, prizePct: pct, prizeLabel: pick.label, emoji: pick.emoji, status: 'percent_pending' }
+        prize: { type: 'percent', prizeARS: 0, prizePct: keep ? Number(cur.dailyRoulettePendingPct) : pct, wonPct: pct, keptHigher: keep, prizeLabel: pick.label, emoji: pick.emoji, status: 'percent_pending', mode: spinMode, expiresAt: keep ? (cur.dailyRoulettePendingExpiresAt || null) : expiresAt }
       });
     }
 
@@ -25414,7 +25479,7 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
       logger.info(`[ROULETTE] ${username} → SIN PREMIO (${dateKey})`);
       return res.json({
         success: true,
-        prize: { type: 'none', prizeARS: 0, prizeLabel: pick.label, emoji: pick.emoji, status: 'no_prize' }
+        prize: { type: 'none', prizeARS: 0, prizeLabel: pick.label, emoji: pick.emoji, status: 'no_prize', mode: spinMode }
       });
     }
 
@@ -27369,38 +27434,63 @@ function _newbieImg(n, pct, hours, rx, dx) {
 // (cargaron en los últimos 15 días) con push, que AYER perdieron en el casino (netwin de 1girox > 0, mismo criterio que el reembolso diario) y
 // todavía no reclamaron el diario de ayer. Push con url /?open=refund ⇒ la app abre Reembolso. Texto editable: /sys_refund_reminder ({pct}).
 const REFUND_REMIND_DEFAULT = '🔁 Ayer no fue tu día, pero te devolvemos el {pct}% 💸 Tocá acá y reclamá tu reembolso de ayer: se acredita al toque.';
-// #973 (owner): "avisos de reembolso SIEMPRE a los que tienen disponible, sea diario, semanal o mensual". Semanal: lunes y jueves; mensual: día 1 y 8.
+// #973 (owner): "avisos de reembolso SIEMPRE a los que tienen disponible, sea diario, semanal o mensual". #1010: semanal lunes + martes; mensual día 7 + 15.
 const REFUND_REMIND_WEEKLY_DEFAULT = '📅 Tenés un reembolso SEMANAL del {pct}% esperándote 💸 Tocá acá y reclamalo: se acredita al toque.';
 const REFUND_REMIND_MONTHLY_DEFAULT = '🗓️ Tu reembolso MENSUAL del {pct}% ya está disponible 💸 Tocá acá y reclamalo antes de que venza.';
 let _refundRemindRunning = false;
-// Plan de cada tipo: rango y clave del período (misma que usa el reclamo), % vigente, texto, cuántos días atrás buscar cargadores y el "slot"
-// (una sola pasada por slot: diario = el día; semanal = período#lunes/jueves; mensual = período#1/#8).
+// #1010 (owner 2026-11-01): "notificaciones para la gente que tiene un reembolso disponible para reclamar, aparte del resto". El aviso sale
+// SÓLO a quien tiene plata para cobrar, calculada IGUAL que el reclamo (pérdida de casino − bono otorgado del período, rango del período,
+// − acumulativo ya cobrado en el período, ≥ mínimo del período) y con el MONTO en el título. Es personal (kind 'personal'): no cuenta en el
+// tope diario de promos. Ventanas = las del reclamo (models/refunds.js): diario hoy (sobre ayer) + último aviso 20 h; semanal lunes y
+// último aviso martes; mensual día 7 y día 15. Antes salía también a quien perdió sólo bono (abría y veía $0) y el semanal los jueves
+// / el mensual el día 1, cuando el reclamo está cerrado.
+// (una sola pasada por slot: diario = el día; semanal = período#día; mensual = período#día).
 async function _refundRemindPlan(kind, now) {
   const tiers = await getRefundTiersByPeriod(); const maxPct = (t) => (t || []).reduce((m, x) => Math.max(m, Number(x.pct) || 0), 0);
-  const today = _schedArtKey(now), dow = new Date(now.getTime() - 3 * 3600000).getUTCDay(), dom = Number(today.slice(8, 10));
-  if (kind === 'daily') { const r = periodRanges.getYesterdayRangeArgentinaEpoch(); return { r, periodKey: 'daily:' + _schedArtKey(new Date(now.getTime() - 86400000)), pct: maxPct(tiers.daily), cmd: '/sys_refund_reminder', def: REFUND_REMIND_DEFAULT, activeDays: 15, title: '🔁 No te olvides de reclamar tu reembolso', slot: today, due: true }; }
-  if (kind === 'weekly') { const r = periodRanges.getLastWeekRangeArgentinaEpoch(); return { r, periodKey: 'weekly:' + r.fromDateStr, pct: maxPct(tiers.weekly), cmd: '/sys_refund_reminder_weekly', def: REFUND_REMIND_WEEKLY_DEFAULT, activeDays: 30, title: '📅 Tu reembolso semanal te espera', slot: r.fromDateStr + '#' + dow, due: dow === 1 || dow === 4 }; }
-  const r = periodRanges.getLastMonthRangeArgentinaEpoch(); return { r, periodKey: 'monthly:' + r.fromDateStr.slice(0, 7), pct: maxPct(tiers.monthly), cmd: '/sys_refund_reminder_monthly', def: REFUND_REMIND_MONTHLY_DEFAULT, activeDays: 60, title: '🗓️ Tu reembolso mensual está disponible', slot: r.fromDateStr.slice(0, 7) + '#' + dom, due: dom === 1 || dom === 8 };
+  const today = _schedArtKey(now), dow = new Date(now.getTime() - 3 * 3600000).getUTCDay(), dom = Number(today.slice(8, 10)), hourArt = (now.getUTCHours() + 21) % 24;
+  if (kind === 'daily' || kind === 'daily_last') { const r = periodRanges.getYesterdayRangeArgentinaEpoch(); const last = kind === 'daily_last';
+    return { kind: 'daily', last, r, periodKey: 'daily:' + _schedArtKey(new Date(now.getTime() - 86400000)), pct: maxPct(tiers.daily), tiers: tiers.daily, cmd: '/sys_refund_reminder', def: REFUND_REMIND_DEFAULT, activeDays: 15,
+      title: last ? '⏰ Hoy vence tu reembolso de {monto}' : '💸 Tenés {monto} de reembolso', slot: today, due: last ? hourArt >= 20 : true }; }
+  if (kind === 'weekly') { const r = periodRanges.getLastWeekRangeArgentinaEpoch(); const last = dow === 2;
+    return { kind, last, r, periodKey: 'weekly:' + r.fromDateStr, pct: maxPct(tiers.weekly), tiers: tiers.weekly, cmd: '/sys_refund_reminder_weekly', def: REFUND_REMIND_WEEKLY_DEFAULT, activeDays: 30,
+      title: last ? '⏰ Hoy es el último día: {monto} de reembolso' : '📅 Tenés {monto} de reembolso semanal', slot: r.fromDateStr + '#' + dow, due: dow === 1 || dow === 2 }; }
+  const r = periodRanges.getLastMonthRangeArgentinaEpoch(); const last = dom === 15;
+  return { kind: 'monthly', last, r, periodKey: 'monthly:' + r.fromDateStr.slice(0, 7), pct: maxPct(tiers.monthly), tiers: tiers.monthly, cmd: '/sys_refund_reminder_monthly', def: REFUND_REMIND_MONTHLY_DEFAULT, activeDays: 60,
+    title: last ? '🗓️ No te olvides: {monto} de reembolso mensual' : '🗓️ Tenés {monto} de reembolso mensual', slot: r.fromDateStr.slice(0, 7) + '#' + dom, due: dom === 7 || dom === 15 };
 }
 async function _refundRemindRun(kind, plan, now) {
   const from = new Date(plan.r.fromEpoch * 1000), to = new Date(plan.r.toEpoch * 1000);
   const ids = await Transaction.distinct('userId', { type: 'deposit', status: { $nin: ['failed', 'cancelled'] }, 'metadata.source': { $nin: ['install_bonus', 'welcome_gift', 'welcome_code', 'payout_refund'] }, timestamp: { $gte: new Date(now.getTime() - plan.activeDays * 86400000) } });
-  const users = ids.length ? await User.find({ id: { $in: ids }, role: 'user', isActive: { $ne: false }, isBlocked: { $ne: true }, 'notifPrefs.level': { $ne: 'none' }, $or: [{ fcmToken: { $nin: [null, ''] } }, { 'fcmTokens.0': { $exists: true } }] }).select('id username').lean() : [];
-  const claimed = new Set((await RefundClaim.find({ type: kind, periodKey: plan.periodKey, userId: { $in: users.map((u) => u.id) } }).select('userId').lean()).map((c) => c.userId));
-  const names = users.filter((u) => !claimed.has(u.id)).map((u) => u.username);
-  const losers = []; let apiErr = null;
+  const users = ids.length ? await User.find({ id: { $in: ids }, role: 'user', isActive: { $ne: false }, isBlocked: { $ne: true }, 'notifPrefs.level': { $ne: 'none' }, $or: [{ fcmToken: { $nin: [null, ''] } }, { 'fcmTokens.0': { $exists: true } }] }).select('id username fcmToken fcmTokens notifPrefs').lean() : [];
+  const claimed = new Set((await RefundClaim.find({ type: plan.kind, periodKey: plan.periodKey, userId: { $in: users.map((u) => u.id) } }).select('userId').lean()).map((c) => c.userId));
+  const pending = users.filter((u) => !claimed.has(u.id)); const byName = new Map(pending.map((u) => [u.username, u]));
+  const names = pending.map((u) => u.username);
+  const losses = new Map(); let apiErr = null;
   for (let i = 0; i < names.length && !apiErr; i += 100) {
-    const chunk = names.slice(i, i + 100); const b = await girox.getPlayersStatsBatch(chunk, from, to, 'refund-remind-' + kind);
+    const chunk = names.slice(i, i + 100); const b = await girox.getPlayersStatsBatch(chunk, from, to, 'refund-remind-' + plan.kind);
     if (!b.success) { apiErr = b.error || b.code || 'stats batch falló'; break; }
-    for (const n of chunk) { const p = b.players[n]; if (p && Number(p.casinoNetwin) > 0) losers.push(n); }
+    for (const n of chunk) { const p = b.players[n]; const loss = p ? Math.max(0, (Number(p.casinoNetwin) || 0) - (Number(p.bonusGranted) || 0)) : 0; if (loss > 0) losses.set(n, loss); }
   }
   if (apiErr) return { error: apiErr };
-  let sent = null;
-  if (losers.length) {
+  // − lo cobrado como acumulativo dentro del período (igual que /api/refunds/status y el reclamo).
+  const lossUsers = [...losses.keys()].map((n) => byName.get(n)).filter(Boolean);
+  const paid = new Map(); if (lossUsers.length) { try { (await CashbackClaim.aggregate([{ $match: { userId: { $in: lossUsers.map((u) => String(u.id)) }, status: 'credited', createdAt: { $gte: from, $lte: to } } }, { $group: { _id: '$userId', total: { $sum: '$amount' } } }])).forEach((x) => paid.set(String(x._id), x.total)); } catch (_) {} }
+  const minArs = Number((await getRefundMinimums())[plan.kind]) || 0;
+  const due = [];
+  for (const u of lossUsers) { const calc = refundTiers.calcRefund(losses.get(u.username), plan.tiers); const amount = Math.floor(Math.max(0, (Number(calc.amount) || 0) - (paid.get(String(u.id)) || 0))); if (amount > 0 && amount >= minArs) due.push({ u, amount }); }
+  let sent = 0, total = 0;
+  if (due.length) {
     const text = await renderSystemCommand(plan.cmd, plan.def, { pct: String(plan.pct) });
-    if (String(text || '').trim()) sent = await sendNotificationToUsernames(User, losers, plan.title, text, { url: '/?open=refund', type: 'refund_reminder', kind: 'personal', refundKind: kind, tag: 'refund-' + plan.periodKey });
+    if (String(text || '').trim()) {
+      for (let i = 0; i < due.length; i += 10) {
+        await Promise.all(due.slice(i, i + 10).map(async ({ u, amount }) => {
+          const monto = '$' + amount.toLocaleString('es-AR');
+          try { const r = await sendPushIfOffline(u, plan.title.replace('{monto}', monto), String(text).replace(/\{monto\}/g, monto), { url: '/?open=refund', type: 'refund_reminder', kind: 'personal', refundKind: plan.kind, tag: 'refund-' + plan.periodKey }, { forcePush: true }); if (r && r.sent > 0) { sent++; total += amount; } } catch (_) {}
+        }));
+      }
+    }
   }
-  return { kind, slot: plan.slot, periodKey: plan.periodKey, at: now.toISOString(), candidates: names.length, losers: losers.length, sent: sent ? (sent.successCount || sent.sent || 0) : 0 };
+  return { kind: plan.kind, last: plan.last, slot: plan.slot, periodKey: plan.periodKey, at: now.toISOString(), candidates: names.length, losers: losses.size, withRefund: due.length, amountTotal: Math.round(due.reduce((a, d) => a + d.amount, 0)), sent, sentAmount: Math.round(total) };
 }
 async function _refundReminderTick() {
   if (_refundRemindRunning || process.env.REFUND_REMIND_DISABLED === '1') return; _refundRemindRunning = true;
@@ -27410,19 +27500,62 @@ async function _refundReminderTick() {
     const last = (await getConfig('refundRemindLast', null)) || {}; const slots = Object.assign({}, last.slots || {});
     if (!last.slots && last.day) slots.daily = last.day; // compat con el registro anterior (#970)
     let claimed = false;
-    for (const kind of ['daily', 'weekly', 'monthly']) {
+    for (const kind of ['daily', 'weekly', 'monthly', 'daily_last']) {
       const plan = await _refundRemindPlan(kind, now); if (!plan.due || !(plan.pct > 0) || slots[kind] === plan.slot) continue;
+      if (kind === 'daily_last' && slots.daily !== plan.slot) continue; // el último aviso sólo después del primero del día
       if (!claimed) { if (!(await _cronClaim('refundremind', 10 * 60000))) return; claimed = true; } // una instancia por pasada
       const r = await _refundRemindRun(kind, plan, now);
       if (r.error) { logger.warn('[reembolso-aviso] ' + kind + ': ' + r.error + ': se reintenta en la próxima pasada'); continue; }
       slots[kind] = plan.slot; const kinds = Object.assign({}, last.kinds || {}); kinds[kind] = r;
-      Object.assign(last, { day: _schedArtKey(now), at: now.toISOString(), kind, candidates: r.candidates, losers: r.losers, sent: r.sent, slots, kinds });
+      Object.assign(last, { day: _schedArtKey(now), at: now.toISOString(), kind, candidates: r.candidates, losers: r.losers, withRefund: r.withRefund, sent: r.sent, slots, kinds });
       await Config.set('refundRemindLast', last, 'system');
-      logger.info(`[reembolso-aviso] ${kind} ${plan.periodKey}: ${r.candidates} sin reclamar · ${r.losers} perdieron · push ${r.sent}`);
+      logger.info(`[reembolso-aviso] ${kind} ${plan.periodKey}: ${r.candidates} sin reclamar · ${r.losers} perdieron · ${r.withRefund} con reembolso ($${r.amountTotal}) · push ${r.sent}`);
     }
   } catch (e) { logger.warn('[reembolso-aviso] ' + e.message); } finally { _refundRemindRunning = false; }
 }
 setTimeout(() => { _refundReminderTick().catch(() => {}); setInterval(() => { _refundReminderTick().catch(() => {}); }, 15 * 60 * 1000); }, 6 * 60 * 1000);
+// #1010 (owner 2026-11-01): aviso "tu giro GRATIS de hoy está listo" (13–15 h ART), uno por día. Sólo a quien PUEDE girar gratis (mismo filtro
+// anti-multicuentas que el giro: cargas reales de la vida ≥ minDeposits, sin cuenta secundaria ni marcas, app instalada), cargó en los últimos
+// 60 días, no giró hoy, quiere promos (notifPrefs 'all') y NO recibió otro aviso masivo hoy (no se suma al tope diario: si ya tuvo uno, no sale).
+// A los 3 avisos seguidos sin girar se deja de mandar hasta que vuelva a girar (User.rouletteNudge). Texto editable: /sys_roulette_ready.
+const ROULETTE_NUDGE_TITLE = '🎰 Tu giro GRATIS está listo'; // corto: pushText le pone "🎁 BONO +N% · " adelante (título ≤ 45)
+const ROULETTE_NUDGE_DEFAULT = 'Entrá y girá: podés ganar hasta +{pct}% EXTRA para tu carga de hoy (se juega en slots).';
+let _rlNudgeRunning = false;
+async function _rouletteNudgeTick(force) {
+  if (_rlNudgeRunning || process.env.ROULETTE_NUDGE_DISABLED === '1') return null; _rlNudgeRunning = true;
+  try {
+    const now = new Date(); const hourArt = (now.getUTCHours() + 21) % 24; if (!force && (hourArt < 13 || hourArt >= 15)) return null;
+    const nc = await getNotifCenterConfig(); if (nc.rouletteReminder === false) return null;
+    const today = _schedArtKey(now); const last = await getConfig('rouletteNudgeLast', null); if (!force && last && last.day === today) return null;
+    const cfg = await getDailyRouletteConfig(); if (!cfg.enabled || !cfg.free || !cfg.free.enabled) return null;
+    if (!(await _cronClaim('roulettenudge', 15 * 60000))) return null;
+    const since60 = new Date(now.getTime() - 60 * 86400000);
+    const agg = await Transaction.aggregate([{ $match: Object.assign({ userId: { $ne: null } }, SCHED_ADAPTER.realDepositMatch()) }, { $group: { _id: '$userId', n: { $sum: 1 }, last: { $max: '$timestamp' } } },
+      { $match: { n: { $gte: cfg.free.minDeposits }, last: { $gte: since60 } } }]);
+    const ids = agg.map((a) => a._id);
+    const users = ids.length ? await User.find({ id: { $in: ids }, role: 'user', isBlocked: { $ne: true }, isActive: { $ne: false }, duplicateOf: null, 'fraudFlags.0': { $exists: false },
+      'notifPrefs.level': { $nin: ['none', 'mine'] }, 'rouletteNudge.n': { $not: { $gte: 3 } } }).select('id username fcmToken fcmTokens fcmTokenContext notifPrefs').lean() : [];
+    const spun = new Set(await DailyRouletteSpin.distinct('userId', { dateKey: _rouletteDateKeyART(now) }));
+    let cand = users.filter((u) => !spun.has(u.id) && (!cfg.requireAppInstalled || _rouletteHasAppInstalled(u)) && !(Number(u.notifPrefs && u.notifPrefs.fatigue) >= 10));
+    const dayCounts = await _notifDayCounts(cand.map((u) => u.id), now); cand = cand.filter((u) => !(dayCounts.get(u.id) > 0));
+    const maxPct = cfg.free.prizes.reduce((m, p) => Math.max(m, p.type === 'percent' ? Number(p.value) || 0 : 0), 0);
+    const text = await renderSystemCommand('/sys_roulette_ready', ROULETTE_NUDGE_DEFAULT, { pct: String(maxPct) });
+    let sent = 0;
+    if (cand.length && String(text || '').trim()) {
+      for (let i = 0; i < cand.length; i += 500) {
+        const chunk = cand.slice(i, i + 500);
+        const r = await sendNotificationToUsernames(User, chunk.map((u) => u.username), ROULETTE_NUDGE_TITLE, text, { url: '/?open=roulette', type: 'roulette_ready', kind: 'promo', allowRoulette: '1', tag: 'roulette-' + today });
+        sent += (r && (r.successCount || r.sent)) || 0;
+        await User.updateMany({ id: { $in: chunk.map((u) => u.id) } }, { $inc: { 'rouletteNudge.n': 1 }, $set: { 'rouletteNudge.lastAt': now } }).catch(() => {});
+      }
+    }
+    const out = { day: today, at: now.toISOString(), eligible: users.length, spunToday: spun.size, candidates: cand.length, sent };
+    await Config.set('rouletteNudgeLast', out, 'system');
+    logger.info(`[ruleta-aviso] ${today}: ${users.length} pueden girar gratis · ${cand.length} avisados · push ${sent}`);
+    return out;
+  } catch (e) { logger.warn('[ruleta-aviso] ' + e.message); return null; } finally { _rlNudgeRunning = false; }
+}
+setTimeout(() => { _rouletteNudgeTick().catch(() => {}); setInterval(() => { _rouletteNudgeTick().catch(() => {}); }, 15 * 60 * 1000); }, 8 * 60 * 1000);
 let _newbieRunning = false;
 async function _newbieOffersTick() {
   if (_newbieRunning || process.env.NEWBIE_OFFERS_DISABLED === '1') return;
@@ -27478,7 +27611,7 @@ async function getJourneyTuning() { let t = null; try { t = await getConfig('jou
 async function getNotifCenterConfig() {
   let c = {}; try { c = (await getConfig('notifCenter', null)) || {}; } catch (_) {}
   const cap = Math.round(Number(c.monthlyCap));
-  return { monthlyCap: Number.isFinite(cap) && cap >= 2 && cap <= 60 ? cap : null, dailyCap: 1, journey: c.journey !== false, refundReminder: c.refundReminder !== false, winnersStory: c.winnersStory !== false, legacyRules: c.legacyRules === true };
+  return { monthlyCap: Number.isFinite(cap) && cap >= 2 && cap <= 60 ? cap : null, dailyCap: 1, journey: c.journey !== false, refundReminder: c.refundReminder !== false, winnersStory: c.winnersStory !== false, legacyRules: c.legacyRules === true, rouletteReminder: c.rouletteReminder !== false };
 }
 // Estado de TODOS los clientes (una agregación de cargas reales de la vida + 90 días) ⇒ segmento y paso de hoy. No escribe nada.
 async function _journeyScan(now) {
@@ -27583,11 +27716,11 @@ app.get('/api/admin/inicio/notif-center', authMiddleware, adminMiddleware, async
       const s = await _journeyScan(new Date());
       _journeyPreview = { at: Date.now(), v: { total: s.total, segments: s.segments, steps: s.picks.map((g) => ({ id: g.pick.step.id, name: g.pick.step.name, segment: g.pick.segment, gift: g.pick.giftType, amount: g.pick.amount, n: g.users.length, sample: g.users.slice(0, 5).map((x) => x.username) })) } };
     }
-    const [journeyLast, refundLast, newbie, optOut] = await Promise.all([getConfig('journeyLast', null), getConfig('refundRemindLast', null), getNewbieOffersConfig(),
-      User.aggregate([{ $match: { role: 'user', 'notifPrefs.level': { $in: ['mine', 'none'] } } }, { $group: { _id: '$notifPrefs.level', n: { $sum: 1 } } }])]);
+    const [journeyLast, refundLast, newbie, optOut, rouletteLast] = await Promise.all([getConfig('journeyLast', null), getConfig('refundRemindLast', null), getNewbieOffersConfig(),
+      User.aggregate([{ $match: { role: 'user', 'notifPrefs.level': { $in: ['mine', 'none'] } } }, { $group: { _id: '$notifPrefs.level', n: { $sum: 1 } } }]), getConfig('rouletteNudgeLast', null)]);
     res.json({ success: true, config: nc, cap: ap.cap, autopilot: { enabled: ap.enabled, time: ap.time, hours: ap.hours, parts: ap.parts },
       steps: retentionJourney.STEPS.map((s) => ({ id: s.id, segment: s.segment, day: s.day, name: s.name, capped: s.capped, gift: s.gift, title: s.title, text: s.text })),
-      tiers: retentionJourney.VALUE_TIERS, segmentLabels: retentionJourney.SEGMENT_LABELS, preview: _journeyPreview.v, journeyLast, refundLast, newbie,
+      tiers: retentionJourney.VALUE_TIERS, segmentLabels: retentionJourney.SEGMENT_LABELS, preview: _journeyPreview.v, journeyLast, refundLast, rouletteLast, newbie,
       storyBonusDays: [3], optOut: Object.fromEntries(optOut.map((o) => [o._id, o.n])) });
   } catch (e) { logger.error('[notif-center] ' + e.message); res.status(500).json({ error: 'Error del servidor' }); }
 });
@@ -27599,7 +27732,7 @@ app.put('/api/admin/inicio/notif-center', authMiddleware, adminMiddleware, async
       if (c != null && (!Number.isFinite(c) || c < 2 || c > 60)) return res.status(400).json({ error: 'El tope mensual va de 2 a 60 (o vacío = automático).' });
       capChanged = (cur.monthlyCap || null) !== c; next.monthlyCap = c;
     }
-    for (const k of ['journey', 'refundReminder', 'winnersStory', 'legacyRules']) if (typeof b[k] === 'boolean') next[k] = b[k];
+    for (const k of ['journey', 'refundReminder', 'winnersStory', 'legacyRules', 'rouletteReminder']) if (typeof b[k] === 'boolean') next[k] = b[k];
     await Config.set('notifCenter', next, req.user.username || 'admin');
     let reprogrammed = 0; if (capChanged) { reprogrammed = await _autopilotClearFuture().catch(() => 0); } // el autopiloto se reprograma solo con el tope nuevo
     res.json({ success: true, config: await getNotifCenterConfig(), reprogrammed });
@@ -28148,7 +28281,20 @@ async function _bizBoard(period) {
   const campaigns = businessBoard.campaigns([...camp.values()]);
   let generalSpend = 0; try { const sp = await _diaSpendByDay(cFrom, now, null); generalSpend = Math.round((sp && sp.total) || 0) - campaigns.reduce((a, c) => a + (c.spend || 0), 0); } catch (_) {}
   const cohorts = await _inicioCohorts({ type: 'deposit', status: { $nin: ['failed', 'cancelled'] }, 'metadata.source': { $nin: ['install_bonus', 'welcome_gift', 'welcome_code', 'payout_refund'] } }).catch(() => []);
-  const board = { period, range: { from: R.from, to: R.to, pFrom: R.pFrom, pTo: R.pTo, label: R.label }, money, giftLevel: businessBoard.giftLevel(money.giftRatio), retention, funnel, gifts, giftsWindow: { from: gFrom, to: gTo }, campaigns, generalSpend: Math.max(0, generalSpend), cohorts, at: now };
+  // #1010 RULETA: giros del período (gratis / dorado), cuántos cargaron ese MISMO día después de girar y cuánto costó en plata.
+  let roulette = null;
+  try {
+    const rr = await DailyRouletteSpin.aggregate([{ $match: { spunAt: { $gte: R.from, $lt: R.to } } },
+      { $lookup: { from: Transaction.collection.name, let: { u: '$userId', t: '$spunAt', d: '$dateKey' }, pipeline: [
+        { $match: Object.assign({ $expr: { $and: [{ $eq: ['$userId', '$$u'] }, { $gte: ['$timestamp', '$$t'] }, { $lt: ['$timestamp', { $add: [{ $dateFromString: { dateString: { $concat: ['$$d', 'T00:00:00-03:00'] } } }, 86400000] }] }] } }, _BIZ_REAL) },
+        { $limit: 1 }, { $project: { _id: 1 } }], as: 'dep' } },
+      { $group: { _id: { $ifNull: ['$mode', 'gold'] }, spins: { $sum: 1 }, users: { $addToSet: '$userId' }, depositedAfter: { $sum: { $cond: [{ $gt: [{ $size: '$dep' }, 0] }, 1, 0] } },
+        cash: { $sum: { $cond: [{ $eq: ['$status', 'credited'] }, '$prizeARS', 0] } }, pctWins: { $sum: { $cond: [{ $eq: ['$prizeType', 'percent'] }, 1, 0] } } } }]).allowDiskUse(true);
+    const days = Math.max(1, Math.round((R.to - R.from) / DAY));
+    const m = (k) => { const x = rr.find((r) => r._id === k) || { spins: 0, users: [], depositedAfter: 0, cash: 0, pctWins: 0 }; return { spins: x.spins, users: x.users.length, perDay: Math.round(x.spins / days), depositedAfter: x.depositedAfter, depositRate: x.spins ? x.depositedAfter / x.spins : null, cash: Math.round(x.cash), pctWins: x.pctWins }; };
+    roulette = { free: m('free'), gold: m('gold'), days };
+  } catch (e) { logger.warn('[negocio] ruleta: ' + e.message); }
+  const board = { period, range: { from: R.from, to: R.to, pFrom: R.pFrom, pTo: R.pTo, label: R.label }, money, giftLevel: businessBoard.giftLevel(money.giftRatio), retention, funnel, gifts, giftsWindow: { from: gFrom, to: gTo }, campaigns, generalSpend: Math.max(0, generalSpend), cohorts, roulette, at: now };
   Object.assign(board, businessBoard.diagnose(board));
   return board;
 }

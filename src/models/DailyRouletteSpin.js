@@ -33,6 +33,8 @@ const spinSchema = new mongoose.Schema({
   prizeType: { type: String, enum: ['cash', 'percent', 'none'], default: 'cash' },
   prizePct: { type: Number, default: 0 },
   rolloverX: { type: Number, default: 0 },
+  // #1010: 'free' = giro GRATIS del día (sólo % EXTRA para la carga de HOY) · 'gold' = giro DORADO (con la carga del día, tabla completa).
+  mode: { type: String, enum: ['free', 'gold'], default: 'gold' },
 
   // Anti-fraude
   ipAddress: { type: String, default: null },

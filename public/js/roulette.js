@@ -68,7 +68,7 @@
         if (_state.alreadySpun && spin) {
             const won = Number(spin.prizeARS || 0) > 0;
             if (spin.prizeType === 'percent' || spin.status === 'percent_pending') {
-                subText = '+' + _fmt(spin.prizePct) + '% próx. carga';
+                subText = '+' + _fmt(spin.prizePct) + (spin.mode === 'free' ? '% hasta 00 h' : '% próx. carga'); // #1010
             } else if (won && spin.status === 'credited') {
                 subText = 'Ganaste $' + _fmt(spin.prizeARS);
             } else if (won && spin.status === 'credit_failed') {
@@ -79,7 +79,7 @@
         } else if (Number(_state.pendingPct || 0) > 0) {
             subText = '+' + _fmt(_state.pendingPct) + '% pendiente';
         } else {
-            subText = '¡GIRÁ HOY!';
+            subText = _state.mode === 'free' ? 'GIRO GRATIS' : (_state.mode === 'gold' ? 'GIRO DORADO' : '¡GIRÁ HOY!'); // #1010
         }
 
         c.innerHTML = '<div class="dash-roulette" onclick="VIP.roulette && VIP.roulette.open()">'
@@ -198,19 +198,28 @@
             : '';
         const minDep = Number(_state.minDepositArs) > 0 ? Number(_state.minDepositArs) : 20000; // #669
         // #374: premio mayor destacado. #390: sin la chance ("1 cada N giros") — es interno.
-        const topCash = (_state.prizes || []).filter((p) => p.type === 'cash' && Number(p.value) > 0).sort((a, b) => b.value - a.value)[0];
-        const topHtml = topCash ? '<div class="rl-top"><span class="rl-top-k">🏆 Premio mayor</span><b>$' + _fmt(topCash.value) + '</b></div>' : '';
+        // #1010: giro GRATIS (sólo % para la carga de hoy) o DORADO (con la carga del día, premios en plata).
+        const isFree = _state.mode === 'free';
+        const topCash = (_state.goldPrizes || _state.prizes || []).filter((p) => p.type === 'cash' && Number(p.value) > 0).sort((a, b) => b.value - a.value)[0];
+        const topHtml = topCash ? '<div class="rl-top"><span class="rl-top-k">🏆 Premio mayor' + (isFree ? ' (giro dorado)' : '') + '</span><b>$' + _fmt(topCash.value) + '</b></div>' : '';
+        const subTxt = isFree
+            ? 'Todos los días tenés <b>1 giro GRATIS</b> con % extra para tu carga de hoy. Si cargás <b>$' + _fmt(minDep) + '</b> en el día antes de girar, tu giro es <b>DORADO</b>: premios en plata.'
+            : (_state.mode === 'gold' ? '<b>Giro DORADO</b> desbloqueado con tu carga de hoy · si ganás, se acredita solo'
+                : 'Se desbloquea con <b>$' + _fmt(minDep) + '</b> cargados en el día (podés sumar cargas) · 1 giro por día · si ganás, se acredita solo');
         let html = '<div class="rl-card">';
         html += '<button type="button" class="rl-x" onclick="VIP.roulette.close()" aria-label="Cerrar">✕</button>';
-        html += '<div class="rl-head"><div class="rl-kicker">Todos los días</div><h2 class="rl-title">Ruleta diaria</h2><p class="rl-sub">Se desbloquea con <b>$' + _fmt(minDep) + '</b> cargados en el día (podés sumar cargas) · 1 giro gratis por día · si ganás, se acredita solo</p></div>';
+        html += '<div class="rl-head"><div class="rl-kicker">Todos los días</div><h2 class="rl-title">Ruleta diaria</h2><p class="rl-sub">' + subTxt + '</p></div>';
         html += topHtml;
 
         if (alreadySpun) {
             const won = Number(spin.prizeARS || 0) > 0;
             if (spin.prizeType === 'percent' || spin.status === 'percent_pending') {
+                const freeWin = spin.mode === 'free';
                 html += '<div id="rouletteResultBox" class="rl-result win"><div class="rl-emoji">🎉</div><div class="rl-res-k">¡Ganaste!</div>' +
-                    '<div class="rl-res-big">+' + _fmt(spin.prizePct) + '% extra</div>' +
-                    '<div class="rl-res-note">✅ Se aplica solo en tu próxima carga. No tenés que avisar nada.</div></div>';
+                    '<div class="rl-res-big">+' + _fmt(spin.wonPct || spin.prizePct) + '% extra</div>' +
+                    '<div class="rl-res-note">' + (spin.keptHigher ? '✅ Ya tenías un <b>+' + _fmt(spin.prizePct) + '%</b> pendiente (mayor): se te mantiene ése para tu próxima carga.'
+                        : (freeWin ? '✅ Se aplica solo en tu carga de <b>HOY</b> (vence a las 00 h). Se juega en slots.' : '✅ Se aplica solo en tu próxima carga. No tenés que avisar nada.')) + '</div>' +
+                    (freeWin && !spin.keptHigher ? '<button type="button" class="rl-spin" onclick="VIP.roulette.close(); if (window.VIP && VIP.home) VIP.home.setHomeMode(\'full\');">Cargar ahora</button>' : '') + '</div>';
             } else if (won && spin.status === 'credited') {
                 html += '<div id="rouletteResultBox" class="rl-result win"><div class="rl-emoji">🎉</div><div class="rl-res-k">¡Ganaste!</div>' +
                     '<div class="rl-res-big">$' + _fmt(spin.prizeARS) + '</div>' +
@@ -243,9 +252,10 @@
         } else {
             html += pendingHtml;
             html += '<div id="rouletteResultBox" class="rl-hero"><div class="rl-emoji rl-emoji-swing">🎰</div>' +
-                '<div class="rl-hero-t">Tu giro de hoy te espera</div>' +
-                '<div class="rl-hero-s">Tocá <b>Girar</b> y la suerte decide. Si ganás, se acredita solo.</div>' +
-                '<button type="button" id="rouletteSpinBtn" class="rl-spin" onclick="VIP.roulette.spin()">Girar</button></div>';
+                '<div class="rl-hero-t">' + (isFree ? 'Tu giro GRATIS de hoy te espera' : (_state.mode === 'gold' ? '✨ Tu giro DORADO te espera' : 'Tu giro de hoy te espera')) + '</div>' +
+                '<div class="rl-hero-s">' + (isFree ? 'Tocá <b>Girar</b>: si ganás, tu carga de hoy lleva % extra automático.' : 'Tocá <b>Girar</b> y la suerte decide. Si ganás, se acredita solo.') + '</div>' +
+                '<button type="button" id="rouletteSpinBtn" class="rl-spin" onclick="VIP.roulette.spin()">Girar</button>' +
+                (isFree ? '<button type="button" class="rl-more" onclick="VIP.roulette.close(); if (window.VIP && VIP.home) VIP.home.setHomeMode(\'full\');">💡 Cargar $' + _fmt(minDep) + ' y girar DORADO ›</button>' : '') + '</div>';
             html += prizesHtml;
         }
 
@@ -309,6 +319,9 @@
                 prizeLabel: d.prize.prizeLabel,
                 prizeType: d.prize.type || (d.prize.prizeARS > 0 ? 'cash' : 'none'),
                 prizePct: d.prize.prizePct || 0,
+                wonPct: d.prize.wonPct || 0,
+                keptHigher: !!d.prize.keptHigher,
+                mode: d.prize.mode || _state.mode || 'gold', // #1010
                 rolloverX: d.prize.rolloverX || 0,
                 status: d.prize.status,
                 spunAt: new Date().toISOString(),

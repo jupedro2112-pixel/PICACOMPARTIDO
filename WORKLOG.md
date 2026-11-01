@@ -8,6 +8,27 @@
 
 ## Sesión 2026-11-01
 
+### 1010. 🎰 Ruleta con GIRO GRATIS diario + avisos de reembolso con monto (2026-11-01)
+- Owner: "impulsar la ruleta diaria para todos, no están tirando el tiro… que no hagan multicuentas desde landing y me estafen" +
+  "notificaciones para la gente que tiene un reembolso disponible para reclamar, aparte del resto (no es molesto: es un beneficio)".
+- Por qué no giraban: la ruleta pedía $5.000 cargados ESE día (era premio después de cargar, no motivo para entrar), la tarjeta no se veía
+  si no cumplía y NINGUNA push podía nombrar la ruleta (guard de 2026-08).
+- RULETA: **giro GRATIS** todos los días (`Config['dailyRoulette'].free`, default encendido) para quien tiene ≥ `minDeposits` (1) cargas reales
+  de la vida + app, sin cuenta secundaria (`isGiftBlocked`), sin `fraudFlags` ni bloqueo (`_rouletteFreeEligible`, fail-closed). Premios SÓLO %
+  EXTRA (10/15/20/30 % o nada; el panel no puede meter plata, tope 50 %) para la carga de HOY: `User.dailyRoulettePendingExpiresAt` = 00 h ART
+  (`claimDailyRoulettePercent` ignora vencidos) y nunca pisa un % pendiente mayor vigente. Con la carga del día el giro es **DORADO** (la tabla de
+  siempre con plata). Sigue 1 giro por día (`DailyRouletteSpin.mode` 'free'|'gold', índice userId+dateKey intacto). Anti-multicuentas: una cuenta
+  de landing sin carga no gira, y el % sólo vale sobre una carga real, con el tope de bonos y sin bono para cuentas secundarias.
+- AVISO "🎰 Tu giro GRATIS está listo" (`_rouletteNudgeTick`, 13–15 h, uno por día, texto `/sys_roulette_ready`, url `/?open=roulette`): sólo a
+  quien puede girar gratis, cargó en 60 días, no giró, quiere promos, sin otro aviso masivo ese día (`_notifDayCounts`); a los 3 seguidos sin girar
+  se pausa (`User.rouletteNudge`). El guard `isRouletteText` deja pasar SÓLO `data.allowRoulette='1'`. Interruptor en Centro de avisos.
+- AVISOS DE REEMBOLSO (#970/#973 rehechos): sólo a quien TIENE plata para cobrar, con el mismo cálculo que el reclamo (casino − bono otorgado,
+  rango, − acumulativo cobrado, ≥ mínimo) y el MONTO en el título ("💸 Tenés $X de reembolso"), push personal (fuera del tope de 1/día). Días
+  corregidos a las ventanas reales del reclamo: diario 11 h + **último aviso 20 h**; semanal lunes + martes (antes jueves, con el reclamo
+  cerrado); mensual día 7 + 15 (antes el 1, cuando todavía no se podía).
+- 📈 Negocio: bloque "🎰 Ruleta diaria" (giros gratis / dorados, % que cargó ese día después de girar, plata dada).
+- Test `scripts/test-roulette-free.js` (10 casos). PWA v654 · admin SW v223.
+
 ### 1009. 📈 TABLERO DEL NEGOCIO (2026-11-01)
 - Owner: "armá el tablero de negocio completo y mostrá adentro cómo funciona".
 - Panel → PRINCIPAL 🔒 → **📈 Negocio** (clave de INICIO; los agentes no lo ven). Período: 7 días / este mes / 30 días, contra el anterior.
