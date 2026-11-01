@@ -34,6 +34,10 @@
 - 📈 Negocio → "🧾 En qué se fue lo regalado": total del PERÍODO por tipo de regalo, y el 'bonus' separado por origen (`_BIZ_BONUS_SRC`:
   metadata.source o, en la carga manual, la descripción: 1ª carga / automático / historia / ruleta / puesto por el agente / manual / acumulativo /
   lotes). La tabla "¿Qué regalo rinde?" mira regalos de hace 7-37 días; ésta es la que explica el % de regalos/depósitos. Admin SW v225.
+- BIENVENIDA (owner: "100% en primera carga con tope de 15.000 y el 50% extra a las 24 h, que vuelva al otro día"; no bajar el 100% porque
+  la publicidad lo promete): migración única `mig1010Welcome` ⇒ `firstDepositBonusPct` 100, `firstDepositCapArs` 15.000 y
+  `strategyClientes.secondDeposit` {enabled, 50 %, afterHours 24, validHours 48} (`_secondDepositTick`: oferta por chat + push a quien hizo UNA
+  carga hace 24-72 h; no a `noWelcomeGifts` ni con fraudFlags). Texto con "se juega en slots" (#1007). Se sigue editando en Estrategia → Clientes.
 
 ### 1009. 📈 TABLERO DEL NEGOCIO (2026-11-01)
 - Owner: "armá el tablero de negocio completo y mostrá adentro cómo funciona".

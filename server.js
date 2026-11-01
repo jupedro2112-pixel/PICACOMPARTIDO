@@ -13191,6 +13191,9 @@ async function initializeData() {
   try { if (!(await getConfig('mig954CloseSince', null))) { const cur = String((await getConfig('closeSince', null)) || ''); if (!cur || cur < '2026-10-24') await Config.set('closeSince', '2026-10-24', 'mig#954'); await Config.set('mig954CloseSince', new Date().toISOString(), 'mig#954'); console.log('✅ #954: cierres desde 2026-10-24'); } } catch (e) { console.warn('[startup-migration] #954:', e.message); }
   // #955 (owner): "la ruleta diaria: un tiro con cargas de $5.000" (los textos de la app leen el valor: se actualizan solos).
   try { if (!(await getConfig('mig955RouletteMin5000', null))) { const r = (await getConfig('dailyRoulette', null)) || {}; if (r && typeof r === 'object') { r.minDepositArs = 5000; await Config.set('dailyRoulette', r, 'mig#955'); } await Config.set('mig955RouletteMin5000', new Date().toISOString(), 'mig#955'); console.log('✅ #955: ruleta diaria con $5.000 cargados en el día'); } } catch (e) { console.warn('[startup-migration] #955:', e.message); }
+  // #1010 (owner 2026-11-01): "100% en la primera carga con tope de $15.000 y el 50% extra a las 24 h, que vuelva al otro día". Una sola vez:
+  // 1ª carga 100% (tope 15.000) + oferta de 2ª carga 50%, se ofrece 24 h después de la 1ª y vale 48 h. Después se edita en Estrategia → Clientes.
+  try { if (!(await getConfig('mig1010Welcome', null))) { await Config.set('firstDepositBonusPct', 100, 'mig#1010'); await Config.set('firstDepositCapArs', 15000, 'mig#1010'); const sc = (await getConfig('strategyClientes', null)) || {}; sc.secondDeposit = Object.assign({}, sc.secondDeposit || {}, { enabled: true, pct: 50, afterHours: 24, validHours: 48 }); await Config.set('strategyClientes', sc, 'mig#1010'); await Config.set('mig1010Welcome', new Date().toISOString(), 'mig#1010'); console.log('✅ #1010: 1ª carga 100% (tope $15.000) + 2ª carga 50% a las 24 h (48 h)'); } } catch (e) { console.warn('[startup-migration] #1010:', e.message); }
   try { if (!(await getConfig('mig872InviteOnly', null))) { await Config.set('registrationMode', 'invite', 'mig#872'); await Config.set('mig872InviteOnly', new Date().toISOString(), 'mig#872'); console.log('✅ #872: registro sólo con invitación'); } } catch (e) { console.warn('[startup-migration] #872:', e.message); }
   // #879 (owner): "verificar el teléfono por única vez y después retirar sin problemas": se apaga el código SMS en CADA retiro (una vez;
   // el tilde sigue en Configuración). El teléfono verificado sigue siendo obligatorio para retirar.
@@ -22605,8 +22608,8 @@ async function _secondDepositTick() {
       const user = await User.findOneAndUpdate({ id: c._id, role: 'user', fraudFlags: { $size: 0 }, noWelcomeGifts: { $ne: true } /* #976 */, $or: [{ 'secondDepositOffer.status': { $exists: false } }, { 'secondDepositOffer.status': 'none' }] }, { $set: { secondDepositOffer: { status: 'offered', pct: sd.pct, offeredAt: now, expiresAt: new Date(now.getTime() + sd.validHours * 3600000), usedAt: null } } }, { new: true });
       if (!user) continue;
       const vars = { username: user.username, pct: sd.pct, hours: sd.validHours };
-      const text = await renderSystemCommand('/sys_second_deposit_offer', '🎁 {username}, tu PRÓXIMA carga tiene un {pct}% EXTRA de regalo. Vale por {hours} horas: cargá ahora y se acredita solo.', vars);
-      await _sendUserSystemMessage(user, text, { metadata: { kind: 'second_deposit', pct: sd.pct }, push: { title: `🎁 ${sd.pct}% extra en tu próxima carga`, body: `Vale ${sd.validHours} horas. Cargá y se acredita solo.` } });
+      const text = await renderSystemCommand('/sys_second_deposit_offer', '🎁 {username}, tu PRÓXIMA carga tiene un {pct}% EXTRA de regalo. Vale por {hours} horas: cargá ahora y se acredita solo (se juega en slots).', vars);
+      await _sendUserSystemMessage(user, text, { metadata: { kind: 'second_deposit', pct: sd.pct }, push: { title: `🎁 ${sd.pct}% extra en tu próxima carga`, body: `Vale ${sd.validHours} horas. Cargá y se acredita solo (se juega en slots).` } });
       n++; if (n >= 150) break;
     }
     if (n) logger.info('[segunda-carga] ofrecidos: ' + n);
