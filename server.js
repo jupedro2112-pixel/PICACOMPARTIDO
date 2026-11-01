@@ -23626,7 +23626,7 @@ app.get('/api/admin/shift-review', authMiddleware, adminMiddleware, async (req, 
     const receipts = rc.map((c) => { const m = MV.get(c.matchedMovementId) || {}; return { id: c.id, userId: c.userId, username: c.username, at: c.createdAt, credited: c.bankMatchStatus === 'auto_charged', amount: m.amount || null, fromName: m.fromName || null,
       recheck: c.aiRetryPending ? 'pendiente (la IA lo vuelve a leer sola)' : (c.aiRecheck ? (c.aiRecheck.ok ? 'OK' : (c.aiRecheck.ok === false ? '⚠️ ' + c.aiRecheck.note : c.aiRecheck.note)) : '—'), problem: !!(c.aiRecheck && c.aiRecheck.ok === false), review: c.shiftReview || null }; });
     const bank = (await getConfig('bankLowBalanceState', null)) || null;
-    res.json({ success: true, hours, payouts, receipts, bank, bankCfg: await getBankLowConfig(),
+    res.json({ success: true, hours, payouts, receipts, bank, bankCfg: req.user.role === 'admin' ? await getBankLowConfig() : null, canEditConfig: req.user.role === 'admin', // #1010: sólo el admin cambia el mínimo
       pending: payouts.filter((p) => !p.review).length + receipts.filter((r) => !r.review && (r.problem || r.credited)).length });
   } catch (e) { logger.warn('[para-revisar] ' + e.message); res.status(500).json({ error: 'No se pudo cargar' }); }
 });

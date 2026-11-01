@@ -6426,7 +6426,7 @@ async function loadShiftReview() {
         const b = j.bank;
         if (b && b.low) html += '<div style="padding:8px 12px;border-radius:10px;background:var(--p-red-soft,#fbecee);border:1px solid var(--p-red,#d23a4e);margin-bottom:8px;font-size:13px"><b>🏦 SALDO BAJO EN EL BANCO: ' + fm(b.balance) + '</b> (mínimo ' + fm(b.minArs) + ') · fondeá la cuenta: sin plata los retiros automáticos fallan.</div>';
         else if (b && b.balance != null) html += '<div style="font-size:12px;color:var(--p-muted,#767676);margin-bottom:8px">🏦 Saldo del banco: ' + fm(b.balance) + ' (alerta si baja de ' + fm(b.minArs) + ') · ' + fd(b.checkedAt) + '</div>';
-        if (j.bankCfg) html += '<div style="font-size:12px;margin:-4px 0 8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">Avisar si el saldo del banco baja de $ <input type="number" id="bankLowMin" min="0" step="10000" value="' + Number(j.bankCfg.minArs || 0) + '" style="width:120px"> <button class="btn-secondary btn-small" onclick="saveBankLow()">Guardar</button></div>';
+        if (j.bankCfg && j.canEditConfig) html += '<div style="font-size:12px;margin:-4px 0 8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">Avisar si el saldo del banco baja de $ <input type="number" id="bankLowMin" min="0" step="10000" value="' + Number(j.bankCfg.minArs || 0) + '" style="width:120px"> <button class="btn-secondary btn-small" onclick="saveBankLow()">Guardar</button></div>';
         html += '<b style="font-size:13px">💸 Retiros automáticos con alguna señal (' + j.payouts.length + ')</b>';
         html += j.payouts.length ? j.payouts.map(function (p) {
             return '<div style="border-top:1px solid var(--p-border,#e2e2e2);padding:7px 0;font-size:12.5px' + (p.review ? ';opacity:.6' : '') + '"><b>' + escapeHtml(p.username) + '</b> · ' + fm(p.amount) + ' · ' + fd(p.paidAt) + ' (salió en ' + p.minutes + ' min)' +
@@ -6467,6 +6467,7 @@ async function loadPayReview() {
         if (!r.ok) { box.innerHTML = '<span style="color:#ff8080;">' + escapeHtml(j.error || 'Error') + '</span>'; return; }
         _prItems = j.items || [];
         const min = document.getElementById('prMinArs'), auto = document.getElementById('prAutoBelow'), st = document.getElementById('prState'), sb = document.getElementById('prSaveBtn');
+        { const _cb = document.getElementById('payReviewCfg'); if (_cb) _cb.style.display = j.canEditConfig ? '' : 'none'; } // #1010 (owner): la regla la ven y cambian sólo los administradores
         if (min) { min.value = j.config.minArs; min.disabled = !j.canEditConfig; } if (auto) { auto.checked = j.config.autoBelow !== false; auto.disabled = !j.canEditConfig; } if (sb) sb.style.display = j.canEditConfig ? '' : 'none';
         const dmi = document.getElementById('prDelayMin'); if (dmi) { dmi.value = j.config.delayMin || 30; dmi.disabled = !j.canEditConfig; } // #593
         const pto = document.getElementById('prTrustedOnly'), ptd = document.getElementById('prTrustedDays'), ptm = document.getElementById('prTrustedMinDep'); // #881
