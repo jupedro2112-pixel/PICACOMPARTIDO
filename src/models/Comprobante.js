@@ -85,6 +85,11 @@ const comprobanteSchema = new mongoose.Schema({
   reviewedAt: { type: Date, default: null },
   reviewNote: { type: String, default: null },
   reviewTxId: { type: String, default: null },
+  // #1010: IA caída + cliente de confianza ⇒ se acreditó sin leer (con la transferencia de su cuenta de siempre) y se re-revisa cuando vuelve la IA.
+  trustedFallback: { type: Boolean, default: false },
+  aiRetryPending: { type: Boolean, default: false, index: true },
+  aiRetries: { type: Number, default: 0 },
+  aiRecheck: { type: mongoose.Schema.Types.Mixed, default: null },
   createdAt: { type: Date, default: Date.now, index: true }
 }, {
   timestamps: true

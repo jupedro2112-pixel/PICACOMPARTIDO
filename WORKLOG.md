@@ -54,6 +54,18 @@
   lote). NO aplica: Bonificación manual del panel, devoluciones de retiro, comisiones de referidos, código de bienvenida (montos fijos del panel).
 - Owner: "lo del aviso sólo slots no hace falta" ⇒ se sacó "(se juega en slots)" de los textos NUEVOS de #1010 (2ª carga, aviso de la ruleta, premio
   del giro gratis). PWA v655.
+- TODO AUTOMÁTICO (owner: "pagos 100% automáticos siempre, que sólo frene el antifraude; avisar al cliente y a soporte cuando quede retenido;
+  saquemos las trabas de que tiene que ser cliente para retirar; manual cuando se trabe la API, pero a los clientes de confianza que siempre mandan
+  bien el comprobante que les funcione igual y se revise después; que el personal esté enfocado en soporte"):
+  - RETIROS: sin umbral de monto ni regla de confianza; sólo frena el antifraude (o el interruptor general / hgcash sin configurar). Panel →
+    Confirmación de pagos con la regla nueva (campos viejos ocultos).
+  - Al frenarse: mensaje al cliente (`/sys_withdraw_review`) + push; cartel fijo en la app "tu retiro está en revisión / se está procesando"
+    (`GET /api/withdrawal/hold`, withdraw.js `loadHold`); en el panel, banner `chatPayoutHoldBanner` al abrir el chat + nota interna cuando el
+    cliente escribe (una cada 2 h). También avisa cuando el pago automático se frena por observación en el momento de pagar.
+  - COMPROBANTES: IA caída + cliente de confianza ⇒ se acredita con la transferencia de su cuenta conocida y se re-revisa al volver la IA
+    (`trustedFallback`, `aiRetryPending`, `_receiptAiRecheckTick`). Guard de duplicados de hgcash sólo ante carga MANUAL reciente.
+  - 📈 Negocio → "⏱️ Dónde nos trabamos" (`_bizStalls`): % de retiros y cargas que salieron solos, motivos de freno, minutos hasta el pago,
+    comprobantes sin leer. Admin SW v226, PWA v656.
 
 ### 1009. 📈 TABLERO DEL NEGOCIO (2026-11-01)
 - Owner: "armá el tablero de negocio completo y mostrá adentro cómo funciona".

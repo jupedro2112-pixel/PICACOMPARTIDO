@@ -3030,3 +3030,10 @@ html[data-theme="dark"] .srt-tk-list summary { color: var(--srt-lite); }
 .dup-acc-bar .dab-more { display: none; margin-top: 4px; font-weight: 500; white-space: normal; }
 .dup-acc-bar.open .dab-more { display: block; }
 .dup-acc-bar.open .dab-txt { white-space: normal; }
+
+/* #1010: cartel fijo "tu retiro está en revisión / se está procesando" (withdraw.js loadHold). Colores con tokens --p-* (modo nocturno incluido). */
+.wd-hold-bar { position: fixed; left: 12px; right: 12px; bottom: calc(70px + var(--sab, 0px)); z-index: 55; display: flex; flex-direction: column; gap: 2px;
+  text-align: left; padding: 10px 14px; border-radius: 14px; border: 1px solid var(--p-border); background: var(--p-card); color: var(--p-text);
+  box-shadow: var(--p-shadow); font-family: var(--p-font); font-size: 13.5px; cursor: pointer; max-width: 560px; margin: 0 auto; }
+.wd-hold-bar small { color: var(--p-muted); font-size: 11.5px; line-height: 1.35; }
+.wd-hold-bar.is-review { border-color: var(--p-red); background: var(--p-red-soft); }

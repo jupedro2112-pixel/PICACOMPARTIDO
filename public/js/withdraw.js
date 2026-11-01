@@ -393,6 +393,7 @@ VIP.withdraw = (function () {
                 try { if (VIP.home && VIP.home.onWithdrawRequested) VIP.home.onWithdrawRequested(_wdAmt); } catch (_) {} // #714: cartel ¡Felicitaciones!
                 setTimeout(() => VIP.chat.loadMessages(), 500);
                 setTimeout(() => VIP.ui.syncBalance(), 1500);
+                setTimeout(loadHold, 4000); // #1010: si quedó en revisión, aparece el cartel
                 return;
             }
 
@@ -429,7 +430,40 @@ VIP.withdraw = (function () {
         _showStep('otp-phone');
     }
 
+    // #1010 (owner): "que el cliente vea SIEMPRE que tiene el pago retenido porque está en revisión". Cartel fijo abajo mientras haya un retiro
+    // en revisión (o que tarda en salir). Tocar abre Soporte. No muestra el motivo interno del antifraude.
+    let _holdTimer = null;
+    async function loadHold() {
+        try {
+            if (!(VIP.state && VIP.state.currentToken)) return;
+            const r = await fetch(`${VIP.config.API_URL}/api/withdrawal/hold`, { headers: { 'Authorization': `Bearer ${VIP.state.currentToken}` } });
+            const j = await r.json().catch(() => ({}));
+            _paintHold(j && j.hold);
+        } catch (_) {}
+    }
+    function _paintHold(h) {
+        let el = document.getElementById('wdHoldBar');
+        if (!h) { if (el) el.hidden = true; return; }
+        if (!el) {
+            el = document.createElement('button'); el.type = 'button'; el.id = 'wdHoldBar'; el.className = 'wd-hold-bar';
+            el.onclick = () => { try { if (VIP.home && VIP.home.openSupport) VIP.home.openSupport(); } catch (_) {} };
+            document.body.appendChild(el);
+        }
+        const amt = '$' + Number(h.amount || 0).toLocaleString('es-AR');
+        el.classList.toggle('is-review', h.kind === 'review');
+        el.innerHTML = h.kind === 'review'
+            ? '<b>🔎 Tu retiro de ' + amt + ' está en revisión</b><small>Lo revisa una persona del equipo · te avisamos apenas salga · tocá para hablar con Soporte</small>'
+            : '<b>⏳ Tu retiro de ' + amt + ' se está procesando</b><small>Sale solo por el banco · tocá para hablar con Soporte</small>';
+        el.hidden = false;
+    }
+    document.addEventListener('DOMContentLoaded', () => {
+        setTimeout(loadHold, 2500);
+        _holdTimer = setInterval(loadHold, 120000);
+        document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadHold(); });
+    });
+
     return {
+        loadHold,
         openWithdrawModal,
         handleWithdrawSubmit,
         sendWithdrawOtp,

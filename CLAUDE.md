@@ -276,11 +276,14 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`). Git user: j
   **#529 REFERIDOS 2.0:** para PAGAR o MOSTRAR un % de referidos usar SIEMPRE `referralTierService.resolveReferralRate(user)`
   (override > niveles > plano). `utils/referralRate` es sólo el % plano (fuente única `Config['referralCommissionPct']`). Nada de premios
   en plata por cantidad de referidos (estafable). Pago automático el día 1 (`_runMonthlyReferralPayout`); niveles apagados por defecto.
-  **#881:** el pago automático (menores al umbral) sale SÓLO a clientes de confianza (`_payoutTrust`, `payoutReview.trustedOnly`, activable en el
-  panel); el modal de retiro usa `available` y muestra el rollover (`_rolloverSummary`). Nunca mostrar/validar contra `balance`.
+  **#881 → #1010:** ya NO hay regla de "cliente de confianza" ni de monto para retirar (owner: "todo libre para todos"); el modal de retiro usa
+  `available` y muestra el rollover (`_rolloverSummary`). Nunca mostrar/validar contra `balance`.
   **#879 RETIRO:** el teléfono se verifica por SMS UNA vez; después no hay código por retiro (`Config['withdrawOtpRequired']=false`, owner).
-  **#566/#814 CONFIRMACIÓN DE PAGOS:** retiros MAYORES a `Config['payoutReview'].minArs` ($100.000) esperan OK humano (Panel → Confirmación
-  de pagos); el resto se paga SOLO por hgcash al pedirlo vía `_payPendingPayout` (misma función que el botón Pagar: tocar el pago = tocar ahí)
+  **#566/#814 → #1010 RETIROS 100% AUTOMÁTICOS:** todo retiro se paga SOLO por hgcash al pedirlo vía `_payPendingPayout` (misma función que el
+  botón Pagar). Sólo va a Confirmación de pagos lo que frena el ANTIFRAUDE (`_fraudCheckUser`: bloqueo / observación / 'unchecked' / bono, retiro
+  grande tras un regalo, juego espejo) o si `payoutReview.autoBelow` está apagado / hgcash sin configurar. Al frenarse: `_notifyWithdrawHold`
+  (cliente, `/sys_withdraw_review`), cartel en la app (`GET /api/withdrawal/hold`) y en el chat del panel (`chatPayoutHoldBanner`), y nota interna
+  si el cliente escribe (`_payoutHoldSupportNote`). Un freno NUEVO de retiros tiene que avisar igual.
   y, si falla por algo pasajero, `_payoutAutoRetryTick` lo reintenta cada 10 min (6 veces, sólo casos que no pueden descontar dos veces).
   **#562 WEBHOOKS SALIENTES** (`docs/ESPEC-WEBHOOKS-SALIENTES.md`): todo flujo NUEVO de registro o de carga acreditada llama
   `outboundWebhook.notify('registro'|'carga', user, {amount, firstDeposit, transactionId})` (y `'retiro'` al pagar un retiro). Secretos de los
@@ -358,6 +361,10 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`). Git user: j
 - **UN RETIRO POR CLIENTE (#1008):** pagar un retiro llama `_closeOtherPayouts` (anula los otros pendientes seguros del cliente); un flujo nuevo
   que marque un retiro pagado tiene que llamarla. Pagos a confirmar muestra una tarjeta por cliente.
 - **BONOS SÓLO EN SLOTS (#1007):** los textos viejos aclaran "se juega en slots"; desde #1010 el owner pidió NO agregarlo en los avisos nuevos.
+- **COMPROBANTE SIN LECTURA (#1010):** si la IA de comprobantes falla y el cliente es de CONFIANZA (`_receiptTrust`: 7+ días, 3+ cargas, sin marcas
+  ni comprobantes repetidos/rechazados), `_receiptTrustedFallback` acredita con la transferencia que llegue de una cuenta que ya usó (`_knownSendersOf`,
+  sólo si hay UNA) y `_receiptAiRecheckTick` re-lee la imagen cuando vuelve la IA (si no coincide ⇒ cliente en observación + nota PRIORIDAD ALTA).
+  El guard de carga duplicada (`duplicateGuardMinutes`) sólo frena si la carga reciente del mismo monto fue MANUAL.
 - **TOPE ÚNICO POR REGALO (#1010):** `Config['giftMaxArs']` ($15.000). Un regalo NUEVO pasa su monto por `_capGift` ANTES de grabar y acreditar
   (reembolsos: `_calcRefundCapped`, nunca `refundTiers.calcRefund` directo). Fuera del tope: Bonificación manual, devoluciones, referidos.
 - **SESIÓN Y BASE LENTA (#1006):** `authMiddleware` devuelve 401 SÓLO por errores del JWT; un error de la base es 503 `DB_BUSY` (si no, el panel y la

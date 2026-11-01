@@ -1974,6 +1974,7 @@ async function selectConversation(userId, username) {
     // Reset banner de bloqueo y botones hasta que loadUserInfo confirme el estado
     if (elements.chatBlockedBanner) elements.chatBlockedBanner.style.display = 'none';
     { const _fb = document.getElementById('chatFraudBanner'); if (_fb) { _fb.style.display = 'none'; _fb.innerHTML = ''; } }
+    { const _ph = document.getElementById('chatPayoutHoldBanner'); if (_ph) { _ph.style.display = 'none'; _ph.innerHTML = ''; } } // #1010
     // Idem el del bono: si no se limpia, al cambiar de chat el agente vería el bono
     // del cliente ANTERIOR y podría dárselo a quien no le corresponde.
     { const _bb = document.getElementById('chatBonusBanner'); if (_bb) { _bb.style.display = 'none'; _bb.innerHTML = ''; } }
@@ -2828,6 +2829,7 @@ async function loadUserInfo(userId) {
 
         // Alerta de posible multicuenta (fire-and-forget; nunca frena el chat).
         renderFraudBanner(userId);
+        renderPayoutHoldBanner(userId); // #1010: retiro retenido en revisión / procesándose
 
         // Bono del 100% en la próxima carga. Se dibuja con los datos que ya trajo
         // `user`, sin pedir nada extra al servidor.
@@ -4856,6 +4858,27 @@ async function markWelcomeCodeBonusUsed(userId) {
 // === Alerta de POSIBLE MULTICUENTA en el header del chat ===
 // Consulta el fraud-check del usuario y, si es sospechoso, muestra un banner rojo
 // con el detalle (qué comparte y con qué cuentas) + botón para bloquear en el momento.
+// #1010 (owner): "cuando el cliente hable al soporte por el pago, que de nuestro lado avise que tiene el pago retenido porque está en revisión".
+async function renderPayoutHoldBanner(userId) {
+    const el = document.getElementById('chatPayoutHoldBanner');
+    if (!el) return;
+    el.style.display = 'none'; el.innerHTML = '';
+    try {
+        const r = await authFetch('/api/admin/users/' + encodeURIComponent(userId) + '/payout-hold');
+        if (!r.ok) return;
+        const j = await r.json();
+        if (userId !== activeConversationId || !j || !j.hold) return;
+        const h = j.hold;
+        const since = new Date(h.since).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+        const review = h.kind === 'review';
+        el.innerHTML = '<div style="padding:9px 14px;background:' + (review ? 'var(--p-red-soft, #fbecee)' : 'var(--p-surface, #f1f1f1)') + ';color:var(--p-text, #111);border-bottom:2px solid ' + (review ? 'var(--p-red, #d23a4e)' : 'var(--p-border, #e2e2e2)') + ';font-size:12.5px;">'
+            + '<strong>' + (review ? '⏸️ PAGO RETENIDO EN REVISIÓN' : '⏳ RETIRO PROCESÁNDOSE') + ': ' + formatMoney(h.amount) + '</strong> · pedido ' + escapeHtml(since)
+            + (review ? '<div style="margin-top:3px;">Motivo: ' + escapeHtml(h.reason || 'sin detalle') + '. Si pregunta: <i>"tu retiro está en revisión de seguridad, te avisamos apenas salga"</i>. Se resuelve en <a href="#" onclick="switchSection(\'payReview\');return false;">Confirmación de pagos</a>.</div>'
+                : '<div style="margin-top:3px;">Sale solo por el banco. Si pregunta: <i>"ya está en proceso"</i>.</div>')
+            + '</div>';
+        el.style.display = 'block';
+    } catch (e) { /* nunca romper el chat */ }
+}
 async function renderFraudBanner(userId) {
     const banner = document.getElementById('chatFraudBanner');
     if (!banner) return;
@@ -6477,7 +6500,7 @@ async function payReviewSaveCfg() {
     try {
         const r = await authFetch('/api/admin/payouts/review-config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ minArs, autoBelow, delayMin, trustedOnly, trustedDays, trustedMinDeposits: Number.isFinite(trustedMinDeposits) ? trustedMinDeposits : 3 }) });
         const j = await r.json(); if (!r.ok) { showToast(j.error || 'No se pudo guardar', 'error'); return; }
-        showToast('Regla guardada: más de ' + fmtARS(j.config.minArs) + ' se revisa' + (j.config.autoBelow ? '; los menores salen solos' + (j.config.trustedOnly ? ' sólo a clientes de confianza (+' + j.config.trustedDays + ' días, ' + j.config.trustedMinDeposits + '+ cargas)' : ' para todos') : ''), 'success');
+        showToast(j.config.autoBelow ? 'Regla guardada: todos los retiros salen solos (sólo frena el antifraude)' : 'Regla guardada: pago automático APAGADO, todo a mano', 'success'); // #1010
     } catch (_) { showToast('Error de conexión', 'error'); }
 }
 async function payReviewApprove(id) {
@@ -16646,6 +16669,25 @@ function _bizRender(b) {
         box1('✨', 'Giros dorados', n(rl.gold.spins), n(rl.gold.perDay) + ' por día · ' + n(rl.gold.users) + ' clientes', '#f59e0b') +
         box1('💰', 'Plata dada por la ruleta', money(rl.free.cash + rl.gold.cash), n(rl.free.pctWins + rl.gold.pctWins) + ' ganaron % extra (cuesta sólo si cargan)', C.na) +
         '</div>';
+    // #1010: DÓNDE NOS TRABAMOS (retiros y cargas que no salieron solos).
+    const st = b.stalls;
+    if (st && st.payouts && st.deposits) {
+        const P = st.payouts, D = st.deposits;
+        const autoRate = P.requested ? P.paidAuto / P.requested : null;
+        const depTot = D.auto + D.manual + D.review + D.noMatch + D.awaitingPlatform; const depRate = depTot ? D.auto / depTot : null;
+        const mins = (v) => v == null ? '—' : (v >= 120 ? Math.round(v / 60) + ' h' : n(v) + ' min');
+        const list = (arr) => (arr || []).length ? (arr || []).map(function (r) { return '<li>' + escapeHtml(r.label) + ': <b>' + n(r.n) + '</b></li>'; }).join('') : '<li>ninguno 🎉</li>';
+        html += h('⏱️ Dónde nos trabamos') + info('Lo que NO salió solo en el período. La meta es que casi todo sea automático y que el equipo se dedique a Soporte. Retiros: sólo los frena el antifraude. Cargas: las que el banco o el comprobante no pudieron cerrar solos.') +
+            '<div class="in-grid">' +
+            box1('💸', 'Retiros que salieron solos', pc(autoRate), n(P.paidAuto) + ' de ' + n(P.requested) + ' pedidos · tardan ' + mins(P.autoMinutes), autoRate == null ? C.na : (autoRate >= 0.9 ? C.good : (autoRate >= 0.7 ? C.ok : C.bad))) +
+            box1('🔎', 'Retiros frenados (revisión)', n(P.held), 'esperan AHORA: ' + n(P.waitingNow) + ' · a mano tardan ' + mins(P.manualMinutes), P.waitingNow > 0 ? C.ok : C.good) +
+            box1('🏦', 'Cargas que entraron solas', pc(depRate), n(D.auto) + ' de ' + n(depTot) + ' transferencias · a mano ' + n(D.manual), depRate == null ? C.na : (depRate >= 0.85 ? C.good : (depRate >= 0.65 ? C.ok : C.bad))) +
+            box1('🧾', 'Comprobantes sin leer (IA)', n(D.aiFailed + D.aiFallback), n(D.aiFallback) + ' siguieron solos (clientes de confianza) · ' + n(D.aiFailed) + ' a mano', (D.aiFailed > 0 ? C.ok : C.good)) +
+            '</div>' +
+            '<div class="card" style="font-size:.82rem;margin-top:6px"><b>Por qué se frenaron los retiros</b><ul style="margin:4px 0 8px 18px">' + list(P.reasons) + '</ul>' +
+            '<b>Cargas que quedaron en revisión (' + n(D.review) + ') · sin dueño ' + n(D.noMatch) + ' · esperando plataforma ' + n(D.awaitingPlatform) + '</b><ul style="margin:4px 0 8px 18px">' + list(D.reviewReasons) + '</ul>' +
+            '<span style="color:#9ab">Otras imágenes: ' + n(D.notReceipt) + ' no eran comprobante · ' + n(D.duplicate) + ' comprobantes repetidos.</span></div>';
+    }
     // #1010: en qué se fue lo regalado DEL PERÍODO (la tabla de arriba mide regalos de hace 7-37 días).
     const gbt = m.giftsByType || [];
     if (gbt.length) html += h('🧾 En qué se fue lo regalado (' + escapeHtml(b.range.label) + ')') + info('Total por tipo de regalo en el período elegido, sobre ' + money(m.deposits) + ' cargados.') +
@@ -18069,8 +18111,7 @@ async function fxLoadOtherCfg() {
     const row = (ico, title, state, help, sec) => '<div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;padding:7px 0;border-top:1px dashed rgba(255,255,255,.12)"><div style="flex:1;min-width:220px"><b>' + ico + ' ' + title + '</b> — <span style="color:#fbbf24">' + state + '</span><div style="color:#9ab;font-size:.75rem">' + help + '</div></div><button class="btn btn-secondary btn-sm" onclick="switchSection(\'' + sec + '\')">Ir a cambiarlo ↗</button></div>';
     const c = (pr && pr.config) || {};
     box.innerHTML =
-        row('💸', 'Retiros que siempre revisa una persona', pr ? 'mayores a ' + money(c.minArs) + (c.autoBelow === false ? ' · ⚠️ ningún retiro sale solo' : '') : '—', 'Los más chicos salen solos por el banco (si pasan el antifraude).', 'payReview') +
-        row('🤝', 'Pago automático sólo a clientes de confianza', pr ? (c.trustedOnly !== false ? 'ENCENDIDO · cuenta de más de ' + (c.trustedDays || 7) + ' días y ' + (c.trustedMinDeposits != null ? c.trustedMinDeposits : '?') + ' cargas' : 'apagado') : '—', 'Si no cumple, el retiro espera a una persona aunque sea chico.', 'payReview') +
+        row('💸', 'Retiros automáticos', pr ? (c.autoBelow === false ? '⚠️ APAGADO: ningún retiro sale solo' : 'TODOS salen solos, cualquier monto y cliente') : '—', '#1010: sólo los frena el antifraude (y el cliente ve "en revisión").', 'payReview') +
         row('📱', 'Código SMS en cada retiro', cf ? (cf.withdrawOtpRequired !== false ? 'ENCENDIDO' : 'apagado (sólo teléfono verificado una vez)') : '—', 'Frena a quien entra a una cuenta ajena: el código llega al celular del dueño.', 'commands') +
         row('🏧', 'Retiro mínimo', cf && cf.withdrawMinArs != null ? money(cf.withdrawMinArs) : '—', 'Evita retiros chiquitos de prueba / de cuentas armadas.', 'commands') +
         row('🎯', 'Rollover de los regalos', ro ? 'bonos ×' + ro.bonos + ' · cargas ×' + (ro.depositX != null ? ro.depositX : '?') : '—', 'Todo regalo hay que jugarlo antes de retirarlo: es la defensa principal contra el abuso de bonos.', 'strategy');

@@ -2262,6 +2262,100 @@ async function _depositReviewConsume(userId, amount, by) {
 // Analiza una imagen enviada por un cliente: detecta si es comprobante, lo
 // registra (colección Comprobante) y avisa SÓLO a los admins si es duplicado o
 // no. Pensado para correr fire-and-forget: NUNCA frena la entrega del mensaje.
+// ===== #1010 COMPROBANTE SIN LECTURA PARA CLIENTES DE CONFIANZA (owner 2026-11-01) =====
+// "que sea manual cuando se trabe la API, pero para clientes activos que siempre envían bien el comprobante que funcione igual aunque falle: ellos
+// no se van a dar cuenta de que no analizamos su comprobante y pueden seguir cargando o retirando; para clientes de más de una semana; y siempre,
+// cuando vuelva, revisemos bien que esté todo OK".
+//  • Confianza (_receiptTrust): cuenta de 7+ días · 3+ cargas reales · sin marcas de fraude / cuenta secundaria / bloqueo / observación ·
+//    sin comprobantes repetidos ni rechazados en 30 días · con al menos una transferencia suya ya acreditada (para conocer su cuenta de origen).
+//  • Si la IA falla: el comprobante entra a la cola como 'trustedFallback' (sin datos leídos) y se acredita con la transferencia ENTRANTE que venga
+//    de una cuenta (CBU o titular) que el cliente YA usó antes, dentro de la ventana de hgcash. Si hay 0 o 2+ candidatas, espera / queda manual.
+//    Al cliente le llega el acuse de siempre (no se le pide reenviar).
+//  • _receiptAiRecheckTick (cada 10 min): cuando la IA vuelve, se re-lee la imagen y se compara con lo acreditado. Si no es comprobante, el monto
+//    no coincide o el comprobante ya lo había usado alguien ⇒ nota PRIORIDAD ALTA en el chat + cliente "en observación" (sus retiros pasan a revisión).
+async function _receiptTrust(userId) {
+  const u = await User.findOne({ id: String(userId) }).select('createdAt fraudFlags duplicateOf isBlocked fraudReview').lean();
+  if (!u) return { ok: false, why: 'cliente no encontrado' };
+  if ((Date.now() - new Date(u.createdAt || 0).getTime()) < 7 * 86400000) return { ok: false, why: 'cuenta de menos de 7 días' };
+  if ((u.fraudFlags || []).length || u.duplicateOf || u.isBlocked || (u.fraudReview && u.fraudReview.status === 'watch')) return { ok: false, why: 'cuenta marcada' };
+  const since30 = new Date(Date.now() - 30 * 86400000);
+  const [nDep, badRc] = await Promise.all([
+    Transaction.countDocuments({ ..._REAL_DEP, userId: String(userId), description: { $not: /PRUEBA/i } }),
+    Comprobante.exists({ userId: String(userId), createdAt: { $gte: since30 }, $or: [{ status: 'duplicate' }, { reviewStatus: 'rejected' }] })
+  ]);
+  if (nDep < 3) return { ok: false, why: nDep + ' cargas' };
+  if (badRc) return { ok: false, why: 'comprobante repetido o rechazado en 30 días' };
+  return { ok: true };
+}
+async function _knownSendersOf(userId) {
+  const rows = await BankMovement.find({ matchedUserId: String(userId), direction: 'Inbound', matchStatus: { $in: ['auto_charged', 'manual_charged'] } }).sort({ createdAt: -1 }).limit(60).select('fromCBU fromName').lean();
+  const cbus = new Set(), names = new Set();
+  for (const r of rows) { const d = _digits(r.fromCBU); if (d.length >= 20) cbus.add(d); const n = _normName(r.fromName); if (n.length >= 5) names.add(n); }
+  return { cbus, names };
+}
+function _fromKnownSender(m, ks) { const d = _digits(m.fromCBU); if (d.length >= 20 && ks.cbus.has(d)) return true; const n = _normName(m.fromName); return n.length >= 5 && ks.names.has(n); }
+async function _receiptTrustedFallback({ userId, username, content, messageId, error }) {
+  const t = await _receiptTrust(userId); if (!t.ok) return false;
+  const ks = await _knownSendersOf(userId); if (!ks.cbus.size && !ks.names.size) return false; // sin cuenta de origen conocida: manual
+  let imageHash = null; try { if (typeof content === 'string' && content.startsWith('data:')) { const m = content.match(/;base64,(.*)$/s); if (m) imageHash = crypto.createHash('sha256').update(m[1]).digest('hex'); } } catch (_) {}
+  if (imageHash && await Comprobante.exists({ isComprobante: true, imageHash })) return false; // la misma imagen ya se usó: camino normal (manual)
+  const c = { id: uuidv4(), userId, username, messageId, isComprobante: true, aiConfidence: 0, amount: null, status: 'error', errorReason: String(error || '').slice(0, 300),
+    imageHash, model: comprobanteAi.getModel(), trustedFallback: true, aiRetryPending: true, aiRetries: 0, bankMatchStatus: 'none', reviewStatus: 'pending', reviewQueuedAt: new Date(), createdAt: new Date() };
+  await Comprobante.create(c);
+  const ackTxt = await renderSystemCommand('/sys_receipt_received', RECEIPT_RECEIVED_DEFAULT, { amount: '' });
+  if (ackTxt) await _sendUserSystemMessage({ id: userId, username }, ackTxt, { metadata: { kind: 'deposit_pending', comprobanteId: c.id, amount: 0 } });
+  await _emitAdminOnlyChatNote(userId, username, '🧾 La IA no pudo leer este comprobante (' + String(error || 'error').slice(0, 80) + '). Cliente de CONFIANZA ⇒ se acredita solo con la transferencia que llegue de su cuenta de siempre y la IA lo vuelve a revisar cuando se normalice. Si no llega, queda en Cargas pendientes.').catch(() => {});
+  _emitDepositReviewUpdate(userId, { action: 'queued', id: c.id, username, amount: 0 });
+  _chatAutoCloseIfHandled(userId, 'comprobante recibido (respaldo IA)').catch(() => {});
+  await _trustedFallbackMatch({ comprobante: c, ks });
+  logger.info(`[comprobante] respaldo sin IA para ${username} (cliente de confianza)`);
+  return true;
+}
+// Busca la transferencia del cliente (comprobante sin leer → movimiento) o el comprobante sin leer (movimiento → cliente). Sólo si hay UNA.
+async function _trustedFallbackMatch({ comprobante, ks, movement }) {
+  const cfg = await getHgcashConfig(); if (!cfg.enabled) return false;
+  const since = new Date(Date.now() - (cfg.windowMinutes || 60) * 60000);
+  if (comprobante) {
+    const ms = (await BankMovement.find({ direction: 'Inbound', matchStatus: 'pending', createdAt: { $gte: since } }).sort({ createdAt: -1 }).limit(80).lean())
+      .filter((m) => _statusAccredited(m.status, cfg) && _fromKnownSender(m, ks));
+    if (ms.length !== 1) return false;
+    await hgcashAutoCarga({ movement: ms[0], comprobante, mode: cfg.mode }); return true;
+  }
+  if (movement) {
+    const cs = await Comprobante.find({ trustedFallback: true, autoCharged: { $ne: true }, bankMatchStatus: { $in: ['none', 'pending'] }, reviewStatus: 'pending', createdAt: { $gte: since } }).sort({ createdAt: -1 }).limit(30).lean();
+    const hits = [];
+    for (const c of cs) { if (_fromKnownSender(movement, await _knownSendersOf(c.userId))) hits.push(c); }
+    if (hits.length !== 1) return false;
+    await hgcashAutoCarga({ movement, comprobante: hits[0], mode: cfg.mode }); return true;
+  }
+  return false;
+}
+async function _receiptAiRecheckTick() {
+  try {
+    if (!comprobanteAi.isEnabled() || !(await _cronClaim('receiptairecheck', 8 * 60000))) return;
+    const due = await Comprobante.find({ aiRetryPending: true, createdAt: { $gte: new Date(Date.now() - 72 * 3600000) } }).sort({ createdAt: 1 }).limit(10).lean();
+    for (const c of due) {
+      const msg = c.messageId ? await Message.findOne({ id: c.messageId }).select('content').lean() : null;
+      if (!msg || !msg.content) { await Comprobante.updateOne({ id: c.id }, { $set: { aiRetryPending: false, aiRecheck: { at: new Date(), ok: null, note: 'la imagen ya no está' } } }); continue; }
+      const r = await comprobanteAi.analyzeComprobante(msg.content);
+      if (!r.ok) { const n = Number(c.aiRetries || 0) + 1; await Comprobante.updateOne({ id: c.id }, { $set: { aiRetries: n, aiRetryPending: n < 12 } }); if (n >= 12) await _emitAdminOnlyChatNote(c.userId, c.username, '🧾 La IA no pudo revisar el comprobante que se acreditó sin leer (12 intentos). Miralo a mano en el chat.').catch(() => {}); continue; }
+      const fresh = await Comprobante.findOne({ id: c.id }).lean();
+      const mv = fresh && fresh.matchedMovementId ? await BankMovement.findOne({ movementId: fresh.matchedMovementId }).select('amount').lean() : null;
+      const opKey = _normComprobanteKey(r.operationNumber); const coel = r.coelsaId ? 'coelsa' + _normComprobanteKey(r.coelsaId) : null;
+      const dupOf = (opKey || coel) ? await Comprobante.findOne({ id: { $ne: c.id }, isComprobante: true, dedupeKey: { $in: [opKey, coel].filter(Boolean) } }).select('username userId').lean() : null;
+      const problems = [];
+      if (!r.isComprobante) problems.push('la imagen NO es un comprobante');
+      if (mv && Number(r.amount) > 0 && !_amountsEqual(r.amount, mv.amount)) problems.push(`el comprobante dice $${Number(r.amount).toLocaleString('es-AR')} y se acreditaron $${Number(mv.amount).toLocaleString('es-AR')}`);
+      if (dupOf) problems.push('el comprobante ya lo había enviado ' + (String(dupOf.userId) === String(c.userId) ? 'el mismo cliente' : '@' + dupOf.username));
+      await Comprobante.updateOne({ id: c.id }, { $set: { aiRetryPending: false, amount: r.amount || null, operationNumber: r.operationNumber || null, coelsaId: r.coelsaId || null, originHolder: r.originHolder || null, originCbu: r.originCbu || null, paymentDate: r.paymentDate || null, rawText: r.rawText || null, dedupeKey: opKey || coel || null, aiRecheck: { at: new Date(), ok: problems.length === 0, note: problems.join(' · ') || 'OK' } } });
+      if (problems.length) {
+        await User.updateOne({ id: c.userId }, { $set: { fraudReview: { status: 'watch', by: 'revisión IA', at: new Date(), note: 'Comprobante acreditado sin leer y revisado después: ' + problems.join(' · '), priority: 'high' } } });
+        await _emitAdminOnlyChatNote(c.userId, c.username, '🚨 PRIORIDAD ALTA — REVISIÓN POSTERIOR del comprobante acreditado sin leer: ' + problems.join(' · ') + '. El cliente quedó EN OBSERVACIÓN (sus retiros pasan a revisión). Verificalo en 🛡️ Antifraude.').catch(() => {});
+      }
+    }
+  } catch (e) { logger.warn('[comprobante] re-revisión IA: ' + e.message); }
+}
+setInterval(() => { _receiptAiRecheckTick(); }, 10 * 60000);
 async function analyzeComprobanteFromMessage({ userId, username, content, messageId }) {
   try {
     if (!comprobanteAi.isEnabled()) {
@@ -2281,6 +2375,8 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
     }
     const result = await comprobanteAi.analyzeComprobante(content);
 
+    // #1010: IA caída + cliente de CONFIANZA ⇒ sigue automático (se acredita con la transferencia de su cuenta de siempre) y se revisa después.
+    if (!result.ok) { try { if (await _receiptTrustedFallback({ userId, username, content, messageId, error: result.error })) return; } catch (e) { logger.warn('[comprobante] respaldo IA: ' + e.message); } }
     // La IA no pudo analizar (error técnico): registrar y salir en silencio.
     if (!result.ok) {
       const _cidE = uuidv4();
@@ -3282,8 +3378,11 @@ async function _hgcashCreditToPlatform({ movement, comprobante, user, platformId
     const guardMin = Number(_hgCfg.duplicateGuardMinutes) >= 0 ? Number(_hgCfg.duplicateGuardMinutes) : 8;
     if (guardMin > 0) {
       const sinceGuard = new Date(Date.now() - guardMin * 60 * 1000);
+      // #1010 (owner: "100% automático, para clientes activos siempre libre"): sólo frena si la carga reciente del mismo monto fue MANUAL
+      // (el caso "el agente cargó a mano y después llega el aviso del banco"). Dos automáticas son dos transferencias distintas (cada
+      // movimiento tiene su chargeKey único): antes la 2ª de $10.000 seguida quedaba en revisión y el cliente esperaba.
       const recent = await Transaction.findOne({
-        userId: user.id, type: 'deposit', amount: Number(amount), timestamp: { $gte: sinceGuard }
+        userId: user.id, type: 'deposit', amount: Number(amount), timestamp: { $gte: sinceGuard }, adminUsername: { $ne: 'auto-hgcash' }
       }).lean();
       if (recent) {
         if (chargeLocked) { try { await HgcashCharge.deleteOne({ chargeKey }); } catch (_) {} }
@@ -3454,6 +3553,7 @@ async function hgcashMatchFromMovement(movement) {
       // Diagnóstico: por qué no matcheó (para ver en los logs de Render).
       const resumen = candidates.slice(0, 8).map(c => `$${c.amount}/op:${c.operationNumber || '?'}/"${c.originHolder || '?'}"`).join(' , ');
       logger.info(`[hgcash] movimiento SIN match: $${movement.amount} de "${movement.fromName}" coelsa=${movement.coelsaCode || '-'} (status=${movement.status}). ${candidates.length} comprobantes en ventana: ${resumen}`);
+      try { if (await _trustedFallbackMatch({ movement })) return; } catch (_) {} // #1010: comprobante sin leer (IA caída) de un cliente de confianza
       return; // queda pending; un comprobante posterior puede matchearlo
     }
     if (matches.length > 1) {
@@ -8766,6 +8866,7 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
       logger.info(`[welcome-guard] descartada bienvenida-fantasma (HTTP) de ${req.user.username}`);
       return res.json({ success: true, ignored: true });
     }
+    if (req.user.role === 'user') setTimeout(() => { _payoutHoldSupportNote(req.user.userId, req.user.username); }, 1500); // #1010
 
     // SECURITY: Validate message type to prevent type confusion
     const allowedTypes = ['text', 'image', 'video'];
@@ -11788,6 +11889,7 @@ io.on('connection', (socket) => {
         logger.info(`[welcome-guard] descartada bienvenida-fantasma (socket) de ${socket.userId}`);
         return; // no guardar, no emitir
       }
+      if (socket.role === 'user') setTimeout(() => { _payoutHoldSupportNote(socket.userId, socket.username); }, 1500); // #1010
 
       // SECURITY: Validate message type to prevent type confusion
       const allowedMsgTypes = ['text', 'image', 'video'];
@@ -13555,6 +13657,13 @@ async function initializeData() {
       response: '🗓️ Tu reembolso MENSUAL del {pct}% ya está disponible 💸 Tocá acá y reclamalo antes de que venza.'
     },
     {
+      // #1010: el antifraude (o una cuenta sin historial con retiro grande) frenó el pago automático ⇒ se le avisa al cliente.
+      name: '/sys_withdraw_review',
+      description: 'Mensaje (chat de soporte + push) al cliente cuando su retiro NO sale solo y queda en revisión (antifraude o cuenta nueva con retiro grande). Variable: {amount}. Vacío = no se manda.',
+      type: 'message',
+      response: '🔎 Tu retiro de ${amount} quedó en REVISIÓN de seguridad. Lo revisa una persona del equipo y te avisamos por acá apenas salga. No tenés que hacer nada: tu saldo no se tocó.'
+    },
+    {
       // #1010: aviso diario del giro GRATIS de la ruleta (13–15 h, sólo a quien puede girar y no giró).
       name: '/sys_roulette_ready',
       description: 'Push automática (una por día, 13–15 h) a quien puede girar GRATIS la ruleta y todavía no giró (no sale si ese día ya recibió otro aviso masivo; a los 3 sin girar se pausa). Variable: {pct} (% máximo del giro gratis). Vacío = no se manda.',
@@ -14243,6 +14352,46 @@ app.post('/api/admin/bank-outage', authMiddleware, adminMiddleware, async (req, 
   } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
 });
 // #714: handler nombrado para que la ruta de prueba (/api/test/withdraw) pueda reusarlo con req._testBypass (sin teléfono ni SMS).
+// #1010 (owner 2026-11-01): "cuando el antifraude frene un pago, que le avise al cliente; y cuando hable al soporte por eso, que de nuestro lado
+// avise que tiene el pago retenido porque está en revisión; que aparezca al cliente y a nosotros siempre".
+//  - _notifyWithdrawHold: mensaje (canal soporte) + push al frenarse el retiro. Texto editable /sys_withdraw_review (vacío = no se manda).
+//  - _withdrawHoldOf: el retiro vigente del cliente que NO salió solo (en revisión) o que se está procesando. Lo usan la app (cartel fijo) y el panel.
+//  - _payoutHoldSupportNote: si el cliente escribe al soporte con un retiro retenido, nota interna en su chat (una cada 2 h).
+const WITHDRAW_REVIEW_DEFAULT = '🔎 Tu retiro de ${amount} quedó en REVISIÓN de seguridad. Lo revisa una persona del equipo y te avisamos por acá apenas salga. No tenés que hacer nada: tu saldo no se tocó.';
+async function _notifyWithdrawHold(user, amount) {
+  const txt = await renderSystemCommand('/sys_withdraw_review', WITHDRAW_REVIEW_DEFAULT, { amount: Number(amount || 0).toLocaleString('es-AR') });
+  if (!txt) return;
+  const u = await User.findOne({ id: user.id }).select('id username fcmToken fcmTokens fcmTokenContext').lean();
+  if (u) await _sendUserSystemMessage(u, txt, { metadata: { kind: 'withdraw_review', channel: 'support' }, push: { title: '🔎 Tu retiro está en revisión', body: 'Lo revisa una persona del equipo. Te avisamos apenas salga.' } });
+}
+async function _withdrawHoldOf(userId) {
+  const p = await PendingPayout.findOne({ userId: String(userId), status: { $in: ['pending_review', 'paying', 'failed'] }, createdAt: { $gte: new Date(Date.now() - 15 * 86400000) } })
+    .sort({ createdAt: -1 }).select('id amount status reviewRequired reviewReason autoPay createdAt').lean();
+  if (!p) return null;
+  const review = !!p.reviewRequired && p.status !== 'paying';
+  // un automático recién pedido no es "retenido": se muestra sólo si tarda más de 3 min
+  if (!review && Date.now() - new Date(p.createdAt).getTime() < 3 * 60000) return null;
+  return { id: p.id, amount: p.amount, since: p.createdAt, kind: review ? 'review' : 'processing', reason: p.reviewReason || null, status: p.status };
+}
+async function _payoutHoldSupportNote(userId, username) {
+  try {
+    const h = await _withdrawHoldOf(userId); if (!h) return;
+    const key = 'payoutHoldNote:' + userId; const last = _payoutHoldNoteAt.get(key) || 0;
+    if (Date.now() - last < 2 * 3600000) return; _payoutHoldNoteAt.set(key, Date.now());
+    const hora = new Date(h.since).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    await _emitAdminOnlyChatNote(userId, username, h.kind === 'review'
+      ? `⏸️ ESTE CLIENTE TIENE UN RETIRO RETENIDO EN REVISIÓN: $${Number(h.amount).toLocaleString('es-AR')} (pedido ${hora}). Motivo: ${h.reason || 'sin detalle'}. Si pregunta por el pago: está en revisión de seguridad; se confirma o rechaza en Panel → Confirmación de pagos.`
+      : `⏳ ESTE CLIENTE TIENE UN RETIRO PROCESÁNDOSE: $${Number(h.amount).toLocaleString('es-AR')} (pedido ${hora}, ${h.status}). Sale solo: si pregunta, decile que ya está en proceso.`);
+  } catch (_) {}
+}
+const _payoutHoldNoteAt = new Map();
+app.get('/api/withdrawal/hold', authMiddleware, async (req, res) => {
+  try { const h = await _withdrawHoldOf(req.user.userId); res.json({ success: true, hold: h ? { amount: h.amount, since: h.since, kind: h.kind } : null }); } // al cliente, sin el motivo interno
+  catch (e) { res.json({ success: true, hold: null }); }
+});
+app.get('/api/admin/users/:userId/payout-hold', authMiddleware, adminMiddleware, async (req, res) => {
+  try { res.json({ success: true, hold: await _withdrawHoldOf(String(req.params.userId)) }); } catch (e) { res.status(500).json({ error: 'Error' }); }
+});
 async function _withdrawalRequestHandler(req, res) {
   let withdrawLockAcquired = false;
   try {
@@ -14487,7 +14636,10 @@ async function _withdrawalRequestHandler(req, res) {
     try {
       const prCfg = await getPayoutReviewConfig();
       // #814 (owner 2026-10-22): "pagos y retiros automáticos, excepto mayores a $100.000" ⇒ revisión sólo si SUPERA el umbral.
-      let needsReview = amountNum > prCfg.minArs || !prCfg.autoBelow || !hgcashPay.isEnabled();
+      // #1010 (owner 2026-11-01): "que los pagos sean 100% automáticos siempre, que sólo frene el antifraude, todo libre para todos" ⇒ ni monto
+      // ni "cliente de confianza". Se frena sólo por: antifraude (abajo: puntaje, retiro grande tras un regalo, juego espejo; si el chequeo no se
+      // puede hacer = 'unchecked', queda manual), o si el pago automático está apagado / sin banco automático.
+      let needsReview = !prCfg.autoBelow || !hgcashPay.isEnabled();
       // #881: además, sólo clientes de CONFIANZA cobran solos (se puede apagar en Confirmación de pagos → Regla).
       let trustWhy = null;
       // #993: antifraude en el momento (sólo este cliente): ≥ 90 pts lo bloquea y le cierra la sesión; ≥ 60 deja el retiro para revisión.
@@ -14496,15 +14648,17 @@ async function _withdrawalRequestHandler(req, res) {
       // #996: retiro grande a pocas horas de recibir un regalo ⇒ revisión (práctica de las casas grandes: el primer retiro tras un bono lo mira una persona).
       if (!fraudWhy) { try { const hb = (await getFraudBonusConfig()).holdAfterBonus; if (hb.enabled && amountNum >= hb.minArs) { const g = await Transaction.findOne({ userId: user.id, type: { $in: fraudRadar.GIFT_TX }, createdAt: { $gte: new Date(Date.now() - hb.hours * 3600000) } }).sort({ createdAt: -1 }).select('type amount createdAt').lean(); if (g) { needsReview = true; fraudWhy = `retiro a ${Math.max(1, Math.round((Date.now() - new Date(g.createdAt).getTime()) / 3600000))} h de recibir un regalo de $${Math.round(g.amount || 0).toLocaleString('es-AR')} (${g.type}) — revisá que lo haya jugado de verdad`; } } } catch (_) {} }
       if (!fraudWhy) { const _mw = await _mirrorHitFor(user.username); if (_mw) { needsReview = true; fraudWhy = 'posible JUEGO ESPEJO con ' + _mw + ' (ver 🛡️ Antifraude → 🪞 Juego espejo)'; } } // #1004
-      if (!needsReview && prCfg.trustedOnly) { const t = await _payoutTrust(user.id, prCfg); if (!t.trusted) { needsReview = true; trustWhy = t.why; } }
+      // #1010 (owner): "saquemos las trabas de que tiene que ser cliente y demás para retirar: todo libre para todos, tenemos técnicas de antiestafa" ⇒
+      // sin regla de confianza ni de monto. trustWhy queda null.
       // #820: por id (antes por usuario+monto: podía marcar un retiro VIEJO del mismo monto).
       await PendingPayout.updateOne({ id: _newPayoutId }, { $set: Object.assign({ reviewRequired: needsReview, autoPay: !needsReview }, fraudEv && (fraudEv.reasons || []).length ? { fraudEvidence: fraudEv } : {}, fraudWhy ? { reviewReason: 'antifraude: ' + fraudWhy } : (trustWhy ? { reviewReason: 'no es cliente de confianza: ' + trustWhy.join(' · ') } : {})) });
       if (needsReview) {
         await _emitAdminOnlyChatNote(user.id, user.username, fraudWhy
           ? `🔎 RETIRO EN REVISIÓN: $${amountNum.toLocaleString('es-AR')} — ${fraudWhy}. Confirmalo o rechazalo en Panel → Confirmación de pagos.`
           : trustWhy
-          ? `🔎 RETIRO EN REVISIÓN: $${amountNum.toLocaleString('es-AR')} — no sale solo porque todavía no es cliente de confianza (${trustWhy.join(' · ')}). Confirmalo o rechazalo en Panel → Confirmación de pagos.`
-          : `🔎 RETIRO EN REVISIÓN: $${amountNum.toLocaleString('es-AR')} (umbral $${prCfg.minArs.toLocaleString('es-AR')}). Confirmalo o rechazalo en Panel → Confirmación de pagos.`).catch(() => {});
+          ? `🔎 RETIRO EN REVISIÓN: $${amountNum.toLocaleString('es-AR')} — cuenta todavía sin historial con un retiro mayor a $${prCfg.minArs.toLocaleString('es-AR')} (${trustWhy.join(' · ')}). Confirmalo o rechazalo en Panel → Confirmación de pagos.`
+          : `🔎 RETIRO EN REVISIÓN: $${amountNum.toLocaleString('es-AR')} — el pago automático está apagado o el banco automático no está configurado. Confirmalo o rechazalo en Panel → Confirmación de pagos.`).catch(() => {});
+        _notifyWithdrawHold(user, amountNum).catch(() => {}); // #1010: el cliente se entera de que está en revisión
       } else {
         const pp = { id: _newPayoutId };
         if (pp) setImmediate(() => { _payPendingPayout(pp.id, PAYOUT_AUTO_ACTOR, getPublicBaseUrl()).then((o) => { logger.info(`[pay-review] pago AUTOMÁTICO $${amountNum} ${user.username} → ${o.code} ${JSON.stringify(o.body).slice(0, 160)}`); _payoutAutoFailNote(pp.id, o).catch(() => {}); }).catch((e) => logger.warn(`[pay-review] pago automático falló: ${e.message}`)); });
@@ -23586,6 +23740,7 @@ async function _payPendingPayout(id, actor, baseUrl) {
       const pu = await User.findOne({ id: payout.userId }).select('isBlocked fraudReview').lean();
       if (pu && (pu.isBlocked || (pu.fraudReview && pu.fraudReview.status === 'watch'))) {
         await PendingPayout.updateOne({ id: payout.id }, { $set: { reviewRequired: true, autoPay: false, reviewReason: pu.isBlocked ? 'cuenta BLOQUEADA' : 'antifraude: en observación' } });
+        if (!pu.isBlocked) _notifyWithdrawHold({ id: payout.userId }, payout.amount).catch(() => {}); // #1010
         return res.status(409).json({ error: 'Cuenta bloqueada o en observación: el pago queda para revisión.' });
       }
     }
@@ -28281,6 +28436,39 @@ async function _bizMoney(from, to) {
   out.result = out.deposits - out.withdrawals; out.giftRatio = businessBoard.pct(out.gifts, out.deposits); out.ticket = out.depositCount ? out.deposits / out.depositCount : 0;
   return out;
 }
+// #1010: DÓNDE SE TRABA (retiros y cargas del período). Todo por agregaciones.
+//  Retiros: pedidos, pagados solos (paidBy auto-retiros), pagados por una persona, frenados por motivo (reviewReason, agrupado), minutos hasta el
+//  pago (mediana, automático vs a mano), y los que esperan AHORA. Cargas: transferencias entrantes por estado (solas / a mano / en revisión / sin
+//  dueño), motivos de revisión (chargeError agrupado) y comprobantes que la IA no pudo leer (con / sin respaldo de cliente de confianza).
+async function _bizStalls(from, to) {
+  const reasonOf = (r) => { const t = String(r || '').toLowerCase();
+    if (!t) return 'sin motivo (pago automático que falló / banco)';
+    if (/bloque/.test(t)) return 'antifraude: cuenta bloqueada'; if (/observaci/.test(t)) return 'antifraude: en observación';
+    if (/no se pudo (hacer|chequear|evaluar)|unchecked|sin chequeo|no termin/.test(t)) return 'antifraude: no se pudo chequear (API)';
+    if (/regalo|bono/.test(t)) return 'antifraude: retiro grande tras un regalo'; if (/espejo/.test(t)) return 'antifraude: juego espejo';
+    if (/antifraude/.test(t)) return 'antifraude: puntaje alto'; if (/confianza/.test(t)) return 'regla vieja: cliente de confianza'; return 'otro'; };
+  const pp = await PendingPayout.find({ createdAt: { $gte: from, $lt: to }, status: { $ne: 'cancelled' } }).select('status paidBy paidAt createdAt reviewRequired reviewReason amount').lean();
+  const med = (a) => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y); return Math.round(s[Math.floor(s.length / 2)]); };
+  const autoMin = [], manMin = []; const reasons = {}; let paidAuto = 0, paidMan = 0, held = 0;
+  for (const p of pp) {
+    const mins = p.paidAt ? (new Date(p.paidAt) - new Date(p.createdAt)) / 60000 : null;
+    if (p.status === 'paid') { if (p.paidBy === PAYOUT_AUTO_ACTOR.username) { paidAuto++; if (mins != null) autoMin.push(mins); } else { paidMan++; if (mins != null) manMin.push(mins); } }
+    if (p.reviewRequired) { held++; const k = reasonOf(p.reviewReason); reasons[k] = (reasons[k] || 0) + 1; }
+  }
+  const waitingNow = await PendingPayout.countDocuments({ status: { $in: ['pending_review', 'failed'] }, reviewRequired: true, createdAt: { $gte: new Date(Date.now() - 15 * 86400000) } });
+  const bm = await BankMovement.aggregate([{ $match: { createdAt: { $gte: from, $lt: to }, direction: { $regex: /^inbound$/i } } }, { $group: { _id: '$matchStatus', n: { $sum: 1 }, amt: { $sum: '$amount' } } }]);
+  const bmr = await BankMovement.aggregate([{ $match: { createdAt: { $gte: from, $lt: to }, direction: { $regex: /^inbound$/i }, matchStatus: 'needs_review' } }, { $group: { _id: { $substrCP: [{ $ifNull: ['$chargeError', 'sin detalle'] }, 0, 40] }, n: { $sum: 1 } } }, { $sort: { n: -1 } }, { $limit: 6 }]);
+  const cp = await Comprobante.aggregate([{ $match: { createdAt: { $gte: from, $lt: to } } }, { $group: { _id: { st: '$status', fb: { $ifNull: ['$trustedFallback', false] } }, n: { $sum: 1 } } }]);
+  const g = (k) => (bm.find((x) => x._id === k) || { n: 0, amt: 0 });
+  const cpN = (st, fb) => cp.filter((x) => x._id.st === st && (fb == null || !!x._id.fb === fb)).reduce((a, x) => a + x.n, 0);
+  return {
+    payouts: { requested: pp.length, paidAuto, paidManual: paidMan, held, waitingNow, autoMinutes: med(autoMin), manualMinutes: med(manMin),
+      reasons: Object.entries(reasons).map(([label, n]) => ({ label, n })).sort((a, b) => b.n - a.n) },
+    deposits: { auto: g('auto_charged').n, manual: g('manual_charged').n, review: g('needs_review').n, noMatch: g('no_match').n + g('pending').n, awaitingPlatform: g('awaiting_platform').n,
+      reviewReasons: bmr.map((x) => ({ label: x._id, n: x.n })),
+      aiFailed: cpN('error', false), aiFallback: cpN('error', true), notReceipt: cpN('not_comprobante'), duplicate: cpN('duplicate') }
+  };
+}
 async function _bizBoard(period) {
   const now = new Date(); const DAY = 86400000; const R = _bizRange(period, now);
   const [cur, prev] = await Promise.all([_bizMoney(R.from, R.to), _bizMoney(R.pFrom, R.pTo)]);
@@ -28345,7 +28533,9 @@ async function _bizBoard(period) {
     const m = (k) => { const x = rr.find((r) => r._id === k) || { spins: 0, users: [], depositedAfter: 0, cash: 0, pctWins: 0 }; return { spins: x.spins, users: x.users.length, perDay: Math.round(x.spins / days), depositedAfter: x.depositedAfter, depositRate: x.spins ? x.depositedAfter / x.spins : null, cash: Math.round(x.cash), pctWins: x.pctWins }; };
     roulette = { free: m('free'), gold: m('gold'), days };
   } catch (e) { logger.warn('[negocio] ruleta: ' + e.message); }
-  const board = { period, range: { from: R.from, to: R.to, pFrom: R.pFrom, pTo: R.pTo, label: R.label }, money, giftLevel: businessBoard.giftLevel(money.giftRatio), retention, funnel, gifts, giftsWindow: { from: gFrom, to: gTo }, campaigns, generalSpend: Math.max(0, generalSpend), cohorts, roulette, at: now };
+  // #1010 (owner): "ver bien en dónde nos estamos trabando" ⇒ cuántos retiros/cargas salieron solos, cuántos se frenaron, por qué y cuánto tardaron.
+  let stalls = null; try { stalls = await _bizStalls(R.from, R.to); } catch (e) { logger.warn('[negocio] trabas: ' + e.message); }
+  const board = { period, stalls, range: { from: R.from, to: R.to, pFrom: R.pFrom, pTo: R.pTo, label: R.label }, money, giftLevel: businessBoard.giftLevel(money.giftRatio), retention, funnel, gifts, giftsWindow: { from: gFrom, to: gTo }, campaigns, generalSpend: Math.max(0, generalSpend), cohorts, roulette, at: now };
   Object.assign(board, businessBoard.diagnose(board));
   return board;
 }

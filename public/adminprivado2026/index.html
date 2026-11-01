@@ -495,6 +495,8 @@ document.addEventListener('change', function (ev) {
                             .msg-ticks.msg-read .msg-read-label { display:inline; }
                         </style>
                         <div id="chatFraudBanner" style="display:none;"></div>
+                        <!-- #1010: retiro retenido en revisión / procesándose — lo llena renderPayoutHoldBanner() -->
+                        <div id="chatPayoutHoldBanner" style="display:none;"></div>
                         <!-- Bono 100% pendiente — lo llena renderFirstChargeBonusBanner() al abrir el chat -->
                         <div id="chatBonusBanner" style="display:none;"></div>
                         <!-- Bono sorpresa del código de bienvenida (Comunidad Telegram) -->
@@ -3289,18 +3291,15 @@ Responder 2xx. Con 5xx / timeout se reintenta; con 4xx no.</pre>
                 <div id="prDayBox" class="at-day"></div><!-- #750: análisis del día (banco vs a mano) -->
                 <div class="cbu-form" id="payReviewCfg" style="margin-bottom:14px;">
                     <h3 style="margin:0 0 6px;">⚙️ Regla</h3>
-                    <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 8px;">Los retiros <b>mayores al umbral</b> quedan acá para que una persona revise el caso (estafa o no) y los confirme. Los demás (hasta el umbral inclusive) salen solos por el banco al pedirlos y, si el banco falla, se reintentan solos cada 10 min. Si el banco no está configurado, todo queda en revisión.</p>
+                    <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 8px;"><b>#1010: TODOS los retiros salen SOLOS por el banco, de cualquier monto y para cualquier cliente.</b> Acá llegan sólo los que frenó el <b>antifraude</b> (puntaje alto, cliente en observación, retiro grande pocas horas después de un regalo, juego espejo, o cuando el chequeo antifraude no se pudo hacer) o los pagos automáticos que el banco rechazó. El cliente recibe "tu retiro está en revisión" y lo ve en la app hasta que se resuelva. Destildá "Pagar solos" sólo para frenar TODO a mano (emergencia).</p>
                     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                        <label style="margin:0;display:flex;align-items:center;gap:6px;">Umbral $ <input type="number" id="prMinArs" min="0" step="1000" style="width:130px;"></label>
-                        <label style="margin:0;display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="prAutoBelow" style="width:auto;"> Pagar solos los menores al umbral</label>
+                        <label style="margin:0;display:none;align-items:center;gap:6px;">Umbral $ <input type="number" id="prMinArs" min="0" step="1000" style="width:130px;"></label>
+                        <label style="margin:0;display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="prAutoBelow" style="width:auto;"> Pagar solos los retiros (automático)</label>
                         <label style="margin:0;display:flex;align-items:center;gap:6px;">Demorado si tarda más de <input type="number" id="prDelayMin" min="1" step="5" style="width:70px;"> min</label>
                     </div>
-                    <!-- #881 (owner): pago automático sólo a clientes de confianza (activable) -->
+                    <!-- #881 → #1010 (owner): ya NO hay regla de "cliente de confianza" para retirar; los campos quedan ocultos (los usa payReviewSaveCfg). -->
                     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed rgba(255,255,255,.12);">
-                        <label style="margin:0;display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="prTrustedOnly" style="width:auto;"> <b>Pago automático sólo a clientes de confianza</b></label>
-                        <label style="margin:0;display:flex;align-items:center;gap:6px;">cuenta de más de <input type="number" id="prTrustedDays" min="1" step="1" style="width:60px;"> días</label>
-                        <label style="margin:0;display:flex;align-items:center;gap:6px;">y <input type="number" id="prTrustedMinDep" min="0" step="1" style="width:60px;"> cargas o más</label>
-                        <span style="color:#9ab;font-size:11.5px;flex-basis:100%;">Además: cargó o usó la app en los últimos 7 días, sin marcas de fraude ni "en observación", y sin retiros rechazados en 30 días. Si no cumple, el retiro queda acá con el motivo. Apagado = los menores al umbral salen solos para todos.</span>
+                        <span style="display:none"><input type="checkbox" id="prTrustedOnly"><input type="number" id="prTrustedDays"><input type="number" id="prTrustedMinDep"></span>
                         <button class="btn-primary btn-small" id="prSaveBtn" onclick="payReviewSaveCfg()"><span class="icon icon-save"></span> Guardar</button>
                         <span id="prState" style="font-size:11.5px;color:#9ab;"></span>
                     </div>

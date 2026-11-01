@@ -1725,3 +1725,16 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
 la Transaction y acreditar: `resolveAutoBonus` (todo bono en % de la carga), `_calcRefundCapped` (envoltura de `refundTiers.calcRefund`: reclamo,
 estado y aviso del reembolso usan el mismo número), acumulativo (`reclamable`), ruleta en plata, fueguito, rakeback, nivel VIP, misiones, reseña y
 lote fijo. Excluidos: Bonificación manual, devolución de retiro, referidos, código de bienvenida.
+
+## Todo automático: retiros, comprobantes sin lectura y trabas (#1010, 2026-11-01)
+- **Retiros:** `_withdrawalRequestHandler` ⇒ `needsReview` sólo por antifraude (`_fraudCheckUser`, `holdAfterBonus`, `_mirrorHitFor`) o por
+  `payoutReview.autoBelow=false` / hgcash sin configurar. Sin umbral de monto ni `_payoutTrust` (queda la función, ya no se usa al retirar).
+  Freno ⇒ `_notifyWithdrawHold` (chat canal soporte + push, `/sys_withdraw_review`). `_withdrawHoldOf(userId)` = retiro vigente en revisión
+  (o automático que tarda +3 min) ⇒ `GET /api/withdrawal/hold` (app, sin motivo) y `GET /api/admin/users/:id/payout-hold` (panel, con motivo).
+  `_payoutHoldSupportNote` (socket `send_message` y `POST /api/messages/send` del cliente) deja nota interna cada 2 h.
+- **Comprobantes:** `analyzeComprobanteFromMessage` con IA en error ⇒ `_receiptTrustedFallback` (si `_receiptTrust` OK y hay cuenta de origen
+  conocida). Matching por `_trustedFallbackMatch` en las dos direcciones (comprobante → movimiento y, desde `hgcashMatchFromMovement`, movimiento →
+  comprobante sin leer); sólo con UN candidato. `_receiptAiRecheckTick` (10 min, `_cronClaim`) re-analiza la imagen (Message, TTL 3 días) y compara.
+- **Guard de duplicado hgcash:** sólo cuenta cargas recientes del mismo monto con `adminUsername ≠ 'auto-hgcash'`.
+- **Negocio → ⏱️ Dónde nos trabamos:** `_bizStalls(from, to)` (PendingPayout, BankMovement, Comprobante del período).
+
