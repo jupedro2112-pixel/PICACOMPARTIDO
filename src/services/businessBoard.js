@@ -89,4 +89,120 @@ function diagnose(b) {
   return { color, headline, alerts };
 }
 
-module.exports = { retention, funnel, giftLift, campaigns, giftLevel, diagnose, pct, chg, GIFT_LABELS, NO_LIFT, GIFT_GREEN, GIFT_YELLOW };
+// #1010 (owner: "apretando un botón que me dé un análisis semanal"): informe de la semana en lenguaje simple, armado SÓLO con números
+// (board = _bizBoard('week'); extra = oferta de 2ª carga, antifraude, revisión del de turno, banco). No cambia nada: sólo lee y recomienda.
+// Metas: retiros que salen solos ≥ 90 %, cargas que entran solas ≥ 85 %, regalos ≤ 20 % de lo depositado, 2ª carga usada ≥ 20 %.
+const AUTO_PAY_GOAL = 0.90, AUTO_DEP_GOAL = 0.85, SECOND_GOAL = 0.20;
+function weeklyAnalysis(b, x) {
+  b = b || {}; x = x || {};
+  const $ = (v) => '$' + Math.round(v || 0).toLocaleString('es-AR'); const pc = (v) => v == null ? '—' : Math.round(v * 100) + '%';
+  const arrow = (c) => c == null ? '' : c >= 0 ? ` (▲ ${pc(c)})` : ` (▼ ${pc(-c)})`;
+  const m = b.money || {}; const p = m.prev || {}; const sections = []; const actions = [];
+  const act = (level, text) => actions.push({ level, text });
+  // 1) PLATA
+  sections.push({ icon: '💰', title: 'Plata de la semana', lines: [
+    `Cargas: ${$(m.deposits)} en ${m.depositCount || 0} cargas de ${m.depositors || 0} clientes${arrow(m.depositsChg)}.`,
+    `Retiros pagados: ${$(m.withdrawals)} (${m.withdrawalCount || 0} retiros).`,
+    `Resultado (cargas − retiros): ${$(m.result)}${arrow(m.resultChg)}. Semana anterior: ${$(p.result)}.`,
+    `Carga promedio: ${$(m.ticket)} · Registros nuevos: ${m.registered || 0}.`] });
+  if (m.result < 0) act('bad', 'La semana dio NEGATIVA: revisá en 🛡️ Antifraude los retiros más grandes y en 👀 Para revisar lo marcado.');
+  // 2) REGALOS
+  const top = (m.giftsByType || []).slice(0, 4).map((g) => `${g.label} ${$(g.total)}`).join(' · ');
+  sections.push({ icon: '🎁', title: 'Regalos', lines: [
+    `Se regaló ${$(m.gifts)} = ${pc(m.giftRatio)} de lo depositado (meta: ${Math.round(GIFT_YELLOW * 100)}% o menos).`,
+    top ? `Lo que más costó: ${top}.` : 'Sin regalos en la semana.'] });
+  if (m.giftRatio != null && m.giftRatio > GIFT_YELLOW) act('bad', `Los regalos están en ${pc(m.giftRatio)} de lo depositado: no sumar regalos nuevos y mirar en Negocio → "¿Qué regalo rinde?" cuál bajar.`);
+  // 3) RETENCIÓN
+  const r = b.retention || []; const rn = r[r.length - 1] || {}; const rp = r[r.length - 2] || {};
+  const sd = x.secondDeposit || null; const sdRate = sd && sd.offered ? sd.used / sd.offered : null;
+  const ret = [`Volvieron a cargar: ${pc(rn.rate)} de los que cargaron la semana anterior (${rn.returned || 0} de ${rn.prevDepositors || 0}). Semana anterior: ${pc(rp.rate)}.`];
+  const f = b.funnel; if (f && f.worst) ret.push(`Donde más gente se pierde: "${f.worst.label}" (pasa el ${pc(f.worst.ofPrev)}${f.worst.lost != null ? ', se pierden ' + f.worst.lost + ' personas' : ''}).`);
+  if (sd) ret.push(`Oferta del 50% en la 2ª carga: se mandó a ${sd.offered}, la usaron ${sd.used} (${pc(sdRate)}).`);
+  sections.push({ icon: '🔁', title: 'Clientes que vuelven', lines: ret });
+  if (rn.rate != null && rp.rate != null && rn.rate < rp.rate - 0.03) act('ok', `Volvieron menos clientes que la semana anterior (${pc(rp.rate)} → ${pc(rn.rate)}): mirar si salieron los avisos (Centro de avisos) y si hubo trabas en cargas.`);
+  if (sd && sd.offered >= 10 && sdRate < SECOND_GOAL) act('ok', `Pocos usan el 50% de la 2ª carga (${pc(sdRate)}): probar cambiar el texto del aviso (/sys_second_deposit_offer) para que se entienda mejor.`);
+  // 4) RULETA
+  const ro = b.roulette;
+  if (ro) { const fr = ro.free || {}, go = ro.gold || {};
+    sections.push({ icon: '🎰', title: 'Ruleta diaria', lines: [
+      `Giro gratis: ${fr.spins || 0} giros (${fr.perDay || 0} por día, ${fr.users || 0} clientes); cargaron ese mismo día ${pc(fr.depositRate)}.`,
+      `Giro dorado: ${go.spins || 0} giros; premios en plata ${$(go.cash)}.`] }); }
+  // 5) AUTOMÁTICO
+  const st = b.stalls;
+  if (st) { const py = st.payouts || {}, dp = st.deposits || {};
+    const paid = (py.paidAuto || 0) + (py.paidManual || 0); const autoPay = paid ? py.paidAuto / paid : null;
+    const tot = (dp.auto || 0) + (dp.manual || 0) + (dp.review || 0) + (dp.noMatch || 0); const autoDep = tot ? dp.auto / tot : null;
+    const lines = [
+      `Retiros que salieron solos: ${pc(autoPay)} (${py.paidAuto || 0} de ${paid}; meta ${Math.round(AUTO_PAY_GOAL * 100)}%). Tardan ${py.autoMinutes != null ? py.autoMinutes + ' min' : '—'} solos y ${py.manualMinutes != null ? py.manualMinutes + ' min' : '—'} a mano.`,
+      `Retiros frenados: ${py.held || 0}${(py.reasons || []).length ? ' — ' + py.reasons.slice(0, 3).map((q) => q.label + ' ' + q.n).join(' · ') : ''}. Esperando ahora: ${py.waitingNow || 0}.`,
+      `Cargas que entraron solas: ${pc(autoDep)} (${dp.auto || 0} de ${tot}; meta ${Math.round(AUTO_DEP_GOAL * 100)}%). A mano ${dp.manual || 0} · en revisión ${dp.review || 0} · sin dueño ${dp.noMatch || 0}.`,
+      `Comprobantes que la IA no leyó: ${(dp.aiFailed || 0) + (dp.aiFallback || 0)} (${dp.aiFallback || 0} siguieron solos por ser clientes de confianza).`];
+    sections.push({ icon: '⚙️', title: 'Qué tan automático fue', lines });
+    if (autoPay != null && paid >= 10 && autoPay < AUTO_PAY_GOAL) act('bad', `Sólo ${pc(autoPay)} de los retiros salió solo: el motivo principal fue "${(py.reasons[0] || {}).label || 'pagos que fallaron'}". Revisar eso primero.`);
+    if (autoDep != null && tot >= 10 && autoDep < AUTO_DEP_GOAL) act('bad', `Sólo ${pc(autoDep)} de las cargas entró sola${(dp.reviewReasons || [])[0] ? ': lo que más frena es "' + dp.reviewReasons[0].label + '"' : ''}. Revisar con el encargado de cargas.`);
+    if ((dp.noMatch || 0) >= 5) act('ok', `${dp.noMatch} transferencias sin dueño: que el encargado de cargas las asigne o devuelva.`);
+    if ((py.waitingNow || 0) > 0) act('ok', `Hay ${py.waitingNow} retiros esperando en Pagos a confirmar: resolverlos hoy.`); }
+  // 6) ANTIFRAUDE Y TURNOS
+  const af = x.antifraud || {}; const sh = x.shift || {};
+  sections.push({ icon: '🛡️', title: 'Antifraude y control del de turno', lines: [
+    `Bloqueos: ${af.blocks || 0} · clientes puestos en observación: ${af.watches || 0} · retiros rechazados: ${af.rejects || 0}.`,
+    `👀 Para revisar: ${sh.reviewed || 0} retiros revisados por el de turno (${sh.suspicious || 0} marcados sospechosos); quedaron ${sh.pending || 0} retiros con señal sin revisar.`] });
+  if ((sh.pending || 0) > 0) act('ok', `Quedaron ${sh.pending} retiros con señal sin revisar en 👀 Para revisar: pedirle a los encargados que lo cierren en cada turno.`);
+  // 7) BANCO
+  const bk = x.bank; if (bk && bk.balance != null) {
+    sections.push({ icon: '🏦', title: 'Banco', lines: [`Saldo al momento del informe: ${$(bk.balance)} (alerta en ${$(bk.minArs)}).`] });
+    if (bk.balance < bk.minArs) act('bad', 'El banco está por debajo del mínimo: fondear para que los retiros sigan saliendo solos.'); }
+  for (const a of (b.alerts || [])) if (!actions.some((y) => y.text === a.fix) && a.fix) act(a.level, a.fix);
+  // 8) GENTE CON SEÑALES DE ESTAFA (owner: "poné la gente de estafa"): bloqueados, en observación, retiros rechazados, cuentas secundarias
+  //    nuevas, marcados sospechosos por el de turno y retiros frenados ahora. Sólo usuario + qué pasó + motivo (sin datos personales).
+  const fr = x.fraud || {}; const ppl = fr.people || []; const held = fr.heldNow || [];
+  const fl = [`Personas con alguna señal esta semana: ${ppl.length}${fr.dupNew ? ` · cuentas secundarias nuevas: ${fr.dupNew}` : ''}.`];
+  for (const q of ppl.slice(0, 25)) fl.push(`${q.username || '—'}: ${q.what}${q.why ? ' — ' + q.why : ''}${q.by ? ' (' + q.by + ')' : ''}`);
+  if (ppl.length > 25) fl.push(`… y ${ppl.length - 25} más (ver 🛡️ Antifraude → Historial).`);
+  if (held.length) { fl.push(`Retiros frenados esperando una persona AHORA: ${held.length}`); for (const h of held.slice(0, 15)) fl.push(`⏸️ ${h.username || '—'} ${$(h.amount)} — ${h.why || 'sin motivo'} (hace ${h.hours} h)`); }
+  sections.push({ icon: '🚨', title: 'Gente con señales de estafa', lines: fl });
+  const oldHeld = held.filter((h) => h.hours >= 2).length;
+  if (oldHeld) act('bad', `${oldHeld} retiros frenados hace más de 2 horas sin resolver: confirmar o rechazar con motivo (el cliente está esperando).`);
+  if ((fr.dupNew || 0) >= 5) act('ok', `${fr.dupNew} cuentas secundarias nuevas en la semana: mirar en 🛡️ Antifraude → Cuentas secundarias si vienen de la misma campaña.`);
+  // NÚMEROS CLAVE (se guardan en cada cierre semanal para comparar).
+  const py = (st && st.payouts) || {}, dp = (st && st.deposits) || {}; const paidN = (py.paidAuto || 0) + (py.paidManual || 0); const depN = (dp.auto || 0) + (dp.manual || 0) + (dp.review || 0) + (dp.noMatch || 0);
+  const numbers = { deposits: Math.round(m.deposits || 0), depositCount: m.depositCount || 0, depositors: m.depositors || 0, withdrawals: Math.round(m.withdrawals || 0), result: Math.round(m.result || 0),
+    gifts: Math.round(m.gifts || 0), giftRatio: m.giftRatio == null ? null : m.giftRatio, registered: m.registered || 0, ticket: Math.round(m.ticket || 0), repeatRate: rn.rate == null ? null : rn.rate,
+    secondRate: sdRate, autoPay: paidN ? py.paidAuto / paidN : null, autoDep: depN ? dp.auto / depN : null, held: py.held || 0,
+    blocks: af.blocks || 0, watches: af.watches || 0, fraudPeople: ppl.length, freeSpins: ro && ro.free ? ro.free.spins || 0 : 0 };
+  // 9) COMPARADO CON LAS SEMANAS CERRADAS + CÓMO VA EL PROYECTO
+  const closes = (x.closes || []).filter((c) => c && c.numbers); const pv = closes[0] && closes[0].numbers;
+  const cmp = (k, label, fmt, upGood) => { if (!pv || pv[k] == null || numbers[k] == null) return null; const d = numbers[k] - pv[k];
+    const good = d === 0 ? null : (d > 0) === upGood; return `${label}: ${fmt(numbers[k])} vs ${fmt(pv[k])} ${d === 0 ? '(igual)' : (good ? '✅' : '⚠️') + (d > 0 ? ' ▲' : ' ▼')}`; };
+  if (pv) {
+    const cl = [`Contra la semana cerrada del ${closes[0].from || '—'} al ${closes[0].to || '—'}:`].concat([
+      cmp('deposits', 'Cargas', $, true), cmp('result', 'Resultado', $, true), cmp('depositors', 'Clientes que cargaron', String, true), cmp('registered', 'Registros', String, true),
+      cmp('repeatRate', 'Volvieron a cargar', pc, true), cmp('giftRatio', 'Regalos / depósitos', pc, false), cmp('autoPay', 'Retiros solos', pc, true), cmp('autoDep', 'Cargas solas', pc, true),
+      cmp('fraudPeople', 'Personas con señal de estafa', String, false)].filter(Boolean));
+    sections.push({ icon: '📊', title: 'Comparado con la semana anterior', lines: cl });
+  }
+  const serie = [numbers].concat(closes.map((c) => c.numbers)).slice(0, 8); // de la más nueva a la más vieja
+  const pl = [];
+  if (serie.length >= 2) {
+    const n = serie.length; const sum = (k) => serie.reduce((a, q) => a + (Number(q[k]) || 0), 0);
+    const half = Math.floor(n / 2); const avg = (arr, k) => arr.reduce((a, q) => a + (Number(q[k]) || 0), 0) / (arr.length || 1);
+    const recent = serie.slice(0, half), older = serie.slice(half); const dTrend = avg(older, 'deposits') > 0 ? avg(recent, 'deposits') / avg(older, 'deposits') - 1 : null;
+    pl.push(`Últimas ${n} semanas: cargas ${$(sum('deposits'))}, resultado acumulado ${$(sum('result'))}, regalado ${$(sum('gifts'))}.`);
+    if (dTrend != null) pl.push(`Tendencia de las cargas: ${dTrend >= 0.05 ? '📈 creciendo' : dTrend <= -0.05 ? '📉 bajando' : '➡️ estable'} (${dTrend >= 0 ? '+' : ''}${Math.round(dTrend * 100)}% las semanas recientes vs las anteriores).`);
+    const negs = serie.filter((q) => q.result < 0).length; if (negs) pl.push(`Semanas en negativo: ${negs} de ${n}.`);
+    const gr = serie.map((q) => q.giftRatio).filter((v) => v != null); if (gr.length >= 2) pl.push(`Regalos / depósitos: ${gr.slice().reverse().map(pc).join(' → ')} (de la más vieja a esta).`);
+    const rr = serie.map((q) => q.repeatRate).filter((v) => v != null); if (rr.length >= 2) pl.push(`Clientes que vuelven: ${rr.slice().reverse().map(pc).join(' → ')}.`);
+    if (dTrend != null && dTrend <= -0.15) act('bad', `Las cargas vienen bajando (${Math.round(dTrend * 100)}% en las últimas semanas): revisar pauta, avisos y trabas de carga.`);
+    if (negs >= 2 && serie[0].result < 0 && serie[1] && serie[1].result < 0) act('bad', 'Dos semanas seguidas en negativo: revisar retiros grandes y regalos antes de seguir.');
+  } else pl.push('Es la primera medición: desde el primer cierre semanal (lunes) vas a ver acá la evolución semana a semana.');
+  sections.push({ icon: '🚀', title: 'Cómo va el proyecto', lines: pl });
+  const bad = actions.filter((a) => a.level === 'bad').length;
+  const verdict = m.result < 0 || bad >= 2 ? 'bad' : bad || actions.length ? 'ok' : 'good';
+  const head = verdict === 'good' ? '✅ Semana bien: no hay nada urgente para corregir.' : verdict === 'ok' ? '🟡 Semana aceptable: hay cosas para ajustar.' : '🔴 Semana con problemas: corregir lo marcado en rojo.';
+  const range = b.range && b.range.from ? `${String(new Date(b.range.from).toISOString()).slice(0, 10)} al ${String(new Date(b.range.to).toISOString()).slice(0, 10)}` : 'últimos 7 días';
+  const text = [`ANÁLISIS SEMANAL PICAROJA (${range})`, head, ''].concat(...sections.map((s) => [s.icon + ' ' + s.title.toUpperCase()].concat(s.lines.map((l) => '• ' + l), ['']))
+    , ['⚠️ ALERTAS Y QUÉ HACER ESTA SEMANA'], actions.length ? actions.map((a, i) => `${i + 1}. ${a.level === 'bad' ? '🔴' : '🟡'} ${a.text}`) : ['Nada urgente: seguir midiendo.']).join('\n');
+  return { verdict, head, range, sections, actions, text, numbers };
+}
+
+module.exports = { retention, funnel, giftLift, campaigns, giftLevel, diagnose, weeklyAnalysis, pct, chg, GIFT_LABELS, NO_LIFT, GIFT_GREEN, GIFT_YELLOW };

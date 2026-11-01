@@ -44,4 +44,34 @@ caso('diagnóstico: todo bien ⇒ verde y "nada para corregir"', () => {
   assert.strictEqual(d.color, 'good'); assert.strictEqual(d.alerts.length, 0); assert.ok(/No hay nada/.test(d.headline));
 });
 caso('semáforo de regalos: 15% / 20%', () => { assert.strictEqual(B.giftLevel(0.15), 'good'); assert.strictEqual(B.giftLevel(0.2), 'ok'); assert.strictEqual(B.giftLevel(0.21), 'bad'); assert.strictEqual(B.giftLevel(null), 'na'); });
+caso('análisis semanal: semana buena ⇒ verde y "nada urgente"', () => {
+  const b = { range: { from: new Date('2026-10-25T03:00:00Z'), to: new Date('2026-11-01T03:00:00Z') }, money: { deposits: 2000000, depositCount: 400, depositors: 150, withdrawals: 1500000, withdrawalCount: 80, result: 500000, resultChg: 0.1, ticket: 5000, registered: 60, gifts: 200000, giftRatio: 0.1, giftsByType: [{ label: 'Reembolso', total: 120000 }], prev: { result: 450000 } },
+    retention: [{ rate: 0.4, returned: 40, prevDepositors: 100 }, { rate: 0.42, returned: 42, prevDepositors: 100 }], funnel: null, alerts: [],
+    stalls: { payouts: { paidAuto: 78, paidManual: 2, held: 2, waitingNow: 0, autoMinutes: 1, manualMinutes: 30, reasons: [] }, deposits: { auto: 380, manual: 10, review: 5, noMatch: 2, aiFailed: 1, aiFallback: 3, reviewReasons: [] } } };
+  const a = B.weeklyAnalysis(b, { secondDeposit: { offered: 50, used: 15 }, antifraud: {}, shift: { pending: 0 }, bank: { balance: 900000, minArs: 500000 } });
+  assert.strictEqual(a.verdict, 'good', JSON.stringify(a.actions)); assert.ok(/ANÁLISIS SEMANAL/.test(a.text)); assert.ok(/98%/.test(a.text)); assert.ok(/Nada urgente/.test(a.text));
+});
+caso('análisis semanal: trabas, regalos altos, banco bajo y pendientes ⇒ rojo con acciones', () => {
+  const b = { money: { deposits: 1000000, depositCount: 200, result: -20000, giftRatio: 0.3, gifts: 300000, giftsByType: [], prev: {} }, retention: [{ rate: 0.5 }, { rate: 0.4 }], alerts: [],
+    stalls: { payouts: { paidAuto: 5, paidManual: 15, held: 15, waitingNow: 3, reasons: [{ label: 'antifraude: no se pudo chequear (API)', n: 12 }] }, deposits: { auto: 10, manual: 20, review: 5, noMatch: 6, reviewReasons: [{ label: 'posible duplicado', n: 5 }] } } };
+  const a = B.weeklyAnalysis(b, { secondDeposit: { offered: 40, used: 2 }, shift: { pending: 4 }, bank: { balance: 100000, minArs: 500000 } });
+  assert.strictEqual(a.verdict, 'bad'); const all = a.actions.map((x) => x.text).join(' | ');
+  for (const re of [/NEGATIVA/, /regalos están en 30%/, /no se pudo chequear/, /posible duplicado/, /sin dueño/, /esperando/, /Para revisar/, /fondear/, /2ª carga/, /Volvieron menos/]) assert.ok(re.test(all), re + ' en ' + all);
+});
+caso('análisis semanal: sin datos no se rompe', () => { const a = B.weeklyAnalysis({}, {}); assert.ok(a.text.length > 50); assert.ok(['good', 'ok', 'bad'].includes(a.verdict)); });
+caso('análisis semanal: lista la gente con señales de estafa y los retiros frenados viejos', () => {
+  const a = B.weeklyAnalysis({ money: { deposits: 100000, result: 10000, prev: {} } }, { fraud: { dupNew: 6, people: [{ username: 'tester_a', what: 'bloqueado por el antifraude', why: 'juego espejo', by: 'antifraude' }], heldNow: [{ username: 'tester_b', amount: 50000, why: 'puntaje alto', hours: 5 }] } });
+  assert.ok(/tester_a: bloqueado por el antifraude — juego espejo/.test(a.text)); assert.ok(/tester_b \$50\.000/.test(a.text));
+  const all = a.actions.map((x) => x.text).join(' | '); assert.ok(/más de 2 horas/.test(all)); assert.ok(/cuentas secundarias nuevas/.test(all)); assert.strictEqual(a.numbers.fraudPeople, 1);
+});
+caso('análisis semanal: compara con el último cierre y arma la evolución del proyecto', () => {
+  const closes = [{ from: '2026-10-19', to: '2026-10-25', numbers: { deposits: 2000000, result: 400000, depositors: 100, registered: 50, repeatRate: 0.4, giftRatio: 0.15, gifts: 300000, fraudPeople: 2 } },
+    { from: '2026-10-12', to: '2026-10-18', numbers: { deposits: 2600000, result: -50000, gifts: 300000, giftRatio: 0.12, repeatRate: 0.45 } },
+    { from: '2026-10-05', to: '2026-10-11', numbers: { deposits: 2800000, result: 100000, gifts: 200000, giftRatio: 0.1, repeatRate: 0.5 } }];
+  const a = B.weeklyAnalysis({ money: { deposits: 1500000, result: -20000, depositors: 80, registered: 40, gifts: 300000, giftRatio: 0.2, prev: {} } }, { closes });
+  assert.ok(/Comparado con la semana anterior/i.test(a.text)); assert.ok(/Cargas: \$1\.500\.000 vs \$2\.000\.000 ⚠️ ▼/.test(a.text), a.text);
+  assert.ok(/Cómo va el proyecto/i.test(a.text)); assert.ok(/📉 bajando/.test(a.text)); assert.ok(/Semanas en negativo: 2 de 4/.test(a.text));
+  assert.ok(a.actions.some((x) => /vienen bajando/.test(x.text)));
+});
+caso('análisis semanal: sin cierres todavía avisa que es la primera medición', () => { const a = B.weeklyAnalysis({ money: {} }, {}); assert.ok(/primera medición/.test(a.text)); });
 console.log(`\n${ok}/${ok + fails.length} casos OK`); process.exit(fails.length ? 1 : 0);

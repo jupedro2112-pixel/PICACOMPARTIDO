@@ -2753,7 +2753,8 @@ Responder 2xx. Con 5xx / timeout se reintenta; con 4xx no.</pre>
                     <button class="btn btn-secondary btn-small" data-p="week" onclick="loadNegocio('week')">7 días</button>
                     <button class="btn btn-primary btn-small" data-p="month" onclick="loadNegocio('month')">Este mes</button>
                     <button class="btn btn-secondary btn-small" data-p="30d" onclick="loadNegocio('30d')">30 días</button>
-                    <button class="btn btn-secondary btn-small" onclick="loadNegocio(null, true)" title="Recalcular ahora (si no, se guarda 10 minutos)">🔄</button></div></div>
+                    <button class="btn btn-secondary btn-small" onclick="loadNegocio(null, true)" title="Recalcular ahora (si no, se guarda 10 minutos)">🔄</button>
+                    <button class="btn btn-primary btn-small" onclick="bizWeeklyAnalysis()" title="Informe de los últimos 7 días con qué conviene ajustar (no cambia nada)">📋 Análisis semanal</button></div></div>
                 <details class="card" style="margin-bottom:1rem;font-size:.82rem;line-height:1.55">
                     <summary style="cursor:pointer;font-weight:800">📖 Cómo funciona este tablero (tocá para leer)</summary>
                     <div style="margin-top:8px">
@@ -2770,6 +2771,7 @@ Responder 2xx. Con 5xx / timeout se reintenta; con 4xx no.</pre>
                         <p><b>🚨 Para corregir:</b> las alertas con la sugerencia concreta. Vos decidís; el sistema no toca nada.</p>
                     </div>
                 </details>
+                <div id="bizWeekly" hidden></div>
                 <div id="bizBody"><div class="in-note">Cargando…</div></div>
             </section>
 

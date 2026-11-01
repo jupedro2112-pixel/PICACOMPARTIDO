@@ -16754,6 +16754,62 @@ function _bizRender(b) {
     return html;
 }
 window.loadNegocio = loadNegocio;
+// #1010 (owner: "apretando un botón que me dé un análisis semanal"): informe de los últimos 7 días en lenguaje simple + qué hacer. Sólo lee.
+let _bizWeeklyText = '';
+async function bizWeeklyAnalysis() {
+    const box = document.getElementById('bizWeekly'); if (!box) return;
+    box.hidden = false; box.innerHTML = '<div class="in-note">Armando el análisis de la semana… (puede tardar unos segundos)</div>';
+    box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    try {
+        const r = await _inicioGuard('/api/admin/inicio/weekly-analysis', box); if (!r) return;
+        const j = await r.json(); if (!r.ok) throw new Error(j.error || 'error');
+        const a = j.analysis || {}; _bizWeeklyText = a.text || '';
+        const col = a.verdict === 'good' ? 'var(--p-green, #16a34a)' : a.verdict === 'bad' ? 'var(--p-red, #dc2626)' : 'var(--p-amber, #d97706)';
+        const secs = (a.sections || []).map(function (s) {
+            return '<div style="margin-top:12px"><b>' + escapeHtml(s.icon + ' ' + s.title) + '</b><ul style="margin:6px 0 0 18px;padding:0">' +
+                (s.lines || []).map(function (l) { return '<li style="margin:3px 0">' + escapeHtml(l) + '</li>'; }).join('') + '</ul></div>';
+        }).join('');
+        const acts = (a.actions || []).length ? '<ol style="margin:6px 0 0 18px;padding:0">' + a.actions.map(function (x) {
+            return '<li style="margin:4px 0">' + (x.level === 'bad' ? '🔴 ' : '🟡 ') + escapeHtml(x.text) + '</li>'; }).join('') + '</ol>' : '<div class="in-note">Nada urgente: seguir midiendo.</div>';
+        box.innerHTML = '<div class="card" style="border-left:4px solid ' + col + ';padding:14px 16px;margin-bottom:16px">' +
+            '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center"><h3 style="margin:0">📋 Análisis semanal · ' + escapeHtml(a.range || '') + '</h3>' +
+            '<div style="display:flex;gap:6px"><button class="btn btn-secondary btn-small" onclick="bizWeeklyCopy()">📋 Copiar</button><button class="btn btn-secondary btn-small" onclick="document.getElementById(\'bizWeekly\').hidden=true">✕</button></div></div>' +
+            '<div style="margin-top:8px;font-weight:600;color:' + col + '">' + escapeHtml(a.head || '') + '</div>' + secs +
+            '<div style="margin-top:14px"><b>⚠️ Alertas y qué hacer esta semana</b>' + acts + '</div>' + _bizClosesHtml(j.closes || []) +
+            '<div class="in-note" style="margin-top:10px">Sólo lee los números: no cambia ninguna configuración. "Copiar" lo deja listo para pegar en un chat.</div></div>';
+    } catch (e) { box.innerHTML = '<div class="in-note" style="color:#f87171">No se pudo armar el análisis: ' + escapeHtml(e.message) + '</div>'; }
+}
+function _bizClosesHtml(cl) {
+    const $ = function (v) { return v == null ? '—' : '$' + Math.round(v).toLocaleString('es-AR'); };
+    const pc = function (v) { return v == null ? '—' : Math.round(v * 100) + '%'; };
+    const ico = { good: '✅', ok: '🟡', bad: '🔴' };
+    let h = '<div style="margin-top:18px"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center"><b>🗓️ Cierres semanales (lunes a domingo, se guardan solos cada lunes)</b>' +
+        '<button class="btn btn-secondary btn-small" onclick="bizWeeklyCloseNow()" title="Guarda ahora el cierre de la semana pasada (lunes a domingo)">Cerrar semana pasada ahora</button></div>';
+    if (!cl.length) return h + '<div class="in-note" style="margin-top:6px">Todavía no hay cierres: el primero se guarda solo el lunes (o tocá "Cerrar semana pasada ahora").</div></div>';
+    h += '<div style="overflow-x:auto;margin-top:8px"><table class="data-table" style="width:100%;font-size:13px"><thead><tr><th>Semana</th><th></th><th>Cargas</th><th>Resultado</th><th>Clientes</th><th>Regalos</th><th>Vuelven</th><th>Retiros solos</th><th>Cargas solas</th><th>Señal estafa</th><th></th></tr></thead><tbody>';
+    h += cl.map(function (c) { const n = c.numbers || {};
+        return '<tr><td>' + escapeHtml(String(c.from || '').slice(5) + ' → ' + String(c.to || '').slice(5)) + '</td><td>' + (ico[c.verdict] || '') + '</td><td>' + $(n.deposits) + '</td><td style="color:' + (n.result < 0 ? 'var(--p-red)' : 'inherit') + '">' + $(n.result) + '</td><td>' + (n.depositors || 0) +
+            '</td><td>' + pc(n.giftRatio) + '</td><td>' + pc(n.repeatRate) + '</td><td>' + pc(n.autoPay) + '</td><td>' + pc(n.autoDep) + '</td><td>' + (n.fraudPeople || 0) +
+            '</td><td><button class="btn btn-secondary btn-small" onclick="bizWeeklyCloseView(\'' + escapeHtml(c.weekKey) + '\')">Ver</button></td></tr>'; }).join('');
+    return h + '</tbody></table></div><div id="bizCloseView"></div></div>';
+}
+async function bizWeeklyCloseView(k) {
+    const v = document.getElementById('bizCloseView'); if (!v) return; v.innerHTML = '<div class="in-note">Cargando…</div>';
+    try { const r = await _inicioGuard('/api/admin/inicio/weekly-closes/' + encodeURIComponent(k), v); if (!r) return; const j = await r.json(); if (!r.ok) throw new Error(j.error || 'error');
+        _bizWeeklyText = j.close.text || '';
+        v.innerHTML = '<div class="card" style="margin-top:10px;padding:12px"><div style="display:flex;justify-content:space-between;gap:8px"><b>Cierre ' + escapeHtml(j.close.from + ' → ' + j.close.to) + '</b><button class="btn btn-secondary btn-small" onclick="bizWeeklyCopy()">📋 Copiar</button></div>' +
+            '<pre style="white-space:pre-wrap;font-family:inherit;font-size:13px;margin:8px 0 0">' + escapeHtml(j.close.text || '') + '</pre></div>';
+    } catch (e) { v.innerHTML = '<div class="in-note" style="color:#f87171">' + escapeHtml(e.message) + '</div>'; }
+}
+async function bizWeeklyCloseNow() {
+    const box = document.getElementById('bizWeekly');
+    try { const r = await _inicioGuard('/api/admin/inicio/weekly-closes/run', box, { method: 'POST' }); if (!r) return; const j = await r.json(); if (!r.ok) throw new Error(j.error || 'error');
+        showToast('🗓️ Semana cerrada y guardada', 'success'); bizWeeklyAnalysis();
+    } catch (e) { showToast('No se pudo cerrar: ' + e.message, 'error'); }
+}
+async function bizWeeklyCopy() { try { await navigator.clipboard.writeText(_bizWeeklyText || 'Todavía no hay análisis.'); showToast('📋 Análisis copiado', 'success'); } catch (_) { showToast('No se pudo copiar automáticamente', 'error'); } }
+window.bizWeeklyAnalysis = bizWeeklyAnalysis; window.bizWeeklyCopy = bizWeeklyCopy; window.bizWeeklyCloseView = bizWeeklyCloseView; window.bizWeeklyCloseNow = bizWeeklyCloseNow;
+
 // ═══ #973: REVISIÓN SEMANAL — informe, decisión, historial y texto para copiar ═══
 let _wrText = '';
 async function loadWeeklyReview() {

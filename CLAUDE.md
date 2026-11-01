@@ -360,6 +360,9 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`). Git user: j
   app, notificaciones, Telegram, **celular cargado** y una carga. Premios se entregan a mano (push + nota al ganador). Panel → App → Sorteos (🎟️ / 🎲)
   y Principal → "Sorteos: ¿sirven?". Un cambio en las reglas de puntos/tickets pasa por `computePoints` y sus tests, nunca por el motor.
 - **TABLERO DEL NEGOCIO (#1009):** Principal → 📈 Negocio (`/api/admin/inicio/negocio`, lógica en `src/services/businessBoard.js`, test
+- **ANÁLISIS SEMANAL + CIERRE SEMANAL (#1010):** Negocio → 📋 Análisis semanal (`/api/admin/inicio/weekly-analysis`, sólo admin, lógica pura en
+  `businessBoard.weeklyAnalysis`, test `scripts/test-business-board.js`): números, gente con señales de estafa, trabas, cómo va el proyecto y alertas. Sólo
+  LEE. `_weeklyCloseTick` guarda cada lunes (06 h ART) el cierre de lunes a domingo en `Config['weeklyCloses']` (52, idempotente por `weekKey`); no borrarlo.
   `scripts/test-business-board.js`). Todo por agregaciones; un tipo de regalo nuevo ⇒ etiqueta en `GIFT_LABELS`.
 - **UN RETIRO POR CLIENTE (#1008):** pagar un retiro llama `_closeOtherPayouts` (anula los otros pendientes seguros del cliente); un flujo nuevo
   que marque un retiro pagado tiene que llamarla. Pagos a confirmar muestra una tarjeta por cliente.

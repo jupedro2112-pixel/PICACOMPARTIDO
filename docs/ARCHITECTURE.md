@@ -1744,3 +1744,11 @@ lote fijo. Excluidos: Bonificación manual, devolución de retiro, referidos, c�
   `POST /api/admin/shift-review/:payout|receipt/:id {verdict, note}` (`shiftReview`; sospechoso ⇒ `User.fraudReview.status='watch'`).
 - **Saldo bajo del banco:** `_bankLowBalanceTick` usa `_bankBalanceNow` (hgcash GET /accounts); estado en `Config['bankLowBalanceState']`.
 
+### #1010 — Análisis semanal y cierre semanal
+- `GET /api/admin/inicio/weekly-analysis` (admin; gate de clave de INICIO por el prefijo) → `_weeklyAnalysisBuild(null)`: `_bizBoard('week')` + oferta de
+  2ª carga (`secondDepositOffer.offeredAt/status`), BlockEvent de la semana, `shiftReview` sospechosos, `duplicateOf.at`, retiros frenados ahora, saldo del
+  banco y los cierres guardados ⇒ `businessBoard.weeklyAnalysis(board, extra)` (pura) → `{ verdict, head, sections, actions, text, numbers }`.
+- `_weeklyCloseTick` (cada 30 min, desde el lunes 06 h ART, `_cronClaim('weeklyclose')`): análisis con `at` = lunes 00 h (semana lunes–domingo) ⇒
+  `Config['weeklyCloses']` [{ weekKey, from, to, verdict, head, numbers, actions, text }], 52, el más nuevo primero. `numbers` es lo que se compara semana
+  a semana (agregar campos nuevos ahí, nunca renombrar: los cierres viejos quedan con los nombres de antes).
+- `GET /api/admin/inicio/weekly-closes/:weekKey` (texto completo) y `POST /api/admin/inicio/weekly-closes/run` (fuerza el cierre de la semana pasada).

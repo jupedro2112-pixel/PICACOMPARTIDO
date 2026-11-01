@@ -13077,3 +13077,11 @@ la app pueda expandir todo lo que ya tenemos; el chat con el mismo formato y fon
   comandos `/sys_*`.
 - No hay `node_modules` en el entorno local del owner (Tails) → sólo se puede validar con
   `node --check` (syntax), no correr el server.
+- Owner: "apretando un botón que me dé un análisis semanal" + "poné la gente de estafa, números, cómo va el proyecto, todo detallado, alertas, y en cada
+  semana un cierre para ir comparando" (en vez de una tarea en la nube) ⇒ Negocio → **📋 Análisis semanal** (sólo admin + clave de INICIO, sólo lee):
+  plata, regalos, clientes que vuelven + oferta de 2ª carga, ruleta, qué tan automático fue, antifraude y el de turno, banco, **gente con señales de
+  estafa** (bloqueos / observaciones / rechazos de BlockEvent, sospechosos del de turno, cuentas secundarias nuevas, retiros frenados ahora con horas),
+  **comparado con la semana anterior** y **cómo va el proyecto** (evolución de hasta 8 semanas) + ⚠️ alertas y qué hacer. Botón Copiar.
+  **Cierre semanal** automático cada lunes 06 h ART (`_weeklyCloseTick`, `Config['weeklyCloses']`, 52 semanas) con tabla comparativa y "Ver" de
+  cada cierre; botón "Cerrar semana pasada ahora". `_bizBoard(period, at)` acepta fin de período; `_shiftPayouts` extraído de 👀 Para revisar.
+  Tests 14/14 en test-business-board. Admin SW v228.

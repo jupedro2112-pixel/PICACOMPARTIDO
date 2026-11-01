@@ -23592,35 +23592,40 @@ app.post('/api/admin/bank-low-balance', authMiddleware, adminMiddleware, async (
   } catch (e) { res.status(500).json({ error: 'Error' }); }
 });
 const SHIFT_HIGH_ARS = 100000;
+// #1010: retiros automáticos con señales (lo usan 👀 Para revisar y el Análisis semanal).
+async function _shiftPayouts(since, all) {
+  const pays = await PendingPayout.find({ status: 'paid', paidBy: PAYOUT_AUTO_ACTOR.username, paidAt: { $gte: since } }).sort({ paidAt: -1 }).limit(300)
+    .select('id userId username amount paidAt createdAt shiftReview').lean();
+  const ids = [...new Set(pays.map((p) => p.userId).filter(Boolean))];
+  const [users, deps, prevPaid] = await Promise.all([
+    User.find({ id: { $in: ids } }).select('id createdAt fraudReview isBlocked').lean(),
+    ids.length ? Transaction.aggregate([{ $match: { ..._REAL_DEP, userId: { $in: ids }, description: { $not: /PRUEBA/i } } }, { $group: { _id: '$userId', n: { $sum: 1 }, total: { $sum: '$amount' } } }]) : [],
+    ids.length ? PendingPayout.aggregate([{ $match: { userId: { $in: ids }, status: 'paid' } }, { $group: { _id: '$userId', firstAt: { $min: '$paidAt' }, total: { $sum: '$amount' } } }]) : []
+  ]);
+  const U = new Map(users.map((u) => [u.id, u])), Dp = new Map(deps.map((d) => [d._id, d])), Pp = new Map(prevPaid.map((d) => [d._id, d]));
+  const payouts = [];
+  for (const p of pays) {
+    const u = U.get(p.userId) || {}; const d = Dp.get(p.userId) || { n: 0, total: 0 }; const pv = Pp.get(p.userId) || {};
+    const days = u.createdAt ? Math.floor((Date.now() - new Date(u.createdAt).getTime()) / 86400000) : null;
+    const flags = [];
+    if (days != null && days < 7) flags.push(`cuenta de ${days} días`);
+    if (pv.firstAt && new Date(pv.firstAt).getTime() === new Date(p.paidAt).getTime()) flags.push('primer retiro');
+    if (d.total > 0 && Number(pv.total || 0) > d.total * 3) flags.push(`retiró ${Math.round(Number(pv.total) / d.total)}× lo que cargó`);
+    if (!d.n) flags.push('sin cargas reales');
+    if (Number(p.amount) >= SHIFT_HIGH_ARS) flags.push('monto alto');
+    if (u.fraudReview && u.fraudReview.status === 'watch') flags.push('ya en observación');
+    if (!flags.length && !all) continue;
+    payouts.push({ id: p.id, userId: p.userId, username: p.username, amount: p.amount, paidAt: p.paidAt, minutes: Math.round((new Date(p.paidAt) - new Date(p.createdAt)) / 60000),
+      deposits: d.n, depositsTotal: Math.round(d.total), withdrawnTotal: Math.round(Number(pv.total || 0)), days, flags, review: p.shiftReview || null });
+  }
+  payouts.sort((a, b) => (!!a.review - !!b.review) || (b.flags.length - a.flags.length) || (b.amount - a.amount));
+  return payouts;
+}
 app.get('/api/admin/shift-review', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const hours = Math.min(168, Math.max(1, Number(req.query.hours) || 24)); const since = new Date(Date.now() - hours * 3600000);
     const all = String(req.query.all || '') === '1';
-    const pays = await PendingPayout.find({ status: 'paid', paidBy: PAYOUT_AUTO_ACTOR.username, paidAt: { $gte: since } }).sort({ paidAt: -1 }).limit(300)
-      .select('id userId username amount paidAt createdAt shiftReview').lean();
-    const ids = [...new Set(pays.map((p) => p.userId).filter(Boolean))];
-    const [users, deps, prevPaid] = await Promise.all([
-      User.find({ id: { $in: ids } }).select('id createdAt fraudReview isBlocked').lean(),
-      ids.length ? Transaction.aggregate([{ $match: { ..._REAL_DEP, userId: { $in: ids }, description: { $not: /PRUEBA/i } } }, { $group: { _id: '$userId', n: { $sum: 1 }, total: { $sum: '$amount' } } }]) : [],
-      ids.length ? PendingPayout.aggregate([{ $match: { userId: { $in: ids }, status: 'paid' } }, { $group: { _id: '$userId', firstAt: { $min: '$paidAt' }, total: { $sum: '$amount' } } }]) : []
-    ]);
-    const U = new Map(users.map((u) => [u.id, u])), Dp = new Map(deps.map((d) => [d._id, d])), Pp = new Map(prevPaid.map((d) => [d._id, d]));
-    const payouts = [];
-    for (const p of pays) {
-      const u = U.get(p.userId) || {}; const d = Dp.get(p.userId) || { n: 0, total: 0 }; const pv = Pp.get(p.userId) || {};
-      const days = u.createdAt ? Math.floor((Date.now() - new Date(u.createdAt).getTime()) / 86400000) : null;
-      const flags = [];
-      if (days != null && days < 7) flags.push(`cuenta de ${days} días`);
-      if (pv.firstAt && new Date(pv.firstAt).getTime() === new Date(p.paidAt).getTime()) flags.push('primer retiro');
-      if (d.total > 0 && Number(pv.total || 0) > d.total * 3) flags.push(`retiró ${Math.round(Number(pv.total) / d.total)}× lo que cargó`);
-      if (!d.n) flags.push('sin cargas reales');
-      if (Number(p.amount) >= SHIFT_HIGH_ARS) flags.push('monto alto');
-      if (u.fraudReview && u.fraudReview.status === 'watch') flags.push('ya en observación');
-      if (!flags.length && !all) continue;
-      payouts.push({ id: p.id, userId: p.userId, username: p.username, amount: p.amount, paidAt: p.paidAt, minutes: Math.round((new Date(p.paidAt) - new Date(p.createdAt)) / 60000),
-        deposits: d.n, depositsTotal: Math.round(d.total), withdrawnTotal: Math.round(Number(pv.total || 0)), days, flags, review: p.shiftReview || null });
-    }
-    payouts.sort((a, b) => (!!a.review - !!b.review) || (b.flags.length - a.flags.length) || (b.amount - a.amount));
+    const payouts = await _shiftPayouts(since, all);
     const rc = await Comprobante.find({ trustedFallback: true, createdAt: { $gte: new Date(Date.now() - Math.max(hours, 48) * 3600000) } }).sort({ createdAt: -1 }).limit(100)
       .select('id userId username createdAt bankMatchStatus matchedMovementId aiRetryPending aiRecheck shiftReview').lean();
     const mvIds = rc.map((c) => c.matchedMovementId).filter(Boolean);
@@ -28611,8 +28616,8 @@ async function _bizStalls(from, to) {
       aiFailed: cpN('error', false), aiFallback: cpN('error', true), notReceipt: cpN('not_comprobante'), duplicate: cpN('duplicate') }
   };
 }
-async function _bizBoard(period) {
-  const now = new Date(); const DAY = 86400000; const R = _bizRange(period, now);
+async function _bizBoard(period, at) {
+  const now = at ? new Date(at) : new Date(); // at = fin del período (cierre semanal: lunes 00 h) const DAY = 86400000; const R = _bizRange(period, now);
   const [cur, prev] = await Promise.all([_bizMoney(R.from, R.to), _bizMoney(R.pFrom, R.pTo)]);
   const money = Object.assign({}, cur, { prev, resultChg: businessBoard.chg(cur.result, prev.result), depositsChg: businessBoard.chg(cur.deposits, prev.deposits), depositorsChg: businessBoard.chg(cur.depositors, prev.depositors) });
   // RETENCIÓN: bloques de 7 días hacia atrás (0 = últimos 7 días) en las últimas 7 semanas.
@@ -28689,6 +28694,77 @@ app.get('/api/admin/inicio/negocio', authMiddleware, adminMiddleware, async (req
     const board = await _bizBoard(period); _bizCache.set(period, { at: Date.now(), board });
     res.json({ success: true, board });
   } catch (e) { logger.error('[negocio] ' + e.message); res.status(500).json({ error: 'No se pudo armar el tablero: ' + e.message }); }
+});
+// #1010 (owner): "apretando un botón que me dé un análisis semanal" + "la gente de estafa, números, cómo va el proyecto, alertas, y en cada semana
+// un cierre para ir comparando" ⇒ Negocio → 📋 Análisis semanal. Sólo LEE (el ajuste automático del recorrido sigue siendo la Revisión semanal).
+// CIERRE SEMANAL: cada lunes (desde las 06 h ART) se guarda el análisis de lunes a domingo en Config['weeklyCloses'] (52, el más nuevo primero;
+// weekKey = lunes de esa semana, idempotente). El análisis en vivo se compara contra el último cierre y arma la evolución con todos.
+const BLOCK_WHAT = { block: 'bloqueado a mano', auto_block: 'bloqueado por el antifraude', watch: 'puesto en observación', auto_watch: 'en observación (antifraude)',
+  payout_reject: 'retiro rechazado', payout_reject_block: 'retiro rechazado y bloqueado', unblock: 'desbloqueado', legit: 'marcado como legítimo' };
+async function _weeklyAnalysisBuild(at) {
+  const now = at ? new Date(at) : new Date(); const from = new Date(now.getTime() - 7 * 86400000); const W = { $gte: from, $lt: now };
+  const board = await _bizBoard('week', now);
+  const [offered, used, blocks, watches, rejects, shiftP, bank, bev, sus, dups, heldPP, closes] = await Promise.all([
+    User.countDocuments({ role: 'user', 'secondDepositOffer.offeredAt': W }),
+    User.countDocuments({ role: 'user', 'secondDepositOffer.offeredAt': W, 'secondDepositOffer.status': 'used' }),
+    BlockEvent.countDocuments({ createdAt: W, action: { $in: ['block', 'auto_block', 'payout_reject_block'] } }),
+    BlockEvent.countDocuments({ createdAt: W, action: { $in: ['watch', 'auto_watch'] } }),
+    BlockEvent.countDocuments({ createdAt: W, action: { $in: ['payout_reject', 'payout_reject_block'] } }),
+    _shiftPayouts(from, false).then((a) => a.filter((p) => !p.paidAt || new Date(p.paidAt) < now)),
+    at ? null : getConfig('bankLowBalanceState', null),
+    BlockEvent.find({ createdAt: W }).sort({ createdAt: -1 }).limit(200).select('username action reason by createdAt').lean(),
+    PendingPayout.find({ 'shiftReview.verdict': 'suspicious', 'shiftReview.at': W }).select('username amount shiftReview').limit(50).lean(),
+    User.find({ role: 'user', 'duplicateOf.at': W }).select('username duplicateOf').limit(100).lean(),
+    at ? [] : PendingPayout.find({ status: { $in: ['pending_review', 'failed'] }, reviewRequired: true, createdAt: { $gte: new Date(Date.now() - 15 * 86400000) } }).sort({ createdAt: 1 }).limit(50).select('username amount reviewReason createdAt').lean(),
+    getConfig('weeklyCloses', [])
+  ]);
+  const people = []; const seen = new Set();
+  const add = (o) => { const k = (o.username || '') + '|' + o.what; if (seen.has(k)) return; seen.add(k); people.push(o); };
+  for (const e of bev) add({ username: e.username, what: BLOCK_WHAT[e.action] || e.action, why: String(e.reason || '').slice(0, 140), by: e.by });
+  for (const p of sus) add({ username: p.username, what: `marcado SOSPECHOSO por el de turno (retiro $${Math.round(p.amount || 0).toLocaleString('es-AR')})`, why: String((p.shiftReview && p.shiftReview.note) || '').slice(0, 140), by: p.shiftReview && p.shiftReview.by });
+  for (const u of dups) add({ username: u.username, what: 'cuenta secundaria' + (u.duplicateOf && u.duplicateOf.username ? ' de ' + u.duplicateOf.username : ''), why: String((u.duplicateOf && u.duplicateOf.reason) || '').slice(0, 140) });
+  const heldNow = heldPP.map((p) => ({ username: p.username, amount: p.amount, why: String(p.reviewReason || '').slice(0, 140), hours: Math.floor((Date.now() - new Date(p.createdAt).getTime()) / 3600000) }));
+  const extra = { secondDeposit: { offered, used }, antifraud: { blocks, watches, rejects },
+    shift: { reviewed: shiftP.filter((p) => p.review).length, suspicious: shiftP.filter((p) => p.review && p.review.verdict === 'suspicious').length, pending: shiftP.filter((p) => !p.review).length },
+    bank: bank && bank.balance != null ? { balance: bank.balance, minArs: bank.minArs } : null,
+    fraud: { people, heldNow, dupNew: dups.length },
+    closes: (Array.isArray(closes) ? closes : []).filter((c) => !at || c.weekKey < _schedArtKey(from)) };
+  return { board, analysis: businessBoard.weeklyAnalysis(board, extra), from, to: now };
+}
+function _artMonday(d) { // lunes 00:00 ART de la semana de d
+  const k = _schedArtKey(d); const dt = new Date(k + 'T00:00:00-03:00'); const dow = (dt.getUTCDay() + 6) % 7; // 0 = lunes (dt a las 03:00 UTC = mismo día ART)
+  return new Date(dt.getTime() - dow * 86400000);
+}
+async function _weeklyCloseTick(force) {
+  const now = new Date(); const mon = _artMonday(now); const prevMon = new Date(mon.getTime() - 7 * 86400000); const weekKey = _schedArtKey(prevMon);
+  if (!force && now.getTime() - mon.getTime() < 6 * 3600000) return null; // recién a partir de las 06 h del lunes
+  const list = (await getConfig('weeklyCloses', [])) || []; if (!force && list.some((c) => c.weekKey === weekKey)) return null;
+  if (!(await _cronClaim('weeklyclose', 20 * 60000))) return null;
+  const { analysis } = await _weeklyAnalysisBuild(mon);
+  const close = { weekKey, from: weekKey, to: _schedArtKey(new Date(mon.getTime() - 1)), at: new Date().toISOString(), verdict: analysis.verdict, head: analysis.head,
+    numbers: analysis.numbers, actions: analysis.actions.slice(0, 20), text: String(analysis.text || '').slice(0, 12000) };
+  const fresh = ((await getConfig('weeklyCloses', [])) || []).filter((c) => c.weekKey !== weekKey);
+  await Config.set('weeklyCloses', [close].concat(fresh).sort((a, b) => (a.weekKey < b.weekKey ? 1 : -1)).slice(0, 52), 'system');
+  logger.info(`[cierre semanal] ${weekKey} ${analysis.verdict}`);
+  return close;
+}
+setTimeout(() => { _weeklyCloseTick().catch((e) => logger.warn('[cierre semanal] ' + e.message)); setInterval(() => { _weeklyCloseTick().catch((e) => logger.warn('[cierre semanal] ' + e.message)); }, 30 * 60000); }, 13 * 60000);
+app.get('/api/admin/inicio/weekly-analysis', authMiddleware, adminMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Sólo administradores' });
+  try {
+    const { board, analysis } = await _weeklyAnalysisBuild(null); _bizCache.set('week', { at: Date.now(), board });
+    const closes = ((await getConfig('weeklyCloses', [])) || []).map((c) => ({ weekKey: c.weekKey, from: c.from, to: c.to, verdict: c.verdict, head: c.head, numbers: c.numbers }));
+    res.json({ success: true, analysis, closes });
+  } catch (e) { logger.error('[análisis semanal] ' + e.message); res.status(500).json({ error: 'No se pudo armar el análisis: ' + e.message }); }
+});
+app.get('/api/admin/inicio/weekly-closes/:weekKey', authMiddleware, adminMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Sólo administradores' });
+  const c = ((await getConfig('weeklyCloses', [])) || []).find((x) => x.weekKey === String(req.params.weekKey));
+  if (!c) return res.status(404).json({ error: 'No hay cierre de esa semana' }); res.json({ success: true, close: c });
+});
+app.post('/api/admin/inicio/weekly-closes/run', authMiddleware, adminMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Sólo administradores' });
+  try { const c = await _weeklyCloseTick(true); res.json({ success: true, close: c }); } catch (e) { res.status(500).json({ error: 'No se pudo cerrar la semana: ' + e.message }); }
 });
 app.get('/api/admin/inicio/sorteos-stats', authMiddleware, adminMiddleware, async (req, res) => {
   try {
