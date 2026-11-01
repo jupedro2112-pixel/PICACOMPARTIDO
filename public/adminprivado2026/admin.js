@@ -6460,7 +6460,11 @@ async function shiftReviewMark(kind, id, verdict) {
 }
 async function loadPayReview() {
     try { atencionAnalisis('pay'); } catch (_) {} // #750
-    try { if (Date.now() - (window._shiftAutoAt || 0) > 15000) { window._shiftAutoAt = Date.now(); loadShiftReview(); } } catch (_) {} // #1010 (revisión: como mucho cada 15 s por los avisos en vivo)
+    try { // #1010 (revisión): como mucho cada 15 s por los avisos en vivo, y si llega uno en el medio se recarga al cumplirse (no se pierde)
+        const wait = 15000 - (Date.now() - (window._shiftAutoAt || 0));
+        if (wait <= 0) { window._shiftAutoAt = Date.now(); loadShiftReview(); }
+        else if (!window._shiftAutoT) window._shiftAutoT = setTimeout(function () { window._shiftAutoT = null; window._shiftAutoAt = Date.now(); loadShiftReview(); }, wait);
+    } catch (_) {}
     const box = document.getElementById('payReviewList'); if (!box) return;
     try {
         const r = await authFetch('/api/admin/payouts/review'); const j = await r.json();
@@ -16756,12 +16760,12 @@ function _bizRender(b) {
 window.loadNegocio = loadNegocio;
 // #1010 (owner: "apretando un botón que me dé un análisis semanal"): informe de los últimos 7 días en lenguaje simple + qué hacer. Sólo lee.
 let _bizWeeklyText = '';
-async function bizWeeklyAnalysis() {
+async function bizWeeklyAnalysis(fresh) {
     const box = document.getElementById('bizWeekly'); if (!box) return;
     box.hidden = false; box.innerHTML = '<div class="in-note">Armando el análisis de la semana… (puede tardar unos segundos)</div>';
     box.scrollIntoView({ behavior: 'smooth', block: 'start' });
     try {
-        const r = await _inicioGuard('/api/admin/inicio/weekly-analysis', box); if (!r) return;
+        const r = await _inicioGuard('/api/admin/inicio/weekly-analysis' + (fresh ? '?fresh=1' : ''), box); if (!r) return;
         const j = await r.json(); if (!r.ok) throw new Error(j.error || 'error');
         const a = j.analysis || {}; _bizWeeklyText = a.text || '';
         const col = a.verdict === 'good' ? 'var(--p-green, #16a34a)' : a.verdict === 'bad' ? 'var(--p-red, #dc2626)' : 'var(--p-amber, #d97706)';
@@ -16773,7 +16777,7 @@ async function bizWeeklyAnalysis() {
             return '<li style="margin:4px 0">' + (x.level === 'bad' ? '🔴 ' : '🟡 ') + escapeHtml(x.text) + '</li>'; }).join('') + '</ol>' : '<div class="in-note">Nada urgente: seguir midiendo.</div>';
         box.innerHTML = '<div class="card" style="border-left:4px solid ' + col + ';padding:14px 16px;margin-bottom:16px">' +
             '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center"><h3 style="margin:0">📋 Análisis semanal · ' + escapeHtml(a.range || '') + '</h3>' +
-            '<div style="display:flex;gap:6px"><button class="btn btn-secondary btn-small" onclick="bizWeeklyCopy()">📋 Copiar</button><button class="btn btn-secondary btn-small" onclick="document.getElementById(\'bizWeekly\').hidden=true">✕</button></div></div>' +
+            '<div style="display:flex;gap:6px"><button class="btn btn-secondary btn-small" onclick="bizWeeklyAnalysis(true)" title="Recalcular ahora (si no, se guarda 5 minutos)">🔄</button><button class="btn btn-secondary btn-small" onclick="bizWeeklyCopy()">📋 Copiar</button><button class="btn btn-secondary btn-small" onclick="document.getElementById(\'bizWeekly\').hidden=true">✕</button></div></div>' +
             '<div style="margin-top:8px;font-weight:600;color:' + col + '">' + escapeHtml(a.head || '') + '</div>' + secs +
             '<div style="margin-top:14px"><b>⚠️ Alertas y qué hacer esta semana</b>' + acts + '</div>' + _bizClosesHtml(j.closes || []) +
             '<div class="in-note" style="margin-top:10px">Sólo lee los números: no cambia ninguna configuración. "Copiar" lo deja listo para pegar en un chat.</div></div>';
@@ -16804,7 +16808,7 @@ async function bizWeeklyCloseView(k) {
 async function bizWeeklyCloseNow() {
     const box = document.getElementById('bizWeekly');
     try { const r = await _inicioGuard('/api/admin/inicio/weekly-closes/run', box, { method: 'POST' }); if (!r) return; const j = await r.json(); if (!r.ok) throw new Error(j.error || 'error');
-        showToast('🗓️ Semana cerrada y guardada', 'success'); bizWeeklyAnalysis();
+        showToast('🗓️ Semana cerrada y guardada', 'success'); bizWeeklyAnalysis(true);
     } catch (e) { showToast('No se pudo cerrar: ' + e.message, 'error'); }
 }
 async function bizWeeklyCopy() { try { await navigator.clipboard.writeText(_bizWeeklyText || 'Todavía no hay análisis.'); showToast('📋 Análisis copiado', 'success'); } catch (_) { showToast('No se pudo copiar automáticamente', 'error'); } }

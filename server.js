@@ -14361,6 +14361,7 @@ app.post('/api/admin/bank-outage', authMiddleware, adminMiddleware, async (req, 
 //  - _payoutHoldSupportNote: si el cliente escribe al soporte con un retiro retenido, nota interna en su chat (una cada 2 h).
 const WITHDRAW_REVIEW_DEFAULT = '🔎 Tu retiro de ${amount} quedó en REVISIÓN de seguridad. Lo revisa una persona del equipo y te avisamos por acá apenas salga. No tenés que hacer nada: tu saldo no se tocó.';
 async function _notifyWithdrawHold(user, amount) {
+  try { _payoutHoldNoteAt.delete('noHold:' + (user && user.id)); } catch (_) {} // revisión: el retiro recién frenado se avisa a soporte en el próximo mensaje
   const txt = await renderSystemCommand('/sys_withdraw_review', WITHDRAW_REVIEW_DEFAULT, { amount: Number(amount || 0).toLocaleString('es-AR') });
   if (!txt) return;
   const u = await User.findOne({ id: user.id }).select('id username fcmToken fcmTokens fcmTokenContext').lean();
@@ -14381,9 +14382,9 @@ async function _payoutHoldSupportNote(userId, username) {
     // revisión #1010: primero el freno en memoria (sin ir a la base en cada mensaje); sin retiro ⇒ no se vuelve a mirar por 60 s.
     const key = 'payoutHoldNote:' + userId; const last = _payoutHoldNoteAt.get(key) || 0; const nk = 'noHold:' + userId;
     if (Date.now() - last < 2 * 3600000 || Date.now() - (_payoutHoldNoteAt.get(nk) || 0) < 60000) return;
-    if (_payoutHoldNoteAt.size > 20000) _payoutHoldNoteAt.clear();
-    const h = await _withdrawHoldOf(userId); if (!h) { _payoutHoldNoteAt.set(nk, Date.now()); return; }
-    _payoutHoldNoteAt.set(key, Date.now());
+    if (_payoutHoldNoteAt.size > 5000) { const t = Date.now(); for (const [k, v] of _payoutHoldNoteAt) if (t - v > (k.startsWith('noHold:') ? 60000 : 2 * 3600000)) _payoutHoldNoteAt.delete(k); } // revisión: sólo lo vencido
+    _payoutHoldNoteAt.set(key, Date.now()); // revisión: se reserva ANTES de ir a la base (3 mensajes juntos = una sola nota)
+    const h = await _withdrawHoldOf(userId); if (!h) { _payoutHoldNoteAt.delete(key); _payoutHoldNoteAt.set(nk, Date.now()); return; }
     const hora = new Date(h.since).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     await _emitAdminOnlyChatNote(userId, username, h.kind === 'review'
       ? `⏸️ ESTE CLIENTE TIENE UN RETIRO RETENIDO EN REVISIÓN: $${Number(h.amount).toLocaleString('es-AR')} (pedido ${hora}). Motivo: ${h.reason || 'sin detalle'}. Si pregunta por el pago: está en revisión de seguridad; se confirma o rechaza en Panel → Confirmación de pagos.`
@@ -23610,7 +23611,7 @@ async function _shiftPayouts(since, all, until, max) {
   const payouts = [];
   for (const p of pays) {
     const u = U.get(p.userId) || {}; const d = Dp.get(p.userId) || { n: 0, total: 0 }; const pv = Pp.get(p.userId) || {};
-    const days = u.createdAt ? Math.floor((Date.now() - new Date(u.createdAt).getTime()) / 86400000) : null;
+    const days = u.createdAt ? Math.floor((new Date(p.paidAt).getTime() - new Date(u.createdAt).getTime()) / 86400000) : null; // revisión: antigüedad AL PAGAR (igual en el cierre semanal)
     const flags = [];
     if (days != null && days < 7) flags.push(`cuenta de ${days} días`);
     if (pv.firstAt && new Date(pv.firstAt).getTime() === new Date(p.paidAt).getTime()) flags.push('primer retiro');
@@ -27770,10 +27771,10 @@ const REFUND_REMIND_DEFAULT = '🔁 Ayer no fue tu día, pero te devolvemos el {
 // #973 (owner): "avisos de reembolso SIEMPRE a los que tienen disponible, sea diario, semanal o mensual". #1010: semanal lunes + martes; mensual día 7 + 15.
 const REFUND_REMIND_WEEKLY_DEFAULT = '📅 Tenés un reembolso SEMANAL del {pct}% esperándote 💸 Tocá acá y reclamalo: se acredita al toque.';
 const REFUND_REMIND_MONTHLY_DEFAULT = '🗓️ Tu reembolso MENSUAL del {pct}% ya está disponible 💸 Tocá acá y reclamalo antes de que venza.';
-let _refundRemindRunning = false;
+let _refundRemindRunning = false, _rrClaimed = false;
 // #1010 (owner 2026-11-01): "notificaciones para la gente que tiene un reembolso disponible para reclamar, aparte del resto". El aviso sale
 // SÓLO a quien tiene plata para cobrar, calculada IGUAL que el reclamo (pérdida de casino − bono otorgado del período, rango del período,
-// − acumulativo ya cobrado en el período, ≥ mínimo del período) y con el MONTO en el título. Es personal (kind 'personal'): no cuenta en el
+// − acumulativo ya cobrado en el período, ≥ mínimo del período) y con el MONTO en el título. Va como kind 'system' (owner 2026-11-01: sale aunque el cliente haya elegido "ninguno" en Perfil, es retención); no cuenta en el
 // tope diario de promos. Ventanas = las del reclamo (models/refunds.js): diario hoy (sobre ayer) + último aviso 20 h; semanal lunes y
 // último aviso martes; mensual día 7 y día 15. Antes salía también a quien perdió sólo bono (abría y veía $0) y el semanal los jueves
 // / el mensual el día 1, cuando el reclamo está cerrado.
@@ -27836,25 +27837,25 @@ async function _refundReminderTick() {
     for (const kind of ['daily', 'weekly', 'monthly', 'daily_last']) {
       const plan = await _refundRemindPlan(kind, now); if (!plan.due || !(plan.pct > 0) || slots[kind] === plan.slot) continue;
       if (kind === 'daily_last' && slots.daily !== plan.slot) continue; // el último aviso sólo después del primero del día
-      if (!claimed) { if (!(await _cronClaim('refundremind', 60 * 60000))) return; claimed = true; } // una instancia por pasada (revisión: 60 min, el envío puede tardar)
+      if (!claimed) { if (!(await _cronClaim('refundremind', 60 * 60000))) return; claimed = true; _rrClaimed = true; } // una instancia por pasada (revisión: 60 min, el envío puede tardar)
       const prevSlot = slots[kind]; slots[kind] = plan.slot; await Config.set('refundRemindLast', Object.assign({}, last, { slots }), 'system'); // revisión #1010: marcado ANTES de mandar (otra instancia no lo repite)
-      const r = await _refundRemindRun(kind, plan, now);
+      let r; try { r = await _refundRemindRun(kind, plan, now); } catch (e) { r = { error: e.message }; } // revisión: si explota, se desmarca igual
       if (r.error) { slots[kind] = prevSlot; await Config.set('refundRemindLast', Object.assign({}, last, { slots }), 'system'); logger.warn('[reembolso-aviso] ' + kind + ': ' + r.error + ': se reintenta en la próxima pasada'); continue; }
       slots[kind] = plan.slot; const kinds = Object.assign({}, last.kinds || {}); kinds[kind] = r;
       Object.assign(last, { day: _schedArtKey(now), at: now.toISOString(), kind, candidates: r.candidates, losers: r.losers, withRefund: r.withRefund, sent: r.sent, slots, kinds });
       await Config.set('refundRemindLast', last, 'system');
       logger.info(`[reembolso-aviso] ${kind} ${plan.periodKey}: ${r.candidates} sin reclamar · ${r.losers} perdieron · ${r.withRefund} con reembolso ($${r.amountTotal}) · push ${r.sent}`);
     }
-  } catch (e) { logger.warn('[reembolso-aviso] ' + e.message); } finally { _refundRemindRunning = false; }
+  } catch (e) { logger.warn('[reembolso-aviso] ' + e.message); } finally { _refundRemindRunning = false; if (_rrClaimed) { _rrClaimed = false; _cronRelease('refundremind'); } }
 }
 setTimeout(() => { _refundReminderTick().catch(() => {}); setInterval(() => { _refundReminderTick().catch(() => {}); }, 15 * 60 * 1000); }, 6 * 60 * 1000);
 // #1010 (owner 2026-11-01): aviso "tu giro GRATIS de hoy está listo" (13–15 h ART), uno por día. Sólo a quien PUEDE girar gratis (mismo filtro
 // anti-multicuentas que el giro: cargas reales de la vida ≥ minDeposits, sin cuenta secundaria ni marcas, app instalada), cargó en los últimos
-// 60 días, no giró hoy, quiere promos (notifPrefs 'all') y NO recibió otro aviso masivo hoy (no se suma al tope diario: si ya tuvo uno, no sale).
+// 60 días, no giró hoy, (sin mirar Perfil: owner 2026-11-01, sale aunque haya elegido "ninguno") y NO recibió otro aviso masivo hoy (no se suma al tope diario: si ya tuvo uno, no sale).
 // A los 3 avisos seguidos sin girar se deja de mandar hasta que vuelva a girar (User.rouletteNudge). Texto editable: /sys_roulette_ready.
 const ROULETTE_NUDGE_TITLE = '🎰 Tu giro GRATIS está listo'; // corto: pushText le pone "🎁 BONO +N% · " adelante (título ≤ 45)
 const ROULETTE_NUDGE_DEFAULT = 'Entrá y girá: podés ganar hasta +{pct}% EXTRA para tu carga de hoy.';
-let _rlNudgeRunning = false;
+let _rlNudgeRunning = false, _rlClaimed = false;
 async function _rouletteNudgeTick(force) {
   if (_rlNudgeRunning || process.env.ROULETTE_NUDGE_DISABLED === '1') return null; _rlNudgeRunning = true;
   try {
@@ -27862,7 +27863,7 @@ async function _rouletteNudgeTick(force) {
     const nc = await getNotifCenterConfig(); if (nc.rouletteReminder === false) return null;
     const today = _schedArtKey(now); const last = await getConfig('rouletteNudgeLast', null); if (!force && last && last.day === today) return null;
     const cfg = await getDailyRouletteConfig(); if (!cfg.enabled || !cfg.free || !cfg.free.enabled) return null;
-    if (!(await _cronClaim('roulettenudge', 60 * 60000))) return null;
+    if (!(await _cronClaim('roulettenudge', 60 * 60000))) return null; _rlClaimed = true;
     const since60 = new Date(now.getTime() - 60 * 86400000);
     // revisión #1010: primero los que cargaron en 60 días (índice por fecha); la cuenta de la vida sólo para ellos y sólo si piden más de 1 carga.
     const ids60 = (await Transaction.distinct('userId', Object.assign({ timestamp: { $gte: since60 } }, SCHED_ADAPTER.realDepositMatch()))).filter(Boolean);
@@ -27889,7 +27890,7 @@ async function _rouletteNudgeTick(force) {
     await Config.set('rouletteNudgeLast', out, 'system');
     logger.info(`[ruleta-aviso] ${today}: ${users.length} pueden girar gratis · ${cand.length} avisados · push ${sent}`);
     return out;
-  } catch (e) { logger.warn('[ruleta-aviso] ' + e.message); return null; } finally { _rlNudgeRunning = false; }
+  } catch (e) { logger.warn('[ruleta-aviso] ' + e.message); return null; } finally { _rlNudgeRunning = false; if (_rlClaimed) { _rlClaimed = false; _cronRelease('roulettenudge'); } } // revisión: cada cliente se marca al avisarle (lastAt) ⇒ soltar el lock no repite
 }
 setTimeout(() => { _rouletteNudgeTick().catch(() => {}); setInterval(() => { _rouletteNudgeTick().catch(() => {}); }, 15 * 60 * 1000); }, 8 * 60 * 1000);
 let _newbieRunning = false;
@@ -28327,6 +28328,8 @@ async function _cronClaim(name, ttlMs) {
     return false;
   } catch (_) { return true; }
 }
+// #1010 (revisión): suelta el lock al terminar la pasada (el TTL queda sólo como red si la instancia se cae a mitad).
+async function _cronRelease(name) { try { await Config.set(('cronlock_' + name).toLowerCase(), { until: null, at: new Date().toISOString() }, 'system'); } catch (_) {} }
 // #957: una sola instancia corre la pasada (lock de 15 min en Config); las demás saltean. Con force (panel) corre igual.
 async function _sorteoClaim() {
   try {
@@ -28684,7 +28687,7 @@ async function _bizBoard(period, at) {
         { $limit: 1 }, { $project: { _id: 1 } }] }) },
       { $group: { _id: { $ifNull: ['$mode', 'gold'] }, spins: { $sum: 1 }, users: { $addToSet: '$userId' }, depositedAfter: { $sum: { $cond: [{ $gt: [{ $size: '$dep' }, 0] }, 1, 0] } },
         cash: { $sum: { $cond: [{ $eq: ['$status', 'credited'] }, '$prizeARS', 0] } }, pctWins: { $sum: { $cond: [{ $eq: ['$prizeType', 'percent'] }, 1, 0] } } } }];
-    let rr; try { rr = await DailyRouletteSpin.aggregate(_rlPipe(true)).allowDiskUse(true); } catch (_) { rr = await DailyRouletteSpin.aggregate(_rlPipe(false)).allowDiskUse(true); }
+    let rr; try { rr = await DailyRouletteSpin.aggregate(_rlPipe(true)).allowDiskUse(true); } catch (e) { if (!/localField|foreignField|pipeline/i.test(String(e && e.message))) throw e; rr = await DailyRouletteSpin.aggregate(_rlPipe(false)).allowDiskUse(true); } // revisión: el respaldo sólo si la base no soporta la forma nueva (no ante un timeout)
     const days = Math.max(1, Math.round((R.to - R.from) / DAY));
     const m = (k) => { const x = rr.find((r) => r._id === k) || { spins: 0, users: [], depositedAfter: 0, cash: 0, pctWins: 0 }; return { spins: x.spins, users: x.users.length, perDay: Math.round(x.spins / days), depositedAfter: x.depositedAfter, depositRate: x.spins ? x.depositedAfter / x.spins : null, cash: Math.round(x.cash), pctWins: x.pctWins }; };
     roulette = { free: m('free'), gold: m('gold'), days };
@@ -28702,7 +28705,7 @@ app.get('/api/admin/inicio/negocio', authMiddleware, adminMiddleware, async (req
     const hit = _bizCache.get(period);
     if (hit && Date.now() - hit.at < 10 * 60000 && req.query.fresh !== '1') return res.json({ success: true, cached: true, board: hit.board });
     // revisión #1010: una sola cuenta a la vez por período (los demás esperan la misma).
-    const board = await (_bizInflight.get(period) || (() => { const p = _bizBoard(period).finally(() => _bizInflight.delete(period)); _bizInflight.set(period, p); return p; })()); _bizCache.set(period, { at: Date.now(), board });
+    const board = await ((req.query.fresh !== '1' && _bizInflight.get(period)) || (() => { const p = _bizBoard(period).finally(() => { if (_bizInflight.get(period) === p) _bizInflight.delete(period); }); _bizInflight.set(period, p); return p; })()); // 🔄 (fresh) siempre cuenta de nuevo _bizCache.set(period, { at: Date.now(), board });
     res.json({ success: true, board });
   } catch (e) { logger.error('[negocio] ' + e.message); res.status(500).json({ error: 'No se pudo armar el tablero: ' + e.message }); }
 });
@@ -28715,7 +28718,7 @@ const BLOCK_WHAT = { block: 'bloqueado a mano', auto_block: 'bloqueado por el an
 let _waCache = {}, _waInflight = null;
 async function _weeklyAnalysisBuild(at) {
   const now = at ? new Date(at) : new Date(); const from = new Date(now.getTime() - 7 * 86400000); const W = { $gte: from, $lt: now };
-  const board = await _bizBoard('week', now);
+  const board = at ? await _bizBoard('week', now) : await (_bizInflight.get('week') || (() => { const p = _bizBoard('week').finally(() => { if (_bizInflight.get('week') === p) _bizInflight.delete('week'); }); _bizInflight.set('week', p); return p; })()); // revisión: comparte la cuenta con Negocio
   const [offered, used, blocks, watches, rejects, shiftP, bank, bev, sus, dups, heldPP, closes] = await Promise.all([
     User.countDocuments({ role: 'user', 'secondDepositOffer.offeredAt': W }),
     User.countDocuments({ role: 'user', 'secondDepositOffer.offeredAt': W, 'secondDepositOffer.status': 'used' }),
@@ -28752,12 +28755,15 @@ async function _weeklyCloseTick(force) {
   if (!force && now.getTime() - mon.getTime() < 6 * 3600000) return null; // recién a partir de las 06 h del lunes
   const list = (await getConfig('weeklyCloses', [])) || []; if (!force && list.some((c) => c.weekKey === weekKey)) return null;
   if (!(await _cronClaim('weeklyclose', 20 * 60000))) return null;
+  try { return await _weeklyCloseDo(mon, weekKey); } finally { _cronRelease('weeklyclose'); } // revisión: suelta el lock al terminar (409 sólo si de verdad está corriendo)
+}
+async function _weeklyCloseDo(mon, weekKey) {
   const { analysis } = await _weeklyAnalysisBuild(mon);
   const close = { weekKey, from: weekKey, to: _schedArtKey(new Date(mon.getTime() - 1)), at: new Date().toISOString(), verdict: analysis.verdict, head: analysis.head,
     numbers: analysis.numbers, actions: analysis.actions.slice(0, 20), text: String(analysis.text || '').slice(0, 12000) };
   const fresh = ((await getConfig('weeklyCloses', [])) || []).filter((c) => c.weekKey !== weekKey);
   await Config.set('weeklyCloses', [close].concat(fresh).sort((a, b) => (a.weekKey < b.weekKey ? 1 : -1)).slice(0, 52), 'system');
-  logger.info(`[cierre semanal] ${weekKey} ${analysis.verdict}`);
+  logger.info(`[cierre semanal] ${weekKey} ${analysis.verdict}`); _waCache = {};
   return close;
 }
 setTimeout(() => { _weeklyCloseTick().catch((e) => logger.warn('[cierre semanal] ' + e.message)); setInterval(() => { _weeklyCloseTick().catch((e) => logger.warn('[cierre semanal] ' + e.message)); }, 30 * 60000); }, 13 * 60000);
@@ -28766,7 +28772,8 @@ app.get('/api/admin/inicio/weekly-analysis', authMiddleware, adminMiddleware, as
   try {
     // revisión #1010: una sola cuenta a la vez (varios clics / varios admins esperan la misma) y se guarda 5 min (🔄 = fresh=1 recalcula).
     const hit = _waCache.at && Date.now() - _waCache.at < 5 * 60000 && req.query.fresh !== '1' ? _waCache.v : null;
-    const { board, analysis } = hit || await (_waInflight || (_waInflight = _weeklyAnalysisBuild(null).then((v) => { _waCache = { at: Date.now(), v }; return v; }).finally(() => { _waInflight = null; })));
+    const fresh = req.query.fresh === '1'; const build = () => { const p = _weeklyAnalysisBuild(null).then((v) => { _waCache = { at: Date.now(), v }; return v; }).finally(() => { if (_waInflight === p) _waInflight = null; }); _waInflight = p; return p; };
+    const { board, analysis } = hit || await ((!fresh && _waInflight) || build()); // revisión: 🔄 (fresh) siempre cuenta de nuevo
     _bizCache.set('week', { at: _waCache.at || Date.now(), board });
     const closes = ((await getConfig('weeklyCloses', [])) || []).map((c) => ({ weekKey: c.weekKey, from: c.from, to: c.to, verdict: c.verdict, head: c.head, numbers: c.numbers }));
     res.json({ success: true, analysis, closes });

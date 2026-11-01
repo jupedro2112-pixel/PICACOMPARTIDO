@@ -13097,4 +13097,12 @@ la app pueda expandir todo lo que ya tenemos; el chat con el mismo formato y fon
     PendingPayout `shiftReview.at`.
   - Nota del retiro retenido en el chat: freno en memoria ANTES de ir a la base (+60 s sin retiro). PWA: el cartel no consulta con la app en segundo
     plano (v658). Panel: Para revisar se recarga como mucho cada 15 s (admin SW v229). Análisis: cuenta TODOS los retiros de la semana (antes 300).
+- `/code-review high` sobre la revisión de velocidad (10 puntos), corregido: aviso de reembolso se desmarca también si la pasada EXPLOTA; los locks del
+  aviso de reembolso, del giro gratis y del cierre semanal se SUELTAN al terminar (`_cronRelease`; antes un error bloqueaba el reintento 1 h y podía
+  perder el aviso del día; "Cerrar semana" daba 409 aunque no corría nada); Para revisar recarga al final de los 15 s (no pierde avisos en vivo);
+  el freno de notas del retiro borra sólo lo vencido; la ruleta de Negocio usa el respaldo `$expr` sólo si la base no soporta la forma nueva;
+  🔄 (fresh=1) siempre recalcula; "cuenta de N días" se mide al momento del pago (igual en los cierres); comentarios y docs con la excepción de
+  avisos que salen sin mirar Perfil. Seguridad de los 2 últimos commits: limpia. Admin SW v230.
+  + 2ª pasada del code-review: la nota del retiro retenido se reserva antes de ir a la base (3 mensajes juntos = una nota) y un retiro recién frenado
+  borra el "sin retiro" en memoria; el Análisis semanal comparte la cuenta con Negocio, tiene 🔄 que recalcula (fresh=1) y se limpia tras el cierre del lunes.
 

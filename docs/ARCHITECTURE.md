@@ -1605,7 +1605,7 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
   `DailyRouletteSpin.mode`. ⚠️ El guard de push de la ruleta (`notificationService.isRouletteText`) sigue: sólo pasa `data.allowRoulette='1'`
   (el aviso `_rouletteNudgeTick`). Un aviso nuevo de ruleta tiene que ir con ese flag y respetar `_notifDayCounts`.
 - Avisos de reembolso (`_refundRemindPlan` / `_refundRemindRun` / `_refundReminderTick`): monto por cliente con el MISMO cálculo que el reclamo
-  (si cambia el cálculo del reclamo, cambiarlo acá también), push personal por cliente (`sendPushIfOffline`, `kind:'personal'`), slots
+  (si cambia el cálculo del reclamo, cambiarlo acá también), push por cliente (`sendPushIfOffline`, `kind:'system'` desde 2026-11-01: sale aunque haya elegido "ninguno"; ver al final), slots
   `daily` · `daily_last` (20 h) · `weekly` (lun/mar = `canClaimWeeklyRefund`) · `monthly` (7 y 15; el reclamo abre el 7). Resultado en
   `Config['refundRemindLast'].kinds` (`withRefund`, `amountTotal`, `sent`). Test `scripts/test-roulette-free.js`.
 
@@ -1752,3 +1752,8 @@ lote fijo. Excluidos: Bonificación manual, devolución de retiro, referidos, c�
   `Config['weeklyCloses']` [{ weekKey, from, to, verdict, head, numbers, actions, text }], 52, el más nuevo primero. `numbers` es lo que se compara semana
   a semana (agregar campos nuevos ahí, nunca renombrar: los cierres viejos quedan con los nombres de antes).
 - `GET /api/admin/inicio/weekly-closes/:weekKey` (texto completo) y `POST /api/admin/inicio/weekly-closes/run` (fuerza el cierre de la semana pasada).
+- Avisos de reembolso (`_refundReminderTick`) y del giro gratis (`_rouletteNudgeTick`): `kind:'system'`, SIN filtro de `notifPrefs` (owner 2026-11-01:
+  salen aunque el cliente haya elegido "ninguno"). Reembolso: el turno se marca antes de mandar y se desmarca si la pasada falla o explota; giro gratis:
+  cada cliente queda con `rouletteNudge.lastAt` al avisarle (nunca dos el mismo día). Ambos sueltan el lock al terminar (`_cronRelease`), igual que
+  `_weeklyCloseTick`. Negocio / análisis: `fresh=1` siempre recalcula; sin fresh, los pedidos simultáneos esperan la misma cuenta.
+

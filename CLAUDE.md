@@ -428,7 +428,8 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`). Git user: j
   perdidos / lejanos, un paso por día, regalos crecientes, fichas según valor del cliente; marca `User.journey.sent`), autopiloto, aviso del reembolso,
   ofertas de bienvenida, historia con bono (ahora a las 12:30; ese día el autopiloto no manda), historia "pagos de la semana" (lunes). Reglas viejas
   (NotificationRule) APAGADAS por defecto. **Tope único:** `monthlyCap` (cuenta todos los lotes) + `dailyCap: 1` en `_resolveNotifBatchAudience`
-  (`_notifDayCounts`). Un aviso automático NUEVO tiene que salir por `_createNotifBatchFromBody` (hereda topes) o, si es push directa, pasar
+  (`_notifDayCounts`). **Excepción (owner 2026-11-01):** los avisos de reembolso y del giro gratis van `kind:'system'` y salen aunque el cliente
+  haya elegido "ninguno" (retención). Un aviso automático NUEVO tiene que salir por `_createNotifBatchFromBody` (hereda topes) o, si es push directa, pasar
   `data.kind` ('promo' | 'personal' | 'system') para que `User.notifPrefs` (Perfil → "Qué avisos querés recibir": todos / sólo lo mío / ninguno, +
   fatiga: 10 promos sin abrir la app pausan las masivas) se respete en `sendPushIfOffline` y en `notificationService.prefsFilter`. Historias: `clicks` y
   `reactions` (`POST /api/stories/:id/click|react`). INICIO muestra cohortes (`_inicioCohorts`); Cierres el semáforo regalos/depósitos del mes.
