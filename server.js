@@ -27099,7 +27099,7 @@ async function _mirrorTick() {
           for (const [u, st] of Object.entries(r.players || {})) if (Number(st.wagered) > 0) players[u] = { wagered: Math.round(st.wagered), netwin: Math.round(st.netwin), bonusGranted: Math.round(st.bonusGranted || 0) };
           await new Promise((ok) => setTimeout(ok, gap));
         }
-        if (failed) { _mirrorProgress.error = failed; logger.warn('[espejo] franja ' + b.key + ': ' + failed); break; }
+        if (failed) { _mirrorProgress.error = failed; _mirrorForce = false; logger.warn('[espejo] franja ' + b.key + ': ' + failed); break; } // con error no se insiste de día: sigue la noche siguiente
         await MirrorBucket.updateOne({ key: b.key }, { $set: { from: b.from, to: b.to, players, asked: users.length, complete: true, fetchedAt: new Date() } }, { upsert: true });
         _mirrorProgress.done++;
       }
@@ -27125,7 +27125,7 @@ async function _mirrorTick() {
     Object.assign(_mirrorProgress, { state: 'listo', at: new Date() });
     logger.info(`[espejo] ${done.length} franjas · ${groups.length} grupos sospechosos`);
     _mirrorForce = false;
-  } catch (e) { _mirrorProgress.error = e.message; logger.warn('[espejo] ' + e.message); } finally { _mirrorRunning = false; }
+  } catch (e) { _mirrorProgress.error = e.message; _mirrorForce = false; logger.warn('[espejo] ' + e.message); } finally { _mirrorRunning = false; }
 }
 setTimeout(() => { _mirrorTick().catch(() => {}); setInterval(() => { _mirrorTick().catch(() => {}); }, 10 * 60 * 1000); }, 7 * 60 * 1000);
 // Para el pedido de retiro: ¿está en un grupo espejo del último análisis?
