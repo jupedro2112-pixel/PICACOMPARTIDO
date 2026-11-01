@@ -1435,6 +1435,11 @@ function initSocket() {
         if (selectedUserId) loadPlatformBanner(selectedUserId);
     });
 
+    // #1002: el cliente pidió otro retiro y se anuló el anterior → refrescar Pagos a confirmar y el cartel del chat abierto.
+    socket.on('payouts_changed', (data) => {
+        try { const sec = document.getElementById('payReviewSection'), fx = document.getElementById('fraudSection'); if ((sec && sec.classList.contains('active')) || (fx && fx.classList.contains('active'))) loadPayReview(); } catch (_) {}
+        try { if (data && data.userId && data.userId === selectedUserId) loadPayoutBanner(data.userId); } catch (_) {}
+    });
     socket.on('security_alert', (data) => {
         if (data && data.message) showToast(data.message, 'error');
     });

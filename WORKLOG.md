@@ -8,7 +8,16 @@
 
 ## Sesión 2026-11-01
 
-### 1001. 🧾 CIERRE GENERAL con cuentas secundarias, "desde dónde se pagó" y control ✅ OK — admin SW v215
+### 1002. 🔁 RETIRO NUEVO ANULA EL ANTERIOR — queda vigente sólo el último — admin SW v216
+**Pedido (owner):** "si pido 5k de retiro y después gano y pido 10k, quedan los dos en Pagos a confirmar; que el primero se anule si el jugador
+pone otro monto y quede siempre el último vigente, para que los agentes no se mareen".
+- `_withdrawalRequestHandler`: después de crear el retiro nuevo, los anteriores del cliente en `pending_review` con fichas SIN descontar
+  (`deductAtPay`, `debitConfirmed≠true`) y sin envío al banco (o con envío fallido) pasan a `cancelled` + `paidVia:'replaced'` + `replacedBy`.
+  Los que ya se están pagando, con fichas descontadas o con el banco sin confirmar NO se tocan. Nota interna en el chat, socket
+  `payouts_changed` (el panel refresca Pagos a confirmar / Antifraude / cartel del chat) y aviso al cliente en la confirmación.
+  El mismo monto repetido en 10 min sigue siendo idempotente (no crea otro).
+
+ con cuentas secundarias, "desde dónde se pagó" y control ✅ OK — admin SW v215
 **Pedido (owner):** "que haya un cierre automático según avanza el día; si pagan de otro banco que se pueda tildar si el pago a mano salió del
 mismo banco o de otro banco; si se cambia el CBU a uno secundario ya cargado, tomar sus datos también para un buen cierre general diario, y que
 des confirmación de que el cierre está okey". Secundaria = otro banco con API (Fiwind, todavía sin configurar) o a mano; y "a mano dentro de la

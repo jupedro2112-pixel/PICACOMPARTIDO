@@ -14359,6 +14359,26 @@ async function _withdrawalRequestHandler(req, res) {
       return res.status(500).json({ error: 'No pudimos registrar tu solicitud de retiro. Probá de nuevo en un momento.' }); // #413
     }
 
+    // #1002 (owner): "si el jugador pide otro retiro, que el anterior se anule y quede siempre el ÚLTIMO vigente, para que los agentes no
+    // se mareen". Se anulan SÓLO los anteriores que no tocaron plata ni fichas: esperando confirmación, fichas sin descontar y sin ningún
+    // envío al banco (o con el envío fallido). Uno que ya se está pagando / con fichas descontadas / con el banco sin confirmar queda como está.
+    let _replaced = [];
+    try {
+      const _olds = await PendingPayout.find({ userId: user.id, id: { $ne: _newPayoutId }, status: 'pending_review', deductAtPay: true, debitConfirmed: { $ne: true },
+        $or: [{ hgTransactionId: null, hgTxId: null }, { hgStatus: { $regex: /fail|error|reject|cancel/i } }] }).select('id amount hgStatus').lean();
+      for (const o of _olds) {
+        const r = await PendingPayout.updateOne({ id: o.id, status: 'pending_review', debitConfirmed: { $ne: true } },
+          { $set: { status: 'cancelled', paidVia: 'replaced', chipsReturned: false, error: 'Reemplazado por el retiro nuevo de $' + amountNum.toLocaleString('es-AR') + ' (el cliente pidió otro monto)', replacedBy: _newPayoutId } });
+        if (r.modifiedCount) _replaced.push(o);
+      }
+      if (_replaced.length) {
+        const _lst = _replaced.map((o) => '$' + Number(o.amount).toLocaleString('es-AR')).join(', ');
+        logger.info(`[withdrawal/request] ${user.username}: retiro nuevo $${amountNum} reemplaza a ${_lst}`);
+        await _emitAdminOnlyChatNote(user.id, user.username, `🔁 El cliente pidió un retiro NUEVO de $${amountNum.toLocaleString('es-AR')}: se ANULÓ el anterior (${_lst}). Queda vigente sólo el último (no se descontaron fichas del anterior).`);
+        try { io.to('admins').emit('payouts_changed', { userId: user.id }); } catch (_) {}
+      }
+    } catch (e) { logger.warn('[withdrawal/request] reemplazo de retiros anteriores: ' + e.message); }
+
     // Guardar datos bancarios para la próxima vez (si el usuario lo pidió).
     if (saveData) {
       user.withdrawalAccount = { titular: titularT, cbu: cbuT, alias: aliasT, savedAt: new Date() };
@@ -14389,11 +14409,12 @@ async function _withdrawalRequestHandler(req, res) {
     // 2. Confirmación automática del sistema hacia el usuario (editable /sys_withdrawal_request).
     // El template usa "${amount}" y reemplazamos {amount} por el monto ya
     // formateado con separador de miles, SIN el signo $ (el $ va en el template).
-    const withdrawConfirmContent = await renderSystemCommand(
+    const _wcBase = await renderSystemCommand(
       '/sys_withdrawal_request',
       '⏳ Recibimos tu solicitud de retiro de ${amount}.\nUn agente la está procesando y te confirma la transferencia en breve. ¡Gracias!',
       { amount: amountNum.toLocaleString('es-AR') }
     );
+    const withdrawConfirmContent = _wcBase && _replaced.length ? _wcBase + '\n\n🔁 Tu pedido anterior de ' + _replaced.map((o) => '$' + Number(o.amount).toLocaleString('es-AR')).join(', ') + ' quedó anulado: sigue vigente sólo este de ' + amountFmt + '.' : _wcBase; // #1002
     // null = /sys_withdrawal_request vaciado a propósito → no se manda la confirmación.
     const withdrawConfirmMsg = withdrawConfirmContent ? await Message.create({
       id: uuidv4(),

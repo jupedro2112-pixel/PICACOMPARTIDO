@@ -1597,6 +1597,11 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
   Siguen: login, alta desde el panel (`/api/users`, `/api/admin/users`, publisher-admin) y la creación local de un jugador que YA existe en 1girox.
 - Test: `node scripts/test-fraud-auto.js` (10 casos).
 
+### Retiro nuevo reemplaza al anterior #1002 (2026-11-01)
+- Un pedido de retiro nuevo anula los `PendingPayout` anteriores del cliente que siguen en `pending_review` sin fichas descontadas ni envío al
+  banco vivo (`paidVia:'replaced'`, `replacedBy` = id nuevo). Nunca toca `paying`, `debitConfirmed:true` ni `hgStatus` UNKNOWN/PENDING.
+  Un flujo nuevo que cree retiros tiene que respetar esa regla (un solo retiro vigente por cliente).
+
 ### Cierre general con cuentas secundarias #1001 (2026-11-01)
 - `Config['bankAccounts'].list` = cuentas SECUNDARIAS ({ id, name, cbu, kind 'manual'|'api', active }); la principal es implícita (`'main'`, hgcash).
   Quitar una la deja `active:false` (los cierres viejos la nombran). `_normBankAccount` / `_bankAccountForCbu` resuelven la cuenta.
