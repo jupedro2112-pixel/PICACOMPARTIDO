@@ -70,7 +70,7 @@
   - Chequeo antifraude que no responde (API lenta) ⇒ ya no va directo a una persona: `_withdrawFraudGate` (extraído del handler) +
     `_payoutFraudRecheckTick` (10 min, 3 intentos, `PendingPayout.fraudRecheck`); limpio ⇒ se paga solo; a los 30 min ⇒ Confirmación de pagos.
   - SIN límite para el 1er retiro de cuentas nuevas (owner).
-  - Saldo bajo del banco: `Config['bankLowBalance']` ($300.000 por defecto, editable en Para revisar) + `_bankLowBalanceTick` (15 min) ⇒ toast rojo
+  - Saldo bajo del banco: `Config['bankLowBalance']` ($500.000 por defecto, owner, editable en Para revisar) + `_bankLowBalanceTick` (15 min) ⇒ toast rojo
     en el panel cada 2 h mientras siga bajo + cartel.
   - 👀 PARA REVISAR (Pagos a confirmar, lo ve el de turno): retiros que salieron SOLOS con señal (cuenta < 7 días, primer retiro, retiró > 3× lo
     cargado, sin cargas reales, ≥ $100.000, ya en observación) y cargas acreditadas sin leer el comprobante, con el resultado de la re-lectura.

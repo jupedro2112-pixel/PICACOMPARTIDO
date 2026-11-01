@@ -23560,9 +23560,9 @@ async function _payoutAutoFailNote(id, o) {
 // conviene mirar: retiros automáticos con alguna señal (cuenta nueva, primer retiro, retiró mucho más de lo que cargó, monto alto) y cargas
 // acreditadas SIN leer el comprobante (IA caída). El de turno marca "✅ OK" o "⚠️ Sospechoso" (⇒ cliente en observación: sus próximos retiros
 // pasan a revisión, nota en el chat). No frena nada que ya salió: es una mirada de control. Panel → Pagos a confirmar → 👀 Para revisar.
-// Saldo bajo: Config['bankLowBalance'] { enabled, minArs } (default encendido, $300.000). Cada 15 min mira el saldo por la API del banco; si baja
+// Saldo bajo: Config['bankLowBalance'] { enabled, minArs } (default encendido, $500.000). Cada 15 min mira el saldo por la API del banco; si baja
 // del mínimo ⇒ toast rojo en el panel (cada 2 h mientras siga bajo) y cartel en Pagos a confirmar. Estado en Config['bankLowBalanceState'].
-const BANK_LOW_DEFAULT = { enabled: true, minArs: 300000 };
+const BANK_LOW_DEFAULT = { enabled: true, minArs: 500000 }; // owner 2026-11-01: avisar con $500.000
 async function getBankLowConfig() { const r = (await getConfig('bankLowBalance', null)) || {}; const min = Number(r.minArs); return { enabled: r.enabled !== false, minArs: Number.isFinite(min) && min >= 0 ? Math.round(min) : BANK_LOW_DEFAULT.minArs }; }
 async function _bankLowBalanceTick() {
   try {
