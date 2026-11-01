@@ -3289,6 +3289,8 @@ Responder 2xx. Con 5xx / timeout se reintenta; con 4xx no.</pre>
                     <button class="refresh-btn" onclick="loadPayReview()" title="Refrescar">🔄</button>
                 </div>
                 <div id="prDayBox" class="at-day"></div><!-- #750: análisis del día (banco vs a mano) -->
+                <!-- #1010: 👀 PARA REVISAR (el de turno): lo que salió solo y conviene mirar + saldo del banco — loadShiftReview() -->
+                <div id="shiftReviewBox" style="margin-bottom:14px;"></div>
                 <div class="cbu-form" id="payReviewCfg" style="margin-bottom:14px;">
                     <h3 style="margin:0 0 6px;">⚙️ Regla</h3>
                     <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 8px;"><b>#1010: TODOS los retiros salen SOLOS por el banco, de cualquier monto y para cualquier cliente.</b> Acá llegan sólo los que frenó el <b>antifraude</b> (puntaje alto, cliente en observación, retiro grande pocas horas después de un regalo, juego espejo, o cuando el chequeo antifraude no se pudo hacer) o los pagos automáticos que el banco rechazó. El cliente recibe "tu retiro está en revisión" y lo ve en la app hasta que se resuelva. Destildá "Pagar solos" sólo para frenar TODO a mano (emergencia).</p>

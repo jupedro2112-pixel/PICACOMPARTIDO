@@ -284,6 +284,9 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`). Git user: j
   grande tras un regalo, juego espejo) o si `payoutReview.autoBelow` está apagado / hgcash sin configurar. Al frenarse: `_notifyWithdrawHold`
   (cliente, `/sys_withdraw_review`), cartel en la app (`GET /api/withdrawal/hold`) y en el chat del panel (`chatPayoutHoldBanner`), y nota interna
   si el cliente escribe (`_payoutHoldSupportNote`). Un freno NUEVO de retiros tiene que avisar igual.
+  Chequeo antifraude sin respuesta ⇒ `_payoutFraudRecheckTick` (3 × 10 min) antes de ir a una persona; el chequeo vive en `_withdrawFraudGate`
+  (una regla NUEVA de retiros va ahí, así la usan el pedido y el reintento). 👀 Para revisar (Pagos a confirmar) = control del de turno sobre lo
+  que salió solo (`/api/admin/shift-review`); saldo bajo del banco `Config['bankLowBalance']`.
   y, si falla por algo pasajero, `_payoutAutoRetryTick` lo reintenta cada 10 min (6 veces, sólo casos que no pueden descontar dos veces).
   **#562 WEBHOOKS SALIENTES** (`docs/ESPEC-WEBHOOKS-SALIENTES.md`): todo flujo NUEVO de registro o de carga acreditada llama
   `outboundWebhook.notify('registro'|'carga', user, {amount, firstDeposit, transactionId})` (y `'retiro'` al pagar un retiro). Secretos de los

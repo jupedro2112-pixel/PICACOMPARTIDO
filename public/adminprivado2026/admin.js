@@ -6407,8 +6407,60 @@ async function cleanupTests() {
     } catch (_) { showToast('Error de conexión', 'error'); if (st) st.textContent = ''; }
 }
 window.cleanupTests = cleanupTests;
+// #1010 (owner): "dejá un sector para el que esté de turno para que pueda revisar si hay algo raro". Retiros que salieron SOLOS con alguna señal
+// y cargas acreditadas sin leer el comprobante. ✅ OK = visto · ⚠️ Sospechoso = cliente en observación (sus próximos retiros pasan a revisión).
+let _shiftHours = 24, _shiftAll = false;
+async function loadShiftReview() {
+    const box = document.getElementById('shiftReviewBox'); if (!box) return;
+    try {
+        const r = await authFetch('/api/admin/shift-review?hours=' + _shiftHours + (_shiftAll ? '&all=1' : '')); const j = await r.json();
+        if (!j || !j.success) { box.innerHTML = ''; return; }
+        const fm = (v) => '$' + Math.round(Number(v) || 0).toLocaleString('es-AR');
+        const fd = (d) => new Date(d).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+        const rv = (x) => x.review ? '<span style="font-size:11.5px;color:var(--p-muted,#767676)">' + (x.review.verdict === 'ok' ? '✅ OK' : '⚠️ sospechoso') + ' · ' + escapeHtml(x.review.by || '') + ' ' + fd(x.review.at) + '</span>' : '';
+        const btns = (kind, id) => '<button class="btn-secondary btn-small" onclick="shiftReviewMark(\'' + kind + '\',\'' + id + '\',\'ok\')">✅ OK</button> <button class="btn-secondary btn-small" onclick="shiftReviewMark(\'' + kind + '\',\'' + id + '\',\'suspicious\')">⚠️ Sospechoso</button>';
+        let html = '<div class="cbu-form"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:space-between"><h3 style="margin:0">👀 Para revisar (salió solo) ' + (j.pending ? '<span style="background:var(--p-red,#d23a4e);color:#fff;border-radius:10px;padding:1px 8px;font-size:12px">' + j.pending + '</span>' : '') + '</h3>' +
+            '<span style="font-size:12px"><select onchange="_shiftHours=Number(this.value);loadShiftReview()">' + [8, 24, 72].map((h) => '<option value="' + h + '"' + (h === _shiftHours ? ' selected' : '') + '>últimas ' + h + ' h</option>').join('') + '</select> ' +
+            '<label style="cursor:pointer"><input type="checkbox" style="width:auto"' + (_shiftAll ? ' checked' : '') + ' onchange="_shiftAll=this.checked;loadShiftReview()"> ver todos los retiros</label></span></div>' +
+            '<p style="color:var(--p-muted,#767676);font-size:12px;margin:4px 0 8px">Todo esto YA salió solo. Es una mirada de control: si algo no cierra, marcalo ⚠️ Sospechoso y el cliente queda en observación (sus próximos retiros los revisa una persona).</p>';
+        const b = j.bank;
+        if (b && b.low) html += '<div style="padding:8px 12px;border-radius:10px;background:var(--p-red-soft,#fbecee);border:1px solid var(--p-red,#d23a4e);margin-bottom:8px;font-size:13px"><b>🏦 SALDO BAJO EN EL BANCO: ' + fm(b.balance) + '</b> (mínimo ' + fm(b.minArs) + ') · fondeá la cuenta: sin plata los retiros automáticos fallan.</div>';
+        else if (b && b.balance != null) html += '<div style="font-size:12px;color:var(--p-muted,#767676);margin-bottom:8px">🏦 Saldo del banco: ' + fm(b.balance) + ' (alerta si baja de ' + fm(b.minArs) + ') · ' + fd(b.checkedAt) + '</div>';
+        if (j.bankCfg) html += '<div style="font-size:12px;margin:-4px 0 8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">Avisar si el saldo del banco baja de $ <input type="number" id="bankLowMin" min="0" step="10000" value="' + Number(j.bankCfg.minArs || 0) + '" style="width:120px"> <button class="btn-secondary btn-small" onclick="saveBankLow()">Guardar</button></div>';
+        html += '<b style="font-size:13px">💸 Retiros automáticos con alguna señal (' + j.payouts.length + ')</b>';
+        html += j.payouts.length ? j.payouts.map(function (p) {
+            return '<div style="border-top:1px solid var(--p-border,#e2e2e2);padding:7px 0;font-size:12.5px' + (p.review ? ';opacity:.6' : '') + '"><b>' + escapeHtml(p.username) + '</b> · ' + fm(p.amount) + ' · ' + fd(p.paidAt) + ' (salió en ' + p.minutes + ' min)' +
+                '<div style="color:var(--p-muted,#767676)">' + p.deposits + ' cargas (' + fm(p.depositsTotal) + ') · retiró en total ' + fm(p.withdrawnTotal) + (p.days != null ? ' · cuenta de ' + p.days + ' días' : '') + '</div>' +
+                (p.flags.length ? '<div>' + p.flags.map((f) => '<span style="display:inline-block;margin:2px 4px 0 0;padding:1px 7px;border-radius:9px;background:var(--p-surface,#f1f1f1);font-size:11.5px">' + escapeHtml(f) + '</span>').join('') + '</div>' : '') +
+                '<div style="margin-top:4px;display:flex;gap:6px;align-items:center;flex-wrap:wrap"><button class="btn-secondary btn-small" onclick="openChatFromDelay(\'' + p.userId + '\')">💬 Chat</button> ' + (p.review ? rv(p) : btns('payout', p.id)) + '</div></div>';
+        }).join('') : '<div style="font-size:12.5px;color:var(--p-muted,#767676);padding:6px 0">Nada raro en este período 🎉</div>';
+        html += '<div style="margin-top:10px"><b style="font-size:13px">🧾 Cargas acreditadas sin leer el comprobante (IA caída) (' + j.receipts.length + ')</b></div>';
+        html += j.receipts.length ? j.receipts.map(function (c) {
+            return '<div style="border-top:1px solid var(--p-border,#e2e2e2);padding:7px 0;font-size:12.5px' + (c.review ? ';opacity:.6' : '') + '"><b>' + escapeHtml(c.username) + '</b> · ' + (c.amount ? fm(c.amount) : 'sin acreditar todavía') + ' · ' + fd(c.at) + (c.fromName ? ' · de ' + escapeHtml(c.fromName) : '') +
+                '<div style="color:' + (c.problem ? 'var(--p-red,#d23a4e)' : 'var(--p-muted,#767676)') + '">Revisión de la IA: ' + escapeHtml(c.recheck) + '</div>' +
+                '<div style="margin-top:4px;display:flex;gap:6px;align-items:center;flex-wrap:wrap"><button class="btn-secondary btn-small" onclick="openChatFromDelay(\'' + c.userId + '\')">💬 Chat</button> ' + (c.review ? rv(c) : btns('receipt', c.id)) + '</div></div>';
+        }).join('') : '<div style="font-size:12.5px;color:var(--p-muted,#767676);padding:6px 0">Ninguna: la IA leyó todos los comprobantes.</div>';
+        box.innerHTML = html + '</div>';
+    } catch (e) { box.innerHTML = ''; }
+}
+async function saveBankLow() {
+    const v = Number((document.getElementById('bankLowMin') || {}).value);
+    try { const r = await authFetch('/api/admin/bank-low-balance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true, minArs: v }) }); const j = await r.json();
+        if (j && j.success) { showToast('Alerta de saldo guardada: $' + Number(j.config.minArs).toLocaleString('es-AR'), 'success'); loadShiftReview(); } else showToast((j && j.error) || 'No se pudo guardar', 'error'); } catch (e) { showToast('Error de conexión', 'error'); }
+}
+async function shiftReviewMark(kind, id, verdict) {
+    let note = '';
+    if (verdict === 'suspicious') { note = window.prompt('¿Qué viste raro? (queda en la nota del cliente)') || ''; }
+    try {
+        const r = await authFetch('/api/admin/shift-review/' + kind + '/' + encodeURIComponent(id), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ verdict, note }) });
+        const j = await r.json();
+        if (j && j.success) { showToast(verdict === 'ok' ? '✅ Marcado como revisado' : '⚠️ Cliente en observación', verdict === 'ok' ? 'success' : 'info'); loadShiftReview(); }
+        else showToast((j && j.error) || 'No se pudo marcar', 'error');
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
 async function loadPayReview() {
     try { atencionAnalisis('pay'); } catch (_) {} // #750
+    try { loadShiftReview(); } catch (_) {} // #1010
     const box = document.getElementById('payReviewList'); if (!box) return;
     try {
         const r = await authFetch('/api/admin/payouts/review'); const j = await r.json();

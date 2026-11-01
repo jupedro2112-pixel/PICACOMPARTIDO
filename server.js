@@ -14392,6 +14392,17 @@ app.get('/api/withdrawal/hold', authMiddleware, async (req, res) => {
 app.get('/api/admin/users/:userId/payout-hold', authMiddleware, adminMiddleware, async (req, res) => {
   try { res.json({ success: true, hold: await _withdrawHoldOf(String(req.params.userId)) }); } catch (e) { res.status(500).json({ error: 'Error' }); }
 });
+// #1010: chequeo antifraude de un retiro (puntaje / observación / bloqueo, retiro grande tras un regalo, juego espejo). Devuelve el motivo para
+// frenarlo (why) o unchecked=true si el chequeo no se pudo hacer (API lenta / error): el que llama decide reintentar o mandarlo a una persona.
+async function _withdrawFraudGate(user, amountNum) {
+  let fraudWhy = null, fraudEv = null, unchecked = false;
+    try { const fr = await _fraudCheckUser(user.id, 'retiro'); if (fr && fr.evidence) fraudEv = fr.evidence; if (fr && fr.level) { fraudWhy = (fr.level === 'block' ? 'cuenta BLOQUEADA por el antifraude' : (fr.level === 'unchecked' ? 'el chequeo antifraude no terminó a tiempo (revisalo a mano)' : (fr.level === 'bonus' ? 'posible FRAUDE CON BONOS' : 'en observación del antifraude'))) + (fr.why ? ' (' + fr.why + ')' : ''); } } catch (e) { logger.warn('[antifraude] retiro: ' + e.message); fraudWhy = 'el chequeo antifraude falló (revisalo a mano)'; } // #995: falla ⇒ revisión, nunca pago automático
+      // #996: retiro grande a pocas horas de recibir un regalo ⇒ revisión (práctica de las casas grandes: el primer retiro tras un bono lo mira una persona).
+    if (!fraudWhy) { try { const hb = (await getFraudBonusConfig()).holdAfterBonus; if (hb.enabled && amountNum >= hb.minArs) { const g = await Transaction.findOne({ userId: user.id, type: { $in: fraudRadar.GIFT_TX }, createdAt: { $gte: new Date(Date.now() - hb.hours * 3600000) } }).sort({ createdAt: -1 }).select('type amount createdAt').lean(); if (g) { fraudWhy = `retiro a ${Math.max(1, Math.round((Date.now() - new Date(g.createdAt).getTime()) / 3600000))} h de recibir un regalo de $${Math.round(g.amount || 0).toLocaleString('es-AR')} (${g.type}) — revisá que lo haya jugado de verdad`; } } } catch (_) {} }
+    if (!fraudWhy) { const _mw = await _mirrorHitFor(user.username); if (_mw) { fraudWhy = 'posible JUEGO ESPEJO con ' + _mw + ' (ver 🛡️ Antifraude → 🪞 Juego espejo)'; } } // #1004
+  if (fraudWhy && /no termin|falló \(revisalo/.test(fraudWhy)) unchecked = true;
+  return { why: fraudWhy, evidence: fraudEv, unchecked };
+}
 async function _withdrawalRequestHandler(req, res) {
   let withdrawLockAcquired = false;
   try {
@@ -14644,14 +14655,15 @@ async function _withdrawalRequestHandler(req, res) {
       let trustWhy = null;
       // #993: antifraude en el momento (sólo este cliente): ≥ 90 pts lo bloquea y le cierra la sesión; ≥ 60 deja el retiro para revisión.
       let fraudWhy = null; let fraudEv = null;
-      try { const fr = await _fraudCheckUser(user.id, 'retiro'); if (fr && fr.evidence) fraudEv = fr.evidence; if (fr && fr.level) { needsReview = true; fraudWhy = (fr.level === 'block' ? 'cuenta BLOQUEADA por el antifraude' : (fr.level === 'unchecked' ? 'el chequeo antifraude no terminó a tiempo (revisalo a mano)' : (fr.level === 'bonus' ? 'posible FRAUDE CON BONOS' : 'en observación del antifraude'))) + (fr.why ? ' (' + fr.why + ')' : ''); } } catch (e) { logger.warn('[antifraude] retiro: ' + e.message); needsReview = true; fraudWhy = 'el chequeo antifraude falló (revisalo a mano)'; } // #995: falla ⇒ revisión, nunca pago automático
-      // #996: retiro grande a pocas horas de recibir un regalo ⇒ revisión (práctica de las casas grandes: el primer retiro tras un bono lo mira una persona).
-      if (!fraudWhy) { try { const hb = (await getFraudBonusConfig()).holdAfterBonus; if (hb.enabled && amountNum >= hb.minArs) { const g = await Transaction.findOne({ userId: user.id, type: { $in: fraudRadar.GIFT_TX }, createdAt: { $gte: new Date(Date.now() - hb.hours * 3600000) } }).sort({ createdAt: -1 }).select('type amount createdAt').lean(); if (g) { needsReview = true; fraudWhy = `retiro a ${Math.max(1, Math.round((Date.now() - new Date(g.createdAt).getTime()) / 3600000))} h de recibir un regalo de $${Math.round(g.amount || 0).toLocaleString('es-AR')} (${g.type}) — revisá que lo haya jugado de verdad`; } } } catch (_) {} }
-      if (!fraudWhy) { const _mw = await _mirrorHitFor(user.username); if (_mw) { needsReview = true; fraudWhy = 'posible JUEGO ESPEJO con ' + _mw + ' (ver 🛡️ Antifraude → 🪞 Juego espejo)'; } } // #1004
+      // #1010: el chequeo antifraude vive en _withdrawFraudGate (lo reusa el reintento). Si NO se pudo hacer (API lenta) ya no va directo a una
+      // persona: se reintenta solo cada 10 min (3 veces, _payoutFraudRecheckTick) y recién ahí queda manual.
+      const _gate = await _withdrawFraudGate(user, amountNum); fraudEv = _gate.evidence; fraudWhy = _gate.why;
+      let deferFraud = false;
+      if (_gate.unchecked && !needsReview) { deferFraud = true; fraudWhy = null; } else if (fraudWhy) needsReview = true;
       // #1010 (owner): "saquemos las trabas de que tiene que ser cliente y demás para retirar: todo libre para todos, tenemos técnicas de antiestafa" ⇒
       // sin regla de confianza ni de monto. trustWhy queda null.
       // #820: por id (antes por usuario+monto: podía marcar un retiro VIEJO del mismo monto).
-      await PendingPayout.updateOne({ id: _newPayoutId }, { $set: Object.assign({ reviewRequired: needsReview, autoPay: !needsReview }, fraudEv && (fraudEv.reasons || []).length ? { fraudEvidence: fraudEv } : {}, fraudWhy ? { reviewReason: 'antifraude: ' + fraudWhy } : (trustWhy ? { reviewReason: 'no es cliente de confianza: ' + trustWhy.join(' · ') } : {})) });
+      await PendingPayout.updateOne({ id: _newPayoutId }, { $set: Object.assign({ reviewRequired: needsReview, autoPay: !needsReview && !deferFraud, fraudRecheck: deferFraud ? { n: 0, at: new Date() } : null }, fraudEv && (fraudEv.reasons || []).length ? { fraudEvidence: fraudEv } : {}, fraudWhy ? { reviewReason: 'antifraude: ' + fraudWhy } : (trustWhy ? { reviewReason: 'no es cliente de confianza: ' + trustWhy.join(' · ') } : {})) });
       if (needsReview) {
         await _emitAdminOnlyChatNote(user.id, user.username, fraudWhy
           ? `🔎 RETIRO EN REVISIÓN: $${amountNum.toLocaleString('es-AR')} — ${fraudWhy}. Confirmalo o rechazalo en Panel → Confirmación de pagos.`
@@ -14659,6 +14671,8 @@ async function _withdrawalRequestHandler(req, res) {
           ? `🔎 RETIRO EN REVISIÓN: $${amountNum.toLocaleString('es-AR')} — cuenta todavía sin historial con un retiro mayor a $${prCfg.minArs.toLocaleString('es-AR')} (${trustWhy.join(' · ')}). Confirmalo o rechazalo en Panel → Confirmación de pagos.`
           : `🔎 RETIRO EN REVISIÓN: $${amountNum.toLocaleString('es-AR')} — el pago automático está apagado o el banco automático no está configurado. Confirmalo o rechazalo en Panel → Confirmación de pagos.`).catch(() => {});
         _notifyWithdrawHold(user, amountNum).catch(() => {}); // #1010: el cliente se entera de que está en revisión
+      } else if (deferFraud) {
+        await _emitAdminOnlyChatNote(user.id, user.username, `⏳ RETIRO de $${amountNum.toLocaleString('es-AR')}: el chequeo antifraude no respondió a tiempo (API lenta). Se reintenta SOLO cada 10 min; si da limpio se paga solo, si a los 30 min sigue sin responder queda en Confirmación de pagos.`).catch(() => {});
       } else {
         const pp = { id: _newPayoutId };
         if (pp) setImmediate(() => { _payPendingPayout(pp.id, PAYOUT_AUTO_ACTOR, getPublicBaseUrl()).then((o) => { logger.info(`[pay-review] pago AUTOMÁTICO $${amountNum} ${user.username} → ${o.code} ${JSON.stringify(o.body).slice(0, 160)}`); _payoutAutoFailNote(pp.id, o).catch(() => {}); }).catch((e) => logger.warn(`[pay-review] pago automático falló: ${e.message}`)); });
@@ -23538,6 +23552,131 @@ async function _payoutAutoFailNote(id, o) {
     } catch (e) { logger.warn('[pay-retry] aviso al cliente: ' + e.message); }
   }
 }
+// ===== #1010 PARA REVISAR (el de turno) + SALDO BAJO DEL BANCO =====
+// Owner: "con todo automático, dejá un sector para el que esté de turno para que pueda revisar si hay algo raro". Lista lo que salió SOLO y
+// conviene mirar: retiros automáticos con alguna señal (cuenta nueva, primer retiro, retiró mucho más de lo que cargó, monto alto) y cargas
+// acreditadas SIN leer el comprobante (IA caída). El de turno marca "✅ OK" o "⚠️ Sospechoso" (⇒ cliente en observación: sus próximos retiros
+// pasan a revisión, nota en el chat). No frena nada que ya salió: es una mirada de control. Panel → Pagos a confirmar → 👀 Para revisar.
+// Saldo bajo: Config['bankLowBalance'] { enabled, minArs } (default encendido, $300.000). Cada 15 min mira el saldo por la API del banco; si baja
+// del mínimo ⇒ toast rojo en el panel (cada 2 h mientras siga bajo) y cartel en Pagos a confirmar. Estado en Config['bankLowBalanceState'].
+const BANK_LOW_DEFAULT = { enabled: true, minArs: 300000 };
+async function getBankLowConfig() { const r = (await getConfig('bankLowBalance', null)) || {}; const min = Number(r.minArs); return { enabled: r.enabled !== false, minArs: Number.isFinite(min) && min >= 0 ? Math.round(min) : BANK_LOW_DEFAULT.minArs }; }
+async function _bankLowBalanceTick() {
+  try {
+    const cfg = await getBankLowConfig(); if (!cfg.enabled || !hgcashPay.isEnabled()) return;
+    if (!(await _cronClaim('banklowbalance', 12 * 60000))) return;
+    const r = await _bankBalanceNow(); if (!r.ok || r.balance == null) return;
+    const prev = (await getConfig('bankLowBalanceState', null)) || {};
+    const low = Number(r.balance) < cfg.minArs; const now = Date.now();
+    const st = { balance: Number(r.balance), minArs: cfg.minArs, low, checkedAt: new Date().toISOString(), alertedAt: prev.alertedAt || null };
+    if (low && (!prev.alertedAt || now - new Date(prev.alertedAt).getTime() > 2 * 3600000)) {
+      st.alertedAt = new Date().toISOString();
+      try { io.to('admins').emit('security_alert', { message: `🏦 SALDO BAJO EN EL BANCO: $${Math.round(r.balance).toLocaleString('es-AR')} (mínimo $${cfg.minArs.toLocaleString('es-AR')}). Fondeá la cuenta: si se queda sin plata los retiros automáticos empiezan a fallar.`, at: new Date() }); } catch (_) {}
+      logger.warn(`[banco] saldo bajo $${r.balance} < $${cfg.minArs}`);
+    }
+    if (!low) st.alertedAt = null;
+    await Config.set('bankLowBalanceState', st, 'system');
+  } catch (e) { logger.warn('[banco] saldo bajo: ' + e.message); }
+}
+setInterval(() => { _bankLowBalanceTick(); }, 15 * 60000);
+app.post('/api/admin/bank-low-balance', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const b = req.body || {}; const min = Number(b.minArs);
+    const cfg = { enabled: b.enabled !== false, minArs: Number.isFinite(min) && min >= 0 ? Math.round(min) : BANK_LOW_DEFAULT.minArs };
+    await Config.set('bankLowBalance', cfg, req.user.username); _bankLowBalanceTick().catch(() => {});
+    res.json({ success: true, config: cfg });
+  } catch (e) { res.status(500).json({ error: 'Error' }); }
+});
+const SHIFT_HIGH_ARS = 100000;
+app.get('/api/admin/shift-review', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const hours = Math.min(168, Math.max(1, Number(req.query.hours) || 24)); const since = new Date(Date.now() - hours * 3600000);
+    const all = String(req.query.all || '') === '1';
+    const pays = await PendingPayout.find({ status: 'paid', paidBy: PAYOUT_AUTO_ACTOR.username, paidAt: { $gte: since } }).sort({ paidAt: -1 }).limit(300)
+      .select('id userId username amount paidAt createdAt shiftReview').lean();
+    const ids = [...new Set(pays.map((p) => p.userId).filter(Boolean))];
+    const [users, deps, prevPaid] = await Promise.all([
+      User.find({ id: { $in: ids } }).select('id createdAt fraudReview isBlocked').lean(),
+      ids.length ? Transaction.aggregate([{ $match: { ..._REAL_DEP, userId: { $in: ids }, description: { $not: /PRUEBA/i } } }, { $group: { _id: '$userId', n: { $sum: 1 }, total: { $sum: '$amount' } } }]) : [],
+      ids.length ? PendingPayout.aggregate([{ $match: { userId: { $in: ids }, status: 'paid' } }, { $group: { _id: '$userId', firstAt: { $min: '$paidAt' }, total: { $sum: '$amount' } } }]) : []
+    ]);
+    const U = new Map(users.map((u) => [u.id, u])), Dp = new Map(deps.map((d) => [d._id, d])), Pp = new Map(prevPaid.map((d) => [d._id, d]));
+    const payouts = [];
+    for (const p of pays) {
+      const u = U.get(p.userId) || {}; const d = Dp.get(p.userId) || { n: 0, total: 0 }; const pv = Pp.get(p.userId) || {};
+      const days = u.createdAt ? Math.floor((Date.now() - new Date(u.createdAt).getTime()) / 86400000) : null;
+      const flags = [];
+      if (days != null && days < 7) flags.push(`cuenta de ${days} días`);
+      if (pv.firstAt && new Date(pv.firstAt).getTime() === new Date(p.paidAt).getTime()) flags.push('primer retiro');
+      if (d.total > 0 && Number(pv.total || 0) > d.total * 3) flags.push(`retiró ${Math.round(Number(pv.total) / d.total)}× lo que cargó`);
+      if (!d.n) flags.push('sin cargas reales');
+      if (Number(p.amount) >= SHIFT_HIGH_ARS) flags.push('monto alto');
+      if (u.fraudReview && u.fraudReview.status === 'watch') flags.push('ya en observación');
+      if (!flags.length && !all) continue;
+      payouts.push({ id: p.id, userId: p.userId, username: p.username, amount: p.amount, paidAt: p.paidAt, minutes: Math.round((new Date(p.paidAt) - new Date(p.createdAt)) / 60000),
+        deposits: d.n, depositsTotal: Math.round(d.total), withdrawnTotal: Math.round(Number(pv.total || 0)), days, flags, review: p.shiftReview || null });
+    }
+    payouts.sort((a, b) => (!!a.review - !!b.review) || (b.flags.length - a.flags.length) || (b.amount - a.amount));
+    const rc = await Comprobante.find({ trustedFallback: true, createdAt: { $gte: new Date(Date.now() - Math.max(hours, 48) * 3600000) } }).sort({ createdAt: -1 }).limit(100)
+      .select('id userId username createdAt bankMatchStatus matchedMovementId aiRetryPending aiRecheck shiftReview').lean();
+    const mvIds = rc.map((c) => c.matchedMovementId).filter(Boolean);
+    const mvs = mvIds.length ? await BankMovement.find({ movementId: { $in: mvIds } }).select('movementId amount fromName').lean() : [];
+    const MV = new Map(mvs.map((m) => [m.movementId, m]));
+    const receipts = rc.map((c) => { const m = MV.get(c.matchedMovementId) || {}; return { id: c.id, userId: c.userId, username: c.username, at: c.createdAt, credited: c.bankMatchStatus === 'auto_charged', amount: m.amount || null, fromName: m.fromName || null,
+      recheck: c.aiRetryPending ? 'pendiente (la IA lo vuelve a leer sola)' : (c.aiRecheck ? (c.aiRecheck.ok ? 'OK' : (c.aiRecheck.ok === false ? '⚠️ ' + c.aiRecheck.note : c.aiRecheck.note)) : '—'), problem: !!(c.aiRecheck && c.aiRecheck.ok === false), review: c.shiftReview || null }; });
+    const bank = (await getConfig('bankLowBalanceState', null)) || null;
+    res.json({ success: true, hours, payouts, receipts, bank, bankCfg: await getBankLowConfig(),
+      pending: payouts.filter((p) => !p.review).length + receipts.filter((r) => !r.review && (r.problem || r.credited)).length });
+  } catch (e) { logger.warn('[para-revisar] ' + e.message); res.status(500).json({ error: 'No se pudo cargar' }); }
+});
+app.post('/api/admin/shift-review/:kind/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const kind = String(req.params.kind); if (!['payout', 'receipt'].includes(kind)) return res.status(400).json({ error: 'Tipo inválido' });
+    const verdict = req.body && req.body.verdict === 'suspicious' ? 'suspicious' : 'ok';
+    const note = String((req.body && req.body.note) || '').slice(0, 300);
+    const Model = kind === 'payout' ? PendingPayout : Comprobante;
+    const doc = await Model.findOne({ id: String(req.params.id) }).select('id userId username amount').lean(); if (!doc) return res.status(404).json({ error: 'No encontrado' });
+    const rv = { by: req.user.username, at: new Date(), verdict, note: note || null };
+    await Model.updateOne({ id: doc.id }, { $set: { shiftReview: rv } });
+    if (verdict === 'suspicious') {
+      await User.updateOne({ id: doc.userId }, { $set: { fraudReview: { status: 'watch', by: req.user.username, at: new Date(), note: 'Marcado por el de turno (' + (kind === 'payout' ? 'retiro automático' : 'carga sin leer el comprobante') + ')' + (note ? ': ' + note : ''), priority: 'high' } } });
+      await _emitAdminOnlyChatNote(doc.userId, doc.username, `⚠️ MARCADO SOSPECHOSO por ${req.user.username} (Para revisar · ${kind === 'payout' ? 'retiro automático' : 'carga sin leer el comprobante'})${note ? ': ' + note : ''}. Queda EN OBSERVACIÓN: sus próximos retiros pasan a revisión. Revisalo en 🛡️ Antifraude.`).catch(() => {});
+    }
+    res.json({ success: true, review: rv });
+  } catch (e) { res.status(500).json({ error: 'Error' }); }
+});
+// #1010 (owner): "manual sólo cuando se trabe la API" ⇒ el retiro cuyo chequeo antifraude no respondió se re-chequea cada 10 min, hasta 3 veces.
+async function _payoutFraudRecheckTick() {
+  try {
+    if (!(await _cronClaim('payoutfraudrecheck', 8 * 60000))) return;
+    const rows = await PendingPayout.find({ status: 'pending_review', reviewRequired: false, autoPay: false, 'fraudRecheck.at': { $ne: null }, createdAt: { $gte: new Date(Date.now() - 24 * 3600000) } }).limit(20).lean();
+    if (!rows.length) return;
+    const prCfg = await getPayoutReviewConfig();
+    for (const p of rows) {
+      const u = await User.findOne({ id: p.userId }).select('id username').lean(); if (!u) continue;
+      const toReview = async (why) => {
+        await PendingPayout.updateOne({ id: p.id, status: 'pending_review' }, { $set: { reviewRequired: true, autoPay: false, fraudRecheck: null, reviewReason: 'antifraude: ' + why } });
+        await _emitAdminOnlyChatNote(u.id, u.username, `🔎 RETIRO EN REVISIÓN: $${Number(p.amount).toLocaleString('es-AR')} — ${why}. Confirmalo o rechazalo en Panel → Confirmación de pagos.`).catch(() => {});
+        _notifyWithdrawHold(u, p.amount).catch(() => {});
+        try { io.to('admins').emit('payouts_changed', { userId: u.id }); } catch (_) {}
+      };
+      if (!prCfg.autoBelow || !hgcashPay.isEnabled()) { await toReview('el pago automático está apagado o el banco automático no está configurado'); continue; }
+      const g = await _withdrawFraudGate(u, Number(p.amount));
+      if (g.unchecked) {
+        const n = Number((p.fraudRecheck && p.fraudRecheck.n) || 0) + 1;
+        if (n >= 3) await toReview('el chequeo antifraude no respondió en 30 min (revisalo a mano)');
+        else await PendingPayout.updateOne({ id: p.id }, { $set: { fraudRecheck: { n, at: new Date() } } });
+        continue;
+      }
+      if (g.why) { if (g.evidence && (g.evidence.reasons || []).length) await PendingPayout.updateOne({ id: p.id }, { $set: { fraudEvidence: g.evidence } }); await toReview(g.why); continue; }
+      const r = await PendingPayout.updateOne({ id: p.id, status: 'pending_review', autoPay: false }, { $set: { autoPay: true, fraudRecheck: null } });
+      if (!r.modifiedCount) continue;
+      _payPendingPayout(p.id, PAYOUT_AUTO_ACTOR, getPublicBaseUrl()).then((o) => { logger.info(`[pay-review] pago AUTOMÁTICO tras re-chequeo $${p.amount} ${u.username} → ${o.code}`); _payoutAutoFailNote(p.id, o).catch(() => {}); }).catch((e) => logger.warn('[pay-review] re-chequeo: ' + e.message));
+    }
+  } catch (e) { logger.warn('[pay-review] re-chequeo antifraude: ' + e.message); }
+}
+setInterval(() => { _payoutFraudRecheckTick(); }, 10 * 60000);
 async function _payoutAutoRetryTick() {
   if (!hgcashPay.isEnabled()) return;
   // #838 (owner): "si le saco el tilde desde el admin, que sea todo manual" ⇒ sin "Pagar solos los menores al umbral" tampoco se reintenta solo.

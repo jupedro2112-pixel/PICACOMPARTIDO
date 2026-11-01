@@ -90,6 +90,7 @@ const comprobanteSchema = new mongoose.Schema({
   aiRetryPending: { type: Boolean, default: false, index: true },
   aiRetries: { type: Number, default: 0 },
   aiRecheck: { type: mongoose.Schema.Types.Mixed, default: null },
+  shiftReview: { type: mongoose.Schema.Types.Mixed, default: null }, // #1010: revisión del de turno (Para revisar)
   createdAt: { type: Date, default: Date.now, index: true }
 }, {
   timestamps: true

@@ -1737,4 +1737,10 @@ lote fijo. Excluidos: Bonificación manual, devolución de retiro, referidos, c�
   comprobante sin leer); sólo con UN candidato. `_receiptAiRecheckTick` (10 min, `_cronClaim`) re-analiza la imagen (Message, TTL 3 días) y compara.
 - **Guard de duplicado hgcash:** sólo cuenta cargas recientes del mismo monto con `adminUsername ≠ 'auto-hgcash'`.
 - **Negocio → ⏱️ Dónde nos trabamos:** `_bizStalls(from, to)` (PendingPayout, BankMovement, Comprobante del período).
+- **Reintento del antifraude:** `_withdrawFraudGate(user, amount)` → `{ why, evidence, unchecked }`. `unchecked` en el pedido ⇒ `fraudRecheck {n, at}`,
+  `autoPay:false`, `reviewRequired:false`; `_payoutFraudRecheckTick` (10 min, `_cronClaim`) lo re-chequea: limpio ⇒ `autoPay:true` + `_payPendingPayout`;
+  motivo ⇒ revisión + aviso; 3 sin respuesta ⇒ revisión.
+- **👀 Para revisar:** `GET /api/admin/shift-review?hours=&all=` (retiros pagados por `auto-retiros` con señales + `Comprobante.trustedFallback`) y
+  `POST /api/admin/shift-review/:payout|receipt/:id {verdict, note}` (`shiftReview`; sospechoso ⇒ `User.fraudReview.status='watch'`).
+- **Saldo bajo del banco:** `_bankLowBalanceTick` usa `_bankBalanceNow` (hgcash GET /accounts); estado en `Config['bankLowBalanceState']`.
 

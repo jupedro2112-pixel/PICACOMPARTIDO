@@ -66,6 +66,15 @@
     (`trustedFallback`, `aiRetryPending`, `_receiptAiRecheckTick`). Guard de duplicados de hgcash sólo ante carga MANUAL reciente.
   - 📈 Negocio → "⏱️ Dónde nos trabamos" (`_bizStalls`): % de retiros y cargas que salieron solos, motivos de freno, minutos hasta el pago,
     comprobantes sin leer. Admin SW v226, PWA v656.
+- Owner: "avanzá con todo y sin límites (tenemos antifraude y bonos limitados)" + "dejá un sector para el de turno para revisar si hay algo raro":
+  - Chequeo antifraude que no responde (API lenta) ⇒ ya no va directo a una persona: `_withdrawFraudGate` (extraído del handler) +
+    `_payoutFraudRecheckTick` (10 min, 3 intentos, `PendingPayout.fraudRecheck`); limpio ⇒ se paga solo; a los 30 min ⇒ Confirmación de pagos.
+  - SIN límite para el 1er retiro de cuentas nuevas (owner).
+  - Saldo bajo del banco: `Config['bankLowBalance']` ($300.000 por defecto, editable en Para revisar) + `_bankLowBalanceTick` (15 min) ⇒ toast rojo
+    en el panel cada 2 h mientras siga bajo + cartel.
+  - 👀 PARA REVISAR (Pagos a confirmar, lo ve el de turno): retiros que salieron SOLOS con señal (cuenta < 7 días, primer retiro, retiró > 3× lo
+    cargado, sin cargas reales, ≥ $100.000, ya en observación) y cargas acreditadas sin leer el comprobante, con el resultado de la re-lectura.
+    ✅ OK / ⚠️ Sospechoso (`shiftReview`; sospechoso ⇒ `fraudReview.watch` + nota). Rutas `/api/admin/shift-review*`. Admin SW v227.
 
 ### 1009. 📈 TABLERO DEL NEGOCIO (2026-11-01)
 - Owner: "armá el tablero de negocio completo y mostrá adentro cómo funciona".
