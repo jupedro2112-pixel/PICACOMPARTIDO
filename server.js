@@ -14478,6 +14478,7 @@ async function _withdrawalRequestHandler(req, res) {
       try { const fr = await _fraudCheckUser(user.id, 'retiro'); if (fr && fr.evidence) fraudEv = fr.evidence; if (fr && fr.level) { needsReview = true; fraudWhy = (fr.level === 'block' ? 'cuenta BLOQUEADA por el antifraude' : (fr.level === 'unchecked' ? 'el chequeo antifraude no terminó a tiempo (revisalo a mano)' : (fr.level === 'bonus' ? 'posible FRAUDE CON BONOS' : 'en observación del antifraude'))) + (fr.why ? ' (' + fr.why + ')' : ''); } } catch (e) { logger.warn('[antifraude] retiro: ' + e.message); needsReview = true; fraudWhy = 'el chequeo antifraude falló (revisalo a mano)'; } // #995: falla ⇒ revisión, nunca pago automático
       // #996: retiro grande a pocas horas de recibir un regalo ⇒ revisión (práctica de las casas grandes: el primer retiro tras un bono lo mira una persona).
       if (!fraudWhy) { try { const hb = (await getFraudBonusConfig()).holdAfterBonus; if (hb.enabled && amountNum >= hb.minArs) { const g = await Transaction.findOne({ userId: user.id, type: { $in: fraudRadar.GIFT_TX }, createdAt: { $gte: new Date(Date.now() - hb.hours * 3600000) } }).sort({ createdAt: -1 }).select('type amount createdAt').lean(); if (g) { needsReview = true; fraudWhy = `retiro a ${Math.max(1, Math.round((Date.now() - new Date(g.createdAt).getTime()) / 3600000))} h de recibir un regalo de $${Math.round(g.amount || 0).toLocaleString('es-AR')} (${g.type}) — revisá que lo haya jugado de verdad`; } } } catch (_) {} }
+      if (!fraudWhy) { const _mw = await _mirrorHitFor(user.username); if (_mw) { needsReview = true; fraudWhy = 'posible JUEGO ESPEJO con ' + _mw + ' (ver 🛡️ Antifraude → 🪞 Juego espejo)'; } } // #1004
       if (!needsReview && prCfg.trustedOnly) { const t = await _payoutTrust(user.id, prCfg); if (!t.trusted) { needsReview = true; trustWhy = t.why; } }
       // #820: por id (antes por usuario+monto: podía marcar un retiro VIEJO del mismo monto).
       await PendingPayout.updateOne({ id: _newPayoutId }, { $set: Object.assign({ reviewRequired: needsReview, autoPay: !needsReview }, fraudEv && (fraudEv.reasons || []).length ? { fraudEvidence: fraudEv } : {}, fraudWhy ? { reviewReason: 'antifraude: ' + fraudWhy } : (trustWhy ? { reviewReason: 'no es cliente de confianza: ' + trustWhy.join(' · ') } : {})) });
@@ -27060,6 +27061,95 @@ async function _codeDropTick() {
   } catch (e) { logger.warn('[código-sorpresa] ' + e.message); } finally { _cdRunning = false; }
 }
 setTimeout(() => { _codeDropTick().catch(() => {}); setInterval(() => { _codeDropTick().catch(() => {}); }, 60 * 1000); }, 3 * 60 * 1000);
+// ===== #1004 JUEGO ESPEJO GLOBAL (owner 2026-11-01): "uno gana y otro (o dos) pierden la misma apuesta con el bono: analizar TODO según lo
+// apostado, no sólo ganadores". Entre cuentas que NO comparten celular ni CBU (las vinculadas ya las mira mirror_group). De NOCHE
+// (`nightFrom`-`nightTo` ART) y despacio (`rpm` pedidos por minuto, comparte el cupo de 60/min de 1girox con los jugadores): pide los totales
+// de todos los activos por franjas cerradas (se guardan, cada franja se pide UNA vez) y corre mirrorScan.analyze. Resultado en
+// Config['mirrorScan']; los retiros pendientes de esas cuentas pasan a revisión con el motivo (no se bloquea a nadie: lo decide una persona).
+const mirrorScan = require('./src/services/mirrorScan');
+const MirrorBucket = require('./src/models/MirrorBucket');
+async function getMirrorConfig() { let c = {}; try { c = (await getConfig('mirrorScanCfg', null)) || {}; } catch (_) {} return mirrorScan.normalize(c); }
+let _mirrorRunning = false, _mirrorForce = false;
+const _mirrorProgress = { state: 'idle', done: 0, total: 0, at: null, error: null };
+async function _mirrorUsers(cfg) {
+  const since = new Date(Date.now() - (cfg.days + 1) * 86400000);
+  const [a, b] = await Promise.all([Transaction.distinct('userId', { createdAt: { $gte: since }, type: { $in: ['deposit'].concat(fraudRadar.GIFT_TX) } }), PendingPayout.distinct('userId', { createdAt: { $gte: since } })]);
+  const ids = [...new Set(a.concat(b).filter(Boolean))];
+  return (await User.find({ id: { $in: ids }, role: 'user' }).select('username').lean()).map((u) => u.username).filter(Boolean);
+}
+async function _mirrorTick() {
+  if (_mirrorRunning || process.env.MIRROR_SCAN_DISABLED === '1') return;
+  const cfg = await getMirrorConfig(); if (!cfg.enabled && !_mirrorForce) return;
+  const hourArt = (new Date().getUTCHours() + 21) % 24; const night = cfg.nightFrom < cfg.nightTo ? (hourArt >= cfg.nightFrom && hourArt < cfg.nightTo) : (hourArt >= cfg.nightFrom || hourArt < cfg.nightTo);
+  if (!night && !_mirrorForce) return;
+  if (!(await _cronClaim('mirror', 9 * 60000))) return;
+  _mirrorRunning = true; const t0 = Date.now();
+  try {
+    const want = mirrorScan.bucketsFor(new Date(), cfg); const have = new Set((await MirrorBucket.find({ key: { $in: want.map((b) => b.key) }, complete: true }).select('key').lean()).map((b) => b.key));
+    const missing = want.filter((b) => !have.has(b.key));
+    Object.assign(_mirrorProgress, { state: 'pidiendo datos', done: want.length - missing.length, total: want.length, at: new Date(), error: null });
+    if (missing.length) {
+      const users = await _mirrorUsers(cfg); const gap = Math.ceil(60000 / cfg.rpm);
+      for (const b of missing) {
+        if (Date.now() - t0 > 8 * 60000) break; // la pasada dura < 10 min; la próxima sigue donde quedó
+        const players = {}; let failed = null;
+        for (let i = 0; i < users.length; i += 100) {
+          const r = await girox.getPlayersStatsBatch(users.slice(i, i + 100), b.from, b.to, 'espejo');
+          if (!r.success) { failed = r.error || r.code || 'stats batch falló'; break; }
+          for (const [u, st] of Object.entries(r.players || {})) if (Number(st.wagered) > 0) players[u] = { wagered: Math.round(st.wagered), netwin: Math.round(st.netwin), bonusGranted: Math.round(st.bonusGranted || 0) };
+          await new Promise((ok) => setTimeout(ok, gap));
+        }
+        if (failed) { _mirrorProgress.error = failed; logger.warn('[espejo] franja ' + b.key + ': ' + failed); break; }
+        await MirrorBucket.updateOne({ key: b.key }, { $set: { from: b.from, to: b.to, players, asked: users.length, complete: true, fetchedAt: new Date() } }, { upsert: true });
+        _mirrorProgress.done++;
+      }
+    }
+    const done = await MirrorBucket.find({ key: { $in: want.map((b) => b.key) }, complete: true }).lean();
+    if (done.length < want.length) { Object.assign(_mirrorProgress, { state: 'faltan ' + (want.length - done.length) + ' franjas (sigue en la próxima pasada)' }); return; }
+    _mirrorProgress.state = 'analizando';
+    const since = new Date(Date.now() - cfg.days * 86400000);
+    const [gifts, wds] = await Promise.all([Transaction.distinct('username', { type: { $in: fraudRadar.GIFT_TX }, createdAt: { $gte: since } }), PendingPayout.distinct('username', { createdAt: { $gte: since } })]);
+    const groups = mirrorScan.analyze(done.map((b) => ({ key: b.key, from: b.from, to: b.to, players: b.players })), { bonus: new Set(gifts), wd: new Set(wds) }, cfg).slice(0, 80);
+    const names = [...new Set(groups.flatMap((g) => g.members))];
+    const urows = names.length ? await User.find({ username: { $in: names } }).select('id username isBlocked createdAt duplicateOf').lean() : [];
+    const byName = new Map(urows.map((u) => [u.username, u]));
+    groups.forEach((g) => { g.users = g.members.map((m) => { const u = byName.get(m) || {}; return { username: m, userId: u.id || null, blocked: !!u.isBlocked, dup: !!u.duplicateOf }; }); });
+    await Config.set('mirrorScan', { at: new Date().toISOString(), days: cfg.days, bucketHours: cfg.bucketHours, buckets: done.length, players: new Set(done.flatMap((b) => Object.keys(b.players || {}))).size, groups }, 'espejo');
+    // Retiros pendientes de esas cuentas ⇒ revisión con el motivo (nunca salen solos mientras alguien no lo mire).
+    for (const g of groups) {
+      const ids = g.users.map((u) => u.userId).filter(Boolean);
+      const why = 'antifraude: posible JUEGO ESPEJO con ' + g.members.join(', ') + ' (' + g.hits.length + ' franjas; ver 🛡️ Antifraude → 🪞 Juego espejo)';
+      await PendingPayout.updateMany({ userId: { $in: ids }, status: { $in: ['pending_review', 'failed'] }, reviewReason: { $not: /JUEGO ESPEJO/ } }, { $set: { reviewRequired: true, autoPay: false, reviewReason: why } }).catch(() => {});
+    }
+    await MirrorBucket.deleteMany({ from: { $lt: new Date(Date.now() - (cfg.days + 2) * 86400000) } }).catch(() => {});
+    Object.assign(_mirrorProgress, { state: 'listo', at: new Date() });
+    logger.info(`[espejo] ${done.length} franjas · ${groups.length} grupos sospechosos`);
+    _mirrorForce = false;
+  } catch (e) { _mirrorProgress.error = e.message; logger.warn('[espejo] ' + e.message); } finally { _mirrorRunning = false; }
+}
+setTimeout(() => { _mirrorTick().catch(() => {}); setInterval(() => { _mirrorTick().catch(() => {}); }, 10 * 60 * 1000); }, 7 * 60 * 1000);
+// Para el pedido de retiro: ¿está en un grupo espejo del último análisis?
+async function _mirrorHitFor(username) {
+  try { const m = await getConfig('mirrorScan', null); const g = m && (m.groups || []).find((x) => (x.members || []).includes(username)); return g ? g.members.filter((x) => x !== username).join(', ') : null; } catch (_) { return null; }
+}
+app.get('/api/admin/fraud/mirror', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!['admin', 'depositor', 'withdrawer'].includes(req.user.role)) return res.status(403).json({ error: 'Sin acceso' });
+    res.json({ success: true, result: await getConfig('mirrorScan', null), progress: _mirrorProgress, config: await getMirrorConfig(), canEdit: req.user.role === 'admin' });
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.post('/api/admin/fraud/mirror/run', authMiddleware, adminMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+  _mirrorForce = true; Object.assign(_mirrorProgress, { state: 'en cola', at: new Date() });
+  setImmediate(() => _mirrorTick().catch(() => {}));
+  res.json({ success: true, message: 'Arrancó el análisis: pide los datos despacio para no frenar a los jugadores (la primera vez puede tardar; sigue cada 10 min hasta terminar).' });
+});
+app.post('/api/admin/fraud/mirror/config', authMiddleware, adminMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+  try { const next = Object.assign({}, (await getConfig('mirrorScanCfg', null)) || {}, req.body || {}); await Config.set('mirrorScanCfg', mirrorScan.normalize(next), req.user.username); res.json({ success: true, config: await getMirrorConfig() }); }
+  catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+
 // ===== #1003 REGALOS AL AZAR EN HISTORIAS (owner: "no quiero invadir con regalos: bonos en historias al azar, no para todos sino REPARTIDOS,
 // que cada uno pueda entrar y ver un regalo, para generar retención sin invadir"). Cada día, a cada cliente ACTIVO (cargó en los últimos 30 d,
 // sin bloqueo / cuenta secundaria / observación) le toca su día "al azar" (hash del id y de la tanda de `everyDays` días) ⇒ ~1 regalo cada

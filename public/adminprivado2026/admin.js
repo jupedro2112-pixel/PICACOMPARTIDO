@@ -17946,6 +17946,7 @@ function fxTab(name, quiet) {
     try { localStorage.setItem('fx_tab', name); } catch (_) {}
     if (name === 'retiros') loadPayReview();
     else if (name === 'dups') fxLoadDups();
+    else if (name === 'espejo') fxLoadMirror();
     else if (name === 'hist') loadBlockHistory();
     else if (name === 'ajustes') { loadFraudAuto(); loadFraudBonus(); fxLoadOtherCfg(); }
     else if (name === 'casos' && !quiet) renderFraud();
@@ -17984,6 +17985,37 @@ async function fxLoadOtherCfg() {
         row('🏧', 'Retiro mínimo', cf && cf.withdrawMinArs != null ? money(cf.withdrawMinArs) : '—', 'Evita retiros chiquitos de prueba / de cuentas armadas.', 'commands') +
         row('🎯', 'Rollover de los regalos', ro ? 'bonos ×' + ro.bonos + ' · cargas ×' + (ro.depositX != null ? ro.depositX : '?') : '—', 'Todo regalo hay que jugarlo antes de retirarlo: es la defensa principal contra el abuso de bonos.', 'strategy');
 }
+// #1004 🪞 JUEGO ESPEJO: grupos donde uno gana lo que pierden otros, repetido en varias franjas (análisis nocturno sobre todos los jugadores).
+async function fxLoadMirror() {
+    const box = document.getElementById('fxMirList'), top = document.getElementById('fxMirTop'); if (!box) return;
+    box.innerHTML = 'Cargando…';
+    try {
+        const r = await authFetch('/api/admin/fraud/mirror'); const j = await r.json();
+        if (!r.ok) { box.innerHTML = '<span style="color:#ff8080;">' + escapeHtml(j.error || 'Error') + '</span>'; return; }
+        const res = j.result, pg = j.progress || {}, cf = j.config || {};
+        const fd = (d) => d ? new Date(d).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+        top.innerHTML = '<div class="card" style="font-size:.8rem;display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between"><div>' +
+            (res ? 'Último análisis: <b>' + fd(res.at) + '</b> · ' + res.days + ' días en franjas de ' + res.bucketHours + ' h · ' + (res.players || 0) + ' jugadores con apuestas' : 'Todavía no corrió el primer análisis.') +
+            '<br><span style="color:#9ab">Estado: ' + escapeHtml(pg.state || 'idle') + (pg.total ? ' (' + pg.done + '/' + pg.total + ' franjas)' : '') + (pg.error ? ' · <span style="color:#f87171">' + escapeHtml(pg.error) + '</span>' : '') + ' · corre solo de ' + cf.nightFrom + ' a ' + cf.nightTo + ' h</span></div>' +
+            (j.canEdit ? '<div><button class="btn btn-secondary btn-sm" onclick="fxMirrorRun()">▶️ Analizar ahora</button></div>' : '') + '</div>';
+        const gs = (res && res.groups) || []; const c = document.getElementById('fxCntMir'); if (c) c.textContent = gs.length ? '(' + gs.length + ')' : '';
+        if (!res) { box.innerHTML = ''; return; }
+        if (!gs.length) { box.innerHTML = '<div class="card" style="color:#22c55e">✅ No aparecieron grupos que jueguen en espejo.</div>'; return; }
+        box.innerHTML = gs.map(function (g) {
+            const users = (g.users || g.members.map(function (m) { return { username: m }; })).map(function (u) { return '<b>' + escapeHtml(u.username) + '</b>' + (u.blocked ? ' <span style="color:#f87171">(bloqueada)</span>' : '') + (u.userId ? ' <button class="btn btn-secondary btn-sm" onclick="openFraudCase(\'' + escapeHtml(u.userId) + '\')">🔍</button>' : ''); }).join(' · ');
+            const tags = [g.hits.length + ' franjas', 'juegan juntos ' + Math.round((g.coactivity || 0) * 100) + '% de las veces', 'movieron ' + _frMoney(g.moved)];
+            if ((g.bonusMembers || []).length) tags.push('🎁 con bono: ' + g.bonusMembers.join(', ')); if ((g.wdMembers || []).length) tags.push('💸 pidieron retiro: ' + g.wdMembers.join(', '));
+            const rows = g.hits.map(function (h) { return '<tr><td style="white-space:nowrap">' + fd(h.from) + ' → ' + fd(h.to) + '</td><td>🟢 <b>' + escapeHtml(h.winner) + '</b> ganó ' + _frMoney(h.win) + ' (apostó ' + _frMoney(h.wagWinner) + (h.bonusWinner ? ', bono ' + _frMoney(h.bonusWinner) : '') + ')</td><td>' + h.losers.map(function (l) { return '🔴 <b>' + escapeHtml(l.username) + '</b> perdió ' + _frMoney(l.loss) + ' (apostó ' + _frMoney(l.wagered) + ')'; }).join('<br>') + '</td></tr>'; }).join('');
+            return '<div class="card" style="margin-bottom:8px;border-left:4px solid ' + (g.flagged ? '#ff5050' : '#ffb347') + ';font-size:.8rem"><div>' + users + '</div><div style="color:#ffb347;margin:4px 0">' + tags.map(escapeHtml).join(' · ') + '</div>' +
+                '<div style="overflow:auto"><table class="data-table" style="width:100%;font-size:.76rem"><thead><tr><th>Franja</th><th>Ganó</th><th>Perdió</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+                '<div style="color:#93c5fd;margin-top:4px">🔍 Qué verificar: en admin.1girox.com abrí el historial de apuestas de ' + g.members.map(escapeHtml).join(', ') + ' en esas franjas. Si apostaron al MISMO juego / partido en los mismos minutos y a lados opuestos (Banca/Jugador, rojo/negro, local/visitante) → rechazar el retiro con motivo y bloquear. Si son juegos distintos, es casualidad.</div></div>';
+        }).join('');
+    } catch (_) { box.innerHTML = '<span style="color:#ff8080;">Error de conexión</span>'; }
+}
+async function fxMirrorRun() {
+    try { const r = await authFetch('/api/admin/fraud/mirror/run', { method: 'POST' }); const j = await r.json(); showToast(j.message || j.error || 'Listo', r.ok ? 'success' : 'error'); setTimeout(fxLoadMirror, 1500); } catch (_) { showToast('Error de conexión', 'error'); }
+}
+window.fxLoadMirror = fxLoadMirror; window.fxMirrorRun = fxMirrorRun;
 window.fxTab = fxTab; window.fxRefresh = fxRefresh; window.fxLoadDups = fxLoadDups; window.fxLoadOtherCfg = fxLoadOtherCfg;
 function _frMoney(n) { return '$' + Math.round(Number(n) || 0).toLocaleString('es-AR'); }
 function renderFraud() {

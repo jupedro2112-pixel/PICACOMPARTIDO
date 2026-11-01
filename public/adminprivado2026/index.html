@@ -2933,6 +2933,7 @@ Responder 2xx. Con 5xx / timeout se reintenta; con 4xx no.</pre>
                     <button class="btn btn-secondary btn-small fx-tab" data-fx="casos" onclick="fxTab('casos')">🚨 Casos <span id="fxCntCasos"></span></button>
                     <button class="btn btn-secondary btn-small fx-tab" data-fx="retiros" onclick="fxTab('retiros')">💸 Retiros frenados <span id="fxCntRet"></span></button>
                     <button class="btn btn-secondary btn-small fx-tab" data-fx="dups" onclick="fxTab('dups')">👥 Cuentas secundarias <span id="fxCntDup"></span></button>
+                    <button class="btn btn-secondary btn-small fx-tab" data-fx="espejo" onclick="fxTab('espejo')">🪞 Juego espejo <span id="fxCntMir"></span></button>
                     <button class="btn btn-secondary btn-small fx-tab fx-admin" data-fx="hist" onclick="fxTab('hist')">📜 Historial</button>
                     <button class="btn btn-secondary btn-small fx-tab fx-admin" data-fx="ajustes" onclick="fxTab('ajustes')">⚙️ Ajustes</button>
                     <button class="btn btn-secondary btn-small fx-tab" data-fx="guia" onclick="fxTab('guia')">📖 Cómo funciona</button>
@@ -2958,6 +2959,13 @@ Responder 2xx. Con 5xx / timeout se reintenta; con 4xx no.</pre>
                 <div class="fx-pane" id="fxPane-dups" hidden>
                     <div class="card" style="font-size:.8rem;color:#9ab;margin-bottom:8px">Cuentas que comparten teléfono, celular, notificaciones o CBU con una cuenta más vieja (la principal). <b>No se bloquean</b>: cargan y retiran normal, pero no reciben ningún bono ni regalo. Si es otra persona de verdad (por ejemplo, la pareja con su propio celular), tocá <b>Quitar marca</b>.</div>
                     <div id="fxDupList">Cargando…</div>
+                </div>
+
+                <!-- 🪞 JUEGO ESPEJO (#1004): cuentas SIN vínculo donde una gana lo que otra (u otras dos) pierden, varias veces -->
+                <div class="fx-pane" id="fxPane-espejo" hidden>
+                    <div class="card" style="font-size:.8rem;color:#9ab;margin-bottom:8px">Mira a <b>TODOS</b> los que apostaron (no sólo a los que retiran), aunque no compartan celular ni CBU: por cada franja de horas busca a quien GANÓ y a 1 o 2 cuentas que PERDIERON casi lo mismo apostando parecido. Una coincidencia sola es azar; acá aparecen sólo los grupos que se repiten en varias franjas. 1girox no da apuesta por apuesta: <b>la prueba final es el historial de apuestas en admin.1girox.com</b> (mismo juego / partido, mismos minutos, lados opuestos). Corre solo de noche; sus retiros pendientes quedan para revisión, no se bloquea a nadie.</div>
+                    <div id="fxMirTop" style="margin-bottom:8px"></div>
+                    <div id="fxMirList">Cargando…</div>
                 </div>
 
                 <!-- 📜 HISTORIAL (#996, sólo admin general) -->

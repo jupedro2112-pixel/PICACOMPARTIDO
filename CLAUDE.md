@@ -352,6 +352,8 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`). Git user: j
   2° y 3° por ranking (puntos con techo diario $300.000 + constancia). Tickets NUNCA se quitan ni se reasignan (índice único). Requisitos para anotarse:
   app, notificaciones, Telegram, **celular cargado** y una carga. Premios se entregan a mano (push + nota al ganador). Panel → App → Sorteos (🎟️ / 🎲)
   y Principal → "Sorteos: ¿sirven?". Un cambio en las reglas de puntos/tickets pasa por `computePoints` y sus tests, nunca por el motor.
+- **JUEGO ESPEJO (#1004):** `src/services/mirrorScan.js` + `_mirrorTick` (de noche, 15 req/min) cruzan a TODOS los apostadores por franjas de 3 h
+  (uno gana lo que pierden 1-2 cuentas, repetido). Pestaña 🪞 de Antifraude; sólo manda retiros a revisión. Test `scripts/test-mirror-scan.js`.
 - **HISTORIAS POR SEGMENTO + CÓDIGO SORPRESA (#1003):** `Story.audience` ('new' = sin carga real, 'active', 'all'); consultas nuevas de historias filtran
   audience. Código sorpresa (`CodeDrop`, `Config['codeDrop']`, $2.000 × primeros 10, 2-3/semana) sólo para quien ya cargó; regalos al azar personales sin
   push (`Config['storyGifts']`). Un tipo de regalo nuevo ⇒ `CASHBACK_GIFT_TX_TYPES` (ya está `code_drop`). Test `scripts/test-story-segments.js`.

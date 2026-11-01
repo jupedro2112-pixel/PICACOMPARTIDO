@@ -1597,6 +1597,16 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
   Siguen: login, alta desde el panel (`/api/users`, `/api/admin/users`, publisher-admin) y la creación local de un jugador que YA existe en 1girox.
 - Test: `node scripts/test-fraud-auto.js` (10 casos).
 
+### Juego espejo global #1004 (2026-11-01)
+- `src/services/mirrorScan.js` (`analyze`, `bucketsFor`, `normalize`; puro, test `scripts/test-mirror-scan.js`) + `_mirrorTick` en server.js
+  (cada 10 min, sólo de noche `nightFrom..nightTo` ART salvo "Analizar ahora"; `_cronClaim('mirror')`; pasada < 8 min y sigue en la
+  próxima). Franjas CERRADAS de `bucketHours` en `MirrorBucket` (key única `YYYY-MM-DDTHH+h`, se borran a días+2). Jugadores = los que
+  cargaron / recibieron regalo / pidieron retiro en el período. Resultado `Config['mirrorScan']` (grupos con hits por franja).
+- Efecto: `PendingPayout.reviewReason = 'antifraude: posible JUEGO ESPEJO…'` en los pendientes del grupo, y `_mirrorHitFor` en
+  `_withdrawalRequestHandler` manda a revisión los retiros nuevos. Nunca bloquea (decide una persona con el historial de 1girox).
+- Cupo: `rpm` (15) pedidos/min del batch; con N usuarios activos son ceil(N/100) pedidos por franja (+1 por key de publicista).
+- Rutas: `GET /api/admin/fraud/mirror` (staff), `POST …/mirror/run` y `…/mirror/config` (sólo admin).
+
 ### Historias por segmento, código sorpresa y regalos al azar #1003 (2026-11-01)
 - `Story.audience` 'all'|'new'|'active' (+ `audienceUserId` personal). `/api/stories/active` filtra por `_storySegmentOf` (carga real ⇒ active);
   `/api/stories/public` = 'new'. Una consulta NUEVA de historias para clientes tiene que filtrar audience y audienceUserId.

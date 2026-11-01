@@ -8,6 +8,19 @@
 
 ## Sesión 2026-11-01
 
+### 1004. 🪞 JUEGO ESPEJO entre cuentas SIN vínculo (2026-11-01)
+- Owner: "hay usuarios que repiten una apuesta, uno gana y otro pierde; hay que analizar todo el panel según lo apostado, no sólo
+  ganadores: cuando quieren estafar 1 o 2 pierden y otro gana con el bono".
+- 1girox NO da apuesta por apuesta ⇒ `src/services/mirrorScan.js` (puro): totales de TODOS los jugadores activos por franjas de 3 h
+  (stats batch con fecha+hora), en cada franja busca un ganador cuya ganancia ≈ pérdida de 1 o 2 cuentas (±25 %, apostado parecido).
+  Una coincidencia suelta es azar: sólo cuenta el MISMO grupo repetido en ≥2 franjas (con bono/retiro) o ≥3 (sin), y que jueguen juntos
+  ≥50 % de las veces. Sin falsos positivos con 500 jugadores al azar (test `scripts/test-mirror-scan.js`).
+- Motor `_mirrorTick` (server.js): de NOCHE (3-8 h ART), 15 pedidos/min (comparte los 60/min), franjas guardadas en `MirrorBucket`
+  (cada una se pide una vez), resultado en `Config['mirrorScan']`. Los retiros pendientes del grupo y los NUEVOS pedidos pasan a
+  revisión ("posible JUEGO ESPEJO"); no bloquea a nadie. Panel → 🛡️ Antifraude → 🪞 Juego espejo (franja por franja quién ganó /
+  quién perdió + qué verificar en admin.1girox.com) y "▶️ Analizar ahora" (admin). Config `Config['mirrorScanCfg']`; kill switch
+  `MIRROR_SCAN_DISABLED=1`. Admin SW v218.
+
 ### 1003. 📖 HISTORIAS por segmento + 🎁 CÓDIGO SORPRESA + 🎲 regalos al azar + velocidad + guía de retiros — PWA v652 · admin SW v217
 **Pedido (owner):** "para los nuevos, historias informativas del servicio; los que ya son activos, más rotación (ganadores, contenido atractivo)
 así no se cansan; un código automático por 1 h, $2.000 para los primeros 10, 2-3 veces por semana a cualquier hora, avisar que estén atentos,
