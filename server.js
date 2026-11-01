@@ -2081,9 +2081,14 @@ async function _sendUserSystemMessage(user, content, { metadata = null, senderUs
 // horario y monto, todo lo que usás para leerlo; si sigue fallando, entra a Soporte automáticamente del lado interno para hacerlo manual".
 // 1er comprobante ilegible/incompleto ⇒ /sys_receipt_unreadable con la lista de datos. 2do en 60 min ⇒ NO se le vuelve a pedir: pasa solo a
 // un agente (/sys_receipt_to_agent al cliente; el comprobante entra a Cargas pendientes ya escalado; el chat se abre en Abiertos con nota).
-const RECEIPT_UNREADABLE_DEFAULT = '⚠️ No pudimos leer tu comprobante. Mandá la captura ENTERA, que se vean titular, CUIT, fecha y hora, monto y N° de operación.';
+const RECEIPT_UNREADABLE_OLD_825 = '⚠️ No pudimos leer tu comprobante. Mandá la captura ENTERA, que se vean titular, CUIT, fecha y hora, monto y N° de operación.';
+// #1011 (owner 2026-11-01): "que le especifique al cliente que envíe el comprobante bien detallado y que explique cómo enviar el correcto".
+const RECEIPT_UNREADABLE_DEFAULT = '📸 Tu comprobante no trae todos los datos que necesitamos para acreditarlo.\n\nCómo mandarlo bien:\n1️⃣ Entrá a la app de tu banco o billetera (Mercado Pago, Ualá, Brubank…) → Actividad / Movimientos.\n2️⃣ Tocá esta transferencia → "Ver comprobante" o "Compartir comprobante".\n3️⃣ Mandá esa captura ENTERA, sin recortar.\n\nTiene que verse: 👤 quién envía · 🪪 CUIT/CUIL · 🕒 fecha y hora · 💵 monto · 🔢 N° de operación.\n\n⚠️ La pantalla de "Transferiste $…" / "Transferencia realizada" NO sirve: no trae esos datos.';
 const RECEIPT_UNREADABLE_OLD_808 = '⚠️ No pudimos leer bien tu comprobante. Reenvialo de forma correcta, con TODOS los datos visibles: monto, fecha y hora, nombre de quien envía, CBU/alias de destino y N° de operación.\n\n📸 Si los datos no se ven, el pago será rechazado.';
-const RECEIPT_TO_AGENT_DEFAULT = '🙋 No pudimos leer tu comprobante de forma automática, así que ya se lo pasamos a un agente para que lo revise a mano. No hace falta que hagas nada: te avisamos acá apenas se acredite.';
+const RECEIPT_TO_AGENT_OLD_825 = '🙋 No pudimos leer tu comprobante de forma automática, así que ya se lo pasamos a un agente para que lo revise a mano. No hace falta que hagas nada: te avisamos acá apenas se acredite.';
+const RECEIPT_TO_AGENT_DEFAULT = '🙋 Este comprobante tampoco trae todos los datos, así que ya lo está revisando un agente.\n\nPara que se acredite MÁS RÁPIDO, mandanos el comprobante completo: en la app de tu banco o billetera → Movimientos → tocá la transferencia → "Ver comprobante" o "Compartir comprobante". Tiene que verse quién envía, CUIT, fecha y hora, monto y N° de operación.\n\n⚠️ La pantalla de "Transferencia realizada" no sirve.';
+// #1011: el cliente reenvía un comprobante SUYO que todavía no se acreditó ⇒ no es "ya usado" (eso asustaba y era falso).
+const RECEIPT_ALREADY_PENDING_DEFAULT = '✅ Ese comprobante{amount} ya lo tenemos y se está procesando. No hace falta mandarlo de nuevo: te avisamos acá apenas se acredite.';
 async function _askReceiptResend(userId, username, why, compId) {
   try {
     const since60 = new Date(Date.now() - 60 * 60 * 1000);
@@ -2100,7 +2105,7 @@ async function _askReceiptResend(userId, username, why, compId) {
       return;
     }
     const txt = await renderSystemCommand('/sys_receipt_unreadable', RECEIPT_UNREADABLE_DEFAULT, {});
-    if (txt) await _sendUserSystemMessage({ id: userId, username }, txt, { metadata: { kind: 'receipt_unreadable', why: String(why || '').slice(0, 60), channel: 'support' }, push: { title: '📸 Reenviá tu comprobante', body: 'Necesitamos ver titular, CUIT, fecha y hora, monto y N° de operación.' } });
+    if (txt) await _sendUserSystemMessage({ id: userId, username }, txt, { metadata: { kind: 'receipt_unreadable', why: String(why || '').slice(0, 60), channel: 'support' }, push: { title: '📸 Mandá el comprobante completo', body: 'Desde tu banco: Movimientos → la transferencia → "Ver comprobante". Captura entera.' } });
     if (why !== 'not_comprobante') _chatAutoCloseIfHandled(userId, 'comprobante ilegible: se pidió reenviar').catch(() => {}); // #895
   } catch (e) { logger.warn(`[comprobante] pedido de reenvío: ${e.message}`); }
 }
@@ -2462,7 +2467,8 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
     // #808: comprobante reconocido pero con datos clave ilegibles (sin monto, o sin titular y sin N° de operación) ⇒ pedir reenvío.
     // Sigue el flujo igual (queda en la cola para revisión manual), así no se pierde si el agente lo puede leer.
     // #825: también sin fecha/hora (se usa para ubicar la transferencia).
-    if (!(Number(result.amount) > 0) || (!result.originHolder && !result.operationNumber && !result.coelsaId) || !result.paymentDate) _askReceiptResend(userId, username, 'incomplete', base.id);
+    const incomplete = !(Number(result.amount) > 0) || (!result.originHolder && !result.operationNumber && !result.coelsaId) || !result.paymentDate;
+    if (incomplete) _askReceiptResend(userId, username, 'incomplete', base.id);
     const montoStr = result.amount ? `$${Number(result.amount).toLocaleString('es-AR')}` : 's/monto';
     const opStr = (result.operationNumber ? `op. N°${result.operationNumber}` : 's/N° operación') + (result.coelsaId ? ` · COELSA ${result.coelsaId}` : '');
     const dataDesc = `${opStr} · ${montoStr}${result.paymentDate ? ' · ' + result.paymentDate : ''}`;
@@ -2493,6 +2499,21 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
           duplicateOfComprobanteId: original.id || null
         });
       } catch (_) {}
+      // #1011: ¿alguna copia de este comprobante ya se ACREDITÓ? Si es del mismo cliente y no, es un reenvío (no "ya usado").
+      let credited = true;
+      if (sameUser) { try { credited = !!(await Comprobante.exists({ $and: [{ $or: dupOr }, { $or: [{ autoCharged: true }, { reviewStatus: 'confirmed' }] }] })); } catch (_) { credited = true; } }
+      if (sameUser && !credited) {
+        await _emitAdminOnlyChatNote(userId, username,
+          `🧾 El cliente REENVIÓ un comprobante suyo que todavía NO se acreditó (${dataDesc}). No es otro pago: es el mismo envío.`);
+        if (!incomplete && original.reviewStatus === 'pending') { // si está incompleto ya le llegó cómo mandarlo bien
+          try {
+            const pTxt = await renderSystemCommand('/sys_receipt_already_pending', RECEIPT_ALREADY_PENDING_DEFAULT, { amount: _amtStr(result.amount) });
+            if (pTxt) await _sendUserSystemMessage({ id: userId, username }, pTxt, { metadata: { kind: 'receipt_already_pending', amount: result.amount || 0, channel: 'support' } });
+          } catch (_) {}
+        }
+        _chatAutoCloseIfHandled(userId, 'comprobante reenviado (pendiente)').catch(() => {});
+        return;
+      }
       if (sameUser) {
         await _emitAdminOnlyChatNote(userId, username,
           `🧾 Comprobante REPETIDO (${dataDesc}). El propio cliente ya lo había enviado antes. Revisá antes de cargar.`);
@@ -13318,6 +13339,7 @@ async function initializeData() {
   try { if (!(await getConfig('mig879NoWithdrawOtp', null))) { await Config.set('withdrawOtpRequired', false, 'mig#879'); await Config.set('mig879NoWithdrawOtp', new Date().toISOString(), 'mig#879'); console.log('✅ #879: retiro sin SMS por retiro (teléfono verificado una vez)'); } } catch (e) { console.warn('[startup-migration] #879:', e.message); }
   try { if (!(await getConfig('mig878ShortSupport', null))) { for (const [name, [oldTxt, nu]] of Object.entries(SUPPORT_TEXTS_OLD_878)) await Command.updateOne({ name, response: oldTxt }, { $set: { response: nu() } }); await Config.set('mig878ShortSupport', new Date().toISOString(), 'mig#878'); } } catch (e) { console.warn('[startup-migration] #878:', e.message); }
   try { if (!(await getConfig('mig839FdPopup', null))) { await Command.updateOne({ name: '/sys_first_deposit_popup', response: FIRST_DEPOSIT_POPUP_OLD }, { $set: { response: FIRST_DEPOSIT_POPUP_DEFAULT } }); await Config.set('mig839FdPopup', new Date().toISOString(), 'mig#839'); } } catch (e) { console.warn('[startup-migration] #839:', e.message); }
+  try { if (!(await getConfig('mig1011ReceiptText', null))) { await Command.updateOne({ name: '/sys_receipt_unreadable', response: RECEIPT_UNREADABLE_OLD_825 }, { $set: { response: RECEIPT_UNREADABLE_DEFAULT } }); await Command.updateOne({ name: '/sys_receipt_to_agent', response: RECEIPT_TO_AGENT_OLD_825 }, { $set: { response: RECEIPT_TO_AGENT_DEFAULT } }); await Config.set('mig1011ReceiptText', new Date().toISOString(), 'mig#1011'); } } catch (e) { console.warn('[startup-migration] #1011:', e.message); }
   try { if (!(await getConfig('mig825ReceiptText', null))) { await Command.updateOne({ name: '/sys_receipt_unreadable', response: RECEIPT_UNREADABLE_OLD_808 }, { $set: { response: RECEIPT_UNREADABLE_DEFAULT } }); await Config.set('mig825ReceiptText', new Date().toISOString(), 'mig#825'); } } catch (e) { console.warn('[startup-migration] #825:', e.message); }
   // #822 (owner 2026-10-22): "limpiá de soporte comunidad, dejá pagos, abiertos y cerrados": los chats que estaban en Comunidad vuelven a
   // Abiertos (si no, quedaban escondidos: la pestaña ya no existe).
@@ -13838,6 +13860,12 @@ async function initializeData() {
       description: 'Segundo comprobante ilegible en 1 hora: se avisa al cliente que lo revisa un agente a mano (el comprobante queda en Cargas pendientes y el chat en Abiertos).',
       type: 'message',
       response: RECEIPT_TO_AGENT_DEFAULT
+    },
+    {
+      name: '/sys_receipt_already_pending', // #1011
+      description: 'El cliente reenvía un comprobante SUYO que todavía no se acreditó: se le dice que ya lo tenemos y se está procesando. Variable: {amount}. Vacío = no se manda.',
+      type: 'message',
+      response: RECEIPT_ALREADY_PENDING_DEFAULT
     },
     {
       name: '/sys_receipt_duplicate',

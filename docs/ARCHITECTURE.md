@@ -973,6 +973,10 @@ VIPCARGAS con su JWT, y el cliente nunca más necesita conocer su clave del casi
   "⏳ Cargas pendientes" (`/api/admin/deposit-reviews*`): Confirmar = `_agentDepositHandler` (la función de
   `POST /api/admin/deposit`, extraída para reusarla) · Rechazar = `/sys_deposit_rejected`. Duplicados → el cliente recibe
   `/sys_receipt_duplicate`. Cliente: `GET /api/deposits/pending` + socket `deposit_review_update` → franja "⏳ Carga pendiente".
+  **#1011 (2026-11-01) — reenvío propio NO es "ya usado":** si el duplicado es del MISMO cliente y ninguna copia se acreditó
+  (`autoCharged` / `reviewStatus:'confirmed'`), no se manda `/sys_receipt_duplicate`: nota interna "reenvió… todavía NO se acreditó" y, si el
+  envío está completo y el original sigue pendiente, `/sys_receipt_already_pending`. `/sys_receipt_unreadable` y `/sys_receipt_to_agent` explican
+  CÓMO sacar el comprobante completo (Movimientos → la transferencia → Ver/Compartir comprobante; la pantalla "Transferencia realizada" no sirve).
   **#908 (2026-10-24) — REENVÍOS del mismo comprobante:** la cola agrupa con `_sameReceipt(a, b)` (mismo cliente y misma imagen /
   misma `dedupeKey` / mismo monto sin un N° de operación distinto / ambos sin monto): la ficha es el primer envío, los otros van en
   `repeats[]` (+`sentTimes`). Al resolver la ficha (auto, Confirmar, Rechazar) `_depositReviewCloseRepeats` cierra los demás como

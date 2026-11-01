@@ -8,6 +8,15 @@
 
 ## Sesión 2026-11-01
 
+### 1011. 📸 Comprobante incompleto: explicar cómo mandarlo + reenvío propio ya no es "ya usado" (2026-11-01)
+- Owner (captura de soporte): el cliente manda la pantalla resumen ("Transferiste $10.000") sin datos; al reenviarla el sistema le decía
+  "Ese comprobante ya fue usado" (falso y asusta) y "no hace falta que hagas nada"; recién con el comprobante detallado se cargaba solo.
+- `/sys_receipt_unreadable` y `/sys_receipt_to_agent` nuevos: pasos para sacar el comprobante COMPLETO desde el banco/billetera y aviso de que la
+  pantalla "Transferencia realizada" no sirve (migración `mig1011ReceiptText` pisa sólo los textos viejos sin editar). Push corta igual.
+- Duplicado del MISMO cliente sin ninguna copia acreditada ⇒ nota interna "reenvió… todavía NO se acreditó" y, si está completo y el original
+  sigue pendiente, `/sys_receipt_already_pending` (nuevo, editable). El "ya fue usado" queda para lo acreditado o lo de OTRO cliente.
+- Además ese día el banco automático apareció APAGADO y en sombra (nombre/CBU vacíos): nadie del código lo apaga; se reactivó desde el panel.
+
 ### 1010. 🎰 Ruleta con GIRO GRATIS diario + avisos de reembolso con monto (2026-11-01)
 - Owner: "impulsar la ruleta diaria para todos, no están tirando el tiro… que no hagan multicuentas desde landing y me estafen" +
   "notificaciones para la gente que tiene un reembolso disponible para reclamar, aparte del resto (no es molesto: es un beneficio)".
