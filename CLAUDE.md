@@ -357,7 +357,9 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`). Git user: j
   `scripts/test-business-board.js`). Todo por agregaciones; un tipo de regalo nuevo ⇒ etiqueta en `GIFT_LABELS`.
 - **UN RETIRO POR CLIENTE (#1008):** pagar un retiro llama `_closeOtherPayouts` (anula los otros pendientes seguros del cliente); un flujo nuevo
   que marque un retiro pagado tiene que llamarla. Pagos a confirmar muestra una tarjeta por cliente.
-- **BONOS SÓLO EN SLOTS (#1007):** todo texto nuevo al cliente que ofrezca un bono / regalo aclara "se juega en slots" (regla de 1girox).
+- **BONOS SÓLO EN SLOTS (#1007):** los textos viejos aclaran "se juega en slots"; desde #1010 el owner pidió NO agregarlo en los avisos nuevos.
+- **TOPE ÚNICO POR REGALO (#1010):** `Config['giftMaxArs']` ($15.000). Un regalo NUEVO pasa su monto por `_capGift` ANTES de grabar y acreditar
+  (reembolsos: `_calcRefundCapped`, nunca `refundTiers.calcRefund` directo). Fuera del tope: Bonificación manual, devoluciones, referidos.
 - **SESIÓN Y BASE LENTA (#1006):** `authMiddleware` devuelve 401 SÓLO por errores del JWT; un error de la base es 503 `DB_BUSY` (si no, el panel y la
   app cierran la sesión cuando Mongo tarda). `checkAdminSession` (panel) reintenta ante 5xx. No volver a poner un 401 genérico en el catch.
 - **JUEGO ESPEJO (#1004):** `src/services/mirrorScan.js` + `_mirrorTick` (de noche, 15 req/min) cruzan a TODOS los apostadores por franjas de 3 h

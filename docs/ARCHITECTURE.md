@@ -1720,3 +1720,8 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
 - **Pendiente de confirmar con 1girox:** si una `reference` usada en `/bonus` también frena un `/deposit` con la misma reference. `creditGift` y
   `_creditFireReward` pueden cambiar de ruta entre un intento y su reintento (lectura fresca del bono activo); si 1girox no comparte la unicidad,
   un timeout que sí acreditó + reintento podría pagar dos veces.
+
+**Tope único por regalo (#1010):** `Config['giftMaxArs']` = $15.000 (0 = sin tope). `_capGift(amount)` se aplica en cada fuente antes de grabar
+la Transaction y acreditar: `resolveAutoBonus` (todo bono en % de la carga), `_calcRefundCapped` (envoltura de `refundTiers.calcRefund`: reclamo,
+estado y aviso del reembolso usan el mismo número), acumulativo (`reclamable`), ruleta en plata, fueguito, rakeback, nivel VIP, misiones, reseña y
+lote fijo. Excluidos: Bonificación manual, devolución de retiro, referidos, código de bienvenida.

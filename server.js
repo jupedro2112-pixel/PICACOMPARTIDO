@@ -9232,9 +9232,9 @@ app.get('/api/refunds/status', authMiddleware, async (req, res) => {
     // tiene su PROPIA escalera (editable desde el panel): un mismo jugador puede
     // estar en el tope del mensual y en el rango más bajo del semanal.
     const [tiersByPeriod, refundMins] = await Promise.all([getRefundTiersByPeriod(), getRefundMinimums()]);
-    const dailyCalc = refundTiers.calcRefund(dailyNetLoss, tiersByPeriod.daily);
-    const weeklyCalc = refundTiers.calcRefund(weeklyNetLoss, tiersByPeriod.weekly);
-    const monthlyCalc = refundTiers.calcRefund(monthlyNetLoss, tiersByPeriod.monthly);
+    const dailyCalc = _calcRefundCapped(dailyNetLoss, tiersByPeriod.daily);
+    const weeklyCalc = _calcRefundCapped(weeklyNetLoss, tiersByPeriod.weekly);
+    const monthlyCalc = _calcRefundCapped(monthlyNetLoss, tiersByPeriod.monthly);
     // §5: lo ya cobrado como reembolso ACUMULATIVO dentro del período se descuenta
     // — se muestra el neto para que el número que ve el cliente sea el que cobra.
     try {
@@ -9355,7 +9355,7 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
         return res.json({ success: false, message: 'No tenés pérdida ayer. El reembolso aplica solo sobre lo que perdiste jugando.', canClaim: true, netAmount: 0 });
       }
 
-      const _calc = refundTiers.calcRefund(netLoss, (await getRefundTiersByPeriod()).daily);
+      const _calc = _calcRefundCapped(netLoss, (await getRefundTiersByPeriod()).daily);
       const dailyPct = _calc.pct;
       let _cbkPaid = 0;
       try { _cbkPaid = await _cashbackPaidBetween(userId, fromDate, toDate); } catch (_) { /* sin descuento */ }
@@ -9484,7 +9484,7 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
       }
 
       // El % sale del rango de la pérdida con la escalera del SEMANAL (editable en el panel).
-      const _calc = refundTiers.calcRefund(netLoss, (await getRefundTiersByPeriod()).weekly);
+      const _calc = _calcRefundCapped(netLoss, (await getRefundTiersByPeriod()).weekly);
       const weeklyPct = _calc.pct;
       // §5: lo ya cobrado como reembolso ACUMULATIVO dentro del período se descuenta
       // (la misma pérdida no se reembolsa dos veces).
@@ -9655,7 +9655,7 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
       }
 
       // El % sale del rango de la pérdida con la escalera del MENSUAL (editable en el panel).
-      const _calc = refundTiers.calcRefund(netLoss, (await getRefundTiersByPeriod()).monthly);
+      const _calc = _calcRefundCapped(netLoss, (await getRefundTiersByPeriod()).monthly);
       const monthlyPct = _calc.pct;
       // §5: lo ya cobrado como reembolso ACUMULATIVO dentro del período se descuenta
       // (la misma pérdida no se reembolsa dos veces).
@@ -9914,7 +9914,7 @@ async function _cashbackStateToday(userId, username, opts) {
     lossLife: calc.lossLife,        // pérdida REAL (neto − regalado, piso 0)
     giftedLife, giftedLocal, giftedPlatform, // diagnóstico (logs / panel)
     paidLife, paidToday,
-    reclamable: calc.reclamable,
+    reclamable: _capGift(calc.reclamable), // #1010 tope por regalo (lo que pase queda para el próximo reclamo: es acumulativo)
     belowMin: calc.belowMin,
     faltaParaMinimo: calc.faltaParaMinimo
   };
@@ -10223,7 +10223,7 @@ app.get('/api/vip/status', authMiddleware, async (req, res) => {
         const statsRes = await girox.getPlayerStats(user.username,
           new Date(week.fromEpoch * 1000), new Date(week.toEpoch * 1000), 'vip-rakeback');
         const wagered = _vipScopedWagered(statsRes);
-        const amount = Math.round(wagered * (pct / 100));
+        const amount = _capGift(Math.round(wagered * (pct / 100))); // #1010
         rakeback = {
           eligible: true, pct, claimed: false, canClaim: amount >= 1,
           wagered, amount, period: `${week.fromDateStr} a ${week.toDateStr}`
@@ -10267,8 +10267,9 @@ app.post('/api/vip/level-bonus/claim', authMiddleware, authLimiter, async (req, 
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
     if (!(user.vipPendingLevelBonuses || []).includes(idx)) return res.status(409).json({ error: 'Ese bono ya fue reclamado.', code: 'NOT_PENDING' });
     const adapter = platforms.getAdapter(pid) || girox;
+    const _lvlAmt = _capGift(level.levelUpBonusArs); // #1010
     const ref = `vip-lvl-${user.id}-${idx}`;
-    const r = await adapter.creditUserBalance(user.username, level.levelUpBonusArs, ref, { multiplier: await _giftRolloverX(), description: `Bono por alcanzar el nivel VIP ${level.name}` }); // #659: rollover global
+    const r = await adapter.creditUserBalance(user.username, _lvlAmt, ref, { multiplier: await _giftRolloverX(), description: `Bono por alcanzar el nivel VIP ${level.name}` }); // #659: rollover global
     if (!r || !r.success) {
       logger.warn(`[vip] reclamo nivel ${level.name} de ${user.username} en ${pid} falló: ${(r && r.error) || 's/detalle'}`);
       return res.status(503).json({ error: 'No pudimos acreditar el bono ahora. Probá en unos minutos.' });
@@ -10276,13 +10277,13 @@ app.post('/api/vip/level-bonus/claim', authMiddleware, authLimiter, async (req, 
     await User.updateOne({ id: user.id }, { $pull: { vipPendingLevelBonuses: idx }, $set: { lastPlatform: pid } });
     if (!r.duplicate) {
       try {
-        await Transaction.create({ id: uuidv4(), type: 'vip_levelup', platform: pid, userId: user.id, username: user.username, amount: level.levelUpBonusArs,
+        await Transaction.create({ id: uuidv4(), type: 'vip_levelup', platform: pid, userId: user.id, username: user.username, amount: _lvlAmt,
           description: `Nivel VIP ${level.name} alcanzado ${level.emoji} — reclamado por el cliente`, transactionId: (r.data && (r.data.transfer_id || r.data.transferId)) || null,
           metadata: { source: 'vip_levelup', creditedAs: r.creditedAs || null, platform: pid, levelIdx: idx }, timestamp: new Date() });
       } catch (e) { logger.warn(`[vip] Transaction del reclamo de nivel falló: ${e.message}`); }
     }
-    logger.info(`[vip] ${user.username} reclamó el bono del nivel ${level.name} ($${level.levelUpBonusArs}) en ${pid}${r.duplicate ? ' (duplicate)' : ''}`);
-    res.json({ success: true, amount: level.levelUpBonusArs, level: { idx: level.idx, name: level.name, emoji: level.emoji }, platform: pid, label: platforms.labelOf(pid) });
+    logger.info(`[vip] ${user.username} reclamó el bono del nivel ${level.name} ($${_lvlAmt}) en ${pid}${r.duplicate ? ' (duplicate)' : ''}`);
+    res.json({ success: true, amount: _lvlAmt, level: { idx: level.idx, name: level.name, emoji: level.emoji }, platform: pid, label: platforms.labelOf(pid) });
   } catch (e) {
     logger.error(`[vip] level-bonus/claim: ${e.message}`);
     res.status(500).json({ error: 'Error del servidor' });
@@ -10316,7 +10317,7 @@ app.post('/api/vip/rakeback/claim', authMiddleware, async (req, res) => {
         return res.json({ success: false, message: 'No pudimos calcular tu apostado en este momento (la plataforma está demorada). Probá en unos minutos.' });
       }
       const wagered = _vipScopedWagered(statsRes);
-      const amount = Math.round(wagered * (pct / 100));
+      const amount = _capGift(Math.round(wagered * (pct / 100))); // #1010
       if (amount < 1) {
         return res.json({ success: false, message: 'No registrás apuestas la semana pasada. El rakeback es un % de lo que apostás, ganes o pierdas.' });
       }
@@ -13558,7 +13559,7 @@ async function initializeData() {
       name: '/sys_roulette_ready',
       description: 'Push automática (una por día, 13–15 h) a quien puede girar GRATIS la ruleta y todavía no giró (no sale si ese día ya recibió otro aviso masivo; a los 3 sin girar se pausa). Variable: {pct} (% máximo del giro gratis). Vacío = no se manda.',
       type: 'message',
-      response: 'Entrá y girá: podés ganar hasta +{pct}% EXTRA para tu carga de hoy (se juega en slots).'
+      response: 'Entrá y girá: podés ganar hasta +{pct}% EXTRA para tu carga de hoy.'
     },
     {
       // #916 (owner 2026-10-24): cierre AUTOMÁTICO de Soporte cuando el cliente no contesta en {min} minutos.
@@ -14582,6 +14583,15 @@ async function getAutoLoadBonusPct() {
 // #974 (owner 2026-10-24): el 100% de la primera carga vuelve a tener TOPE propio (Config['firstDepositCapArs'], $15.000; 0 = sin tope) y nada sobre
 // el resto. Antes era libre (#812): una carga de $500.000 regalaba $500.000. Al cliente típico ($5.000–$10.000) no le cambia nada.
 const FIRST_DEPOSIT_CAP_DEFAULT = 15000;
+// #1010 (owner 2026-11-01): "todos los bonos de ruleta o donde sea que se regale que sea con tope de 15.000 para evitar estafas y no regalar de más"
+// ⇒ TOPE ÚNICO por regalo: Config['giftMaxArs'] ($15.000; 0 = sin tope). Se aplica en la FUENTE (el monto que se graba = el que se acredita):
+// bono en % de la carga, reembolsos (3 períodos + acumulativo), ruleta en plata, fueguito, rakeback, nivel VIP, misiones, reseña y lote en fichas.
+// NO aplica a la Bonificación MANUAL del panel, a devoluciones de retiro ni a comisiones de referidos (plata ganada por referir).
+const GIFT_MAX_DEFAULT = 15000; let _giftMaxCache = GIFT_MAX_DEFAULT;
+async function _refreshGiftMax() { try { const raw = await getConfig('giftMaxArs', null); const n = Number(raw); _giftMaxCache = raw != null && Number.isFinite(n) && n >= 0 ? Math.round(n) : GIFT_MAX_DEFAULT; } catch (_) {} return _giftMaxCache; }
+function _capGift(amount) { const a = Math.max(0, Math.round(Number(amount) || 0)); return _giftMaxCache > 0 ? Math.min(a, _giftMaxCache) : a; }
+function _calcRefundCapped(loss, tiers) { const r = refundTiers.calcRefund(loss, tiers); return r && Number(r.amount) > 0 ? Object.assign({}, r, { amount: _capGift(r.amount), capped: _giftMaxCache > 0 && Number(r.amount) > _giftMaxCache }) : r; }
+setTimeout(() => { _refreshGiftMax(); setInterval(_refreshGiftMax, 5 * 60 * 1000); }, 20 * 1000);
 async function getFirstDepositCapArs() { try { const n = Number(await getConfig('firstDepositCapArs', null)); if (Number.isFinite(n) && n >= 0) return Math.round(n); } catch (_) {} return FIRST_DEPOSIT_CAP_DEFAULT; }
 const FIRST_DEPOSIT_BONUS_PCT_DEFAULT = 100; // #810 (owner 2026-10-22): 100% en la primera carga
 async function getFirstDepositBonusPct() {
@@ -15226,7 +15236,8 @@ async function resolveAutoBonus(user, amount, usedBy, opts = {}) {
   const cfg = c.source === 'first_deposit' ? Object.assign({}, await getBonusCapConfig(), _fdCap > 0 ? { enabled: true, capArs: _fdCap, restPct: 0 } : { enabled: false }) : await getBonusCapConfig();
   // Lote: _loteBonusAmount (#172, mismo tope, mismo resultado que bonusWithCap);
   // el resto de las fuentes: bonusWithCap.
-  const bonus = c.source === 'promo_bonus' ? _loteBonusAmount(amount, c.pct, _loteCfgFor(c, cfg)) : bonusCap.bonusWithCap(amount, c.pct, cfg); // #CAP tope propio del lote
+  await _refreshGiftMax();
+  const bonus = _capGift(c.source === 'promo_bonus' ? _loteBonusAmount(amount, c.pct, _loteCfgFor(c, cfg)) : bonusCap.bonusWithCap(amount, c.pct, cfg)); // #CAP tope propio del lote · #1010 tope único por regalo
   if (!(bonus > 0)) { await c.revert(); return none; }
   if (c.settle) await c.settle(bonus);
   return { pct: c.pct, bonus, source: c.source, label: c.label, claimed: true, rule: bonusCap.describeRule(c.pct, cfg), capTxt: _loteCapTxt(c.pct, c.source === 'promo_bonus' ? _loteCfgFor(c, cfg) : cfg), revert: c.revert };
@@ -16608,7 +16619,7 @@ app.post('/api/fire/claim-reward', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'No hay recompensa pendiente para reclamar.' });
     }
 
-    const rewardAmount = reserved.pendingCashReward;
+    const rewardAmount = _capGift(reserved.pendingCashReward); // #1010
     const rewardDesc = reserved.pendingCashRewardDesc || `Recompensa Fueguito día ${reserved.pendingCashRewardDay}`;
 
     const serializeErrorPart = (value) => {
@@ -22539,6 +22550,7 @@ async function _missionCredit(m, st, wk, af) {
   let claim; try { claim = await MissionClaim.create({ id: uuidv4(), userId: user.id, username: user.username, missionId: m.id, weekKey: wk, title: m.title, rewardArs: m.rewardArs, status: 'credited' }); } catch (e) { if (e && e.code === 11000) { claim = await MissionClaim.findOne({ userId: user.id, missionId: m.id, weekKey: wk }); if (!claim || claim.status !== 'failed') return null; await MissionClaim.updateOne({ id: claim.id }, { $set: { status: 'credited', error: null } }); } else throw e; }
   let pid = user.preferredPlatform || 'girox'; let adapter = platforms.getAdapter(pid);
   if (!adapter || typeof adapter.isConnected !== 'function' || !adapter.isConnected() || typeof adapter.creditGift !== 'function') { pid = 'girox'; adapter = girox; }
+  m = Object.assign({}, m, { rewardArs: _capGift(m.rewardArs) }); // #1010
   const credit = await adapter.creditGift(user.username, m.rewardArs, { description: `Misión semanal: ${m.title}`, reference, rolloverX: af.rolloverX || 0 });
   if (!credit || !credit.success) { await MissionClaim.updateOne({ id: claim.id }, { $set: { status: 'failed', error: String((credit && credit.error) || 'unknown').slice(0, 200) } }); logger.error(`[misiones] credit FAIL ${user.username} ${m.id}: ${(credit && credit.error) || 'unknown'}`); return null; }
   const tx = await Transaction.create({ id: uuidv4(), type: 'mission', userId: user.id, username: user.username, amount: m.rewardArs, platform: pid, description: `Misión semanal cumplida: ${m.title}`, transactionId: credit.data && (credit.data.transfer_id || credit.data.transferId) || null, metadata: { source: 'mission', missionId: m.id, weekKey: wk, creditedAs: credit.creditedAs || null, rollover: af.rolloverX || 0, cappedFrom: reward !== (arguments[0] && arguments[0].rewardArs) ? arguments[0].rewardArs : null }, timestamp: new Date() });
@@ -22602,7 +22614,7 @@ async function _secondDepositTick() {
     if (!sd.enabled || !(sd.pct > 0)) return;
     const lo = new Date(now.getTime() - (sd.afterHours + 48) * 3600000), hi = new Date(now.getTime() - sd.afterHours * 3600000);
     // #1010 (revisión): vaciar /sys_second_deposit_offer en COMANDOS apaga el aviso del todo (sin mensaje en blanco ni push suelta).
-    const FALLBACK = '🎁 {username}, tu PRÓXIMA carga tiene un {pct}% EXTRA de regalo. Vale por {hours} horas: cargá ahora y se acredita solo (se juega en slots).';
+    const FALLBACK = '🎁 {username}, tu PRÓXIMA carga tiene un {pct}% EXTRA de regalo. Vale por {hours} horas: cargá ahora y se acredita solo.';
     const probe = await renderSystemCommand('/sys_second_deposit_offer', FALLBACK, { username: 'x', pct: sd.pct, hours: sd.validHours });
     if (!probe || !String(probe).trim()) return;
     // #1010 (revisión): sin pruebas ("PRUEBA") y mirando TODA la historia del cliente (antes 400 días: un cliente viejo que volvía parecía nuevo);
@@ -22621,8 +22633,7 @@ async function _secondDepositTick() {
       const vars = { username: user.username, pct: sd.pct, hours: sd.validHours };
       let text = String(await renderSystemCommand('/sys_second_deposit_offer', FALLBACK, vars) || '').trim();
       if (!text) text = FALLBACK.replace('{username}', user.username).replace('{pct}', sd.pct).replace('{hours}', sd.validHours);
-      if (!/slots/i.test(text)) text += ' (se juega en slots)'; // #1007: aunque el comando se haya editado antes
-      await _sendUserSystemMessage(user, text, { metadata: { kind: 'second_deposit', pct: sd.pct }, push: { title: `🎁 ${sd.pct}% extra en tu próxima carga`, body: `Vale ${sd.validHours} horas. Cargá y se acredita solo (se juega en slots).` } });
+      await _sendUserSystemMessage(user, text, { metadata: { kind: 'second_deposit', pct: sd.pct }, push: { title: `🎁 ${sd.pct}% extra en tu próxima carga`, body: `Vale ${sd.validHours} horas. Cargá y se acredita solo.` } });
       n++; if (n >= 150) break;
     }
     if (n) logger.info('[segunda-carga] ofrecidos: ' + n);
@@ -24763,7 +24774,7 @@ function _normalizeRoulettePrizes(raw) {
   if (!Array.isArray(raw)) return [];
   return raw.map((p, i) => {
     const type = p.type === 'cash' ? 'cash' : (p.type === 'none' ? 'none' : 'percent');
-    const value = type === 'none' ? 0 : Math.max(0, Math.round(Number(p.value) || 0));
+    const value = type === 'none' ? 0 : (type === 'cash' ? _capGift(p.value) : Math.max(0, Math.round(Number(p.value) || 0))); // #1010 premio en plata con tope
     return {
       id: String(p.id || ('p' + i)).slice(0, 20),
       type, value,
@@ -26477,7 +26488,7 @@ app.post('/api/reviews', authMiddleware, async (req, res) => {
     // #875: premio por opinar (si ya hizo 5+ cargas). Si el crédito falla, la reseña queda igual (se loguea).
     let gift = null;
     try {
-      const c = await _reviewGiftCalc(userId);
+      const c = await _reviewGiftCalc(userId); c.amount = _capGift(c.amount); // #1010
       if (c.deposits >= REVIEW_GIFT_MIN_DEPOSITS && c.amount > 0 && !(await Transaction.exists({ userId, type: 'review_gift' }))) {
         const reference = `vip-review-${userId}`;
         const cr = await girox.creditGift(username, c.amount, { description: `${REVIEW_GIFT_PCT}% de regalo por dejar tu opinión`, reference, rolloverX: await _giftRolloverX() });
@@ -27493,7 +27504,7 @@ async function _refundRemindRun(kind, plan, now) {
   const paid = new Map(); if (lossUsers.length) { try { (await CashbackClaim.aggregate([{ $match: { userId: { $in: lossUsers.map((u) => String(u.id)) }, status: 'credited', createdAt: { $gte: from, $lte: to } } }, { $group: { _id: '$userId', total: { $sum: '$amount' } } }])).forEach((x) => paid.set(String(x._id), x.total)); } catch (_) {} }
   const minArs = Number((await getRefundMinimums())[plan.kind]) || 0;
   const due = [];
-  for (const u of lossUsers) { const calc = refundTiers.calcRefund(losses.get(u.username), plan.tiers); const amount = Math.floor(Math.max(0, (Number(calc.amount) || 0) - (paid.get(String(u.id)) || 0))); if (amount > 0 && amount >= minArs) due.push({ u, amount }); }
+  for (const u of lossUsers) { const calc = _calcRefundCapped(losses.get(u.username), plan.tiers); const amount = Math.floor(Math.max(0, (Number(calc.amount) || 0) - (paid.get(String(u.id)) || 0))); if (amount > 0 && amount >= minArs) due.push({ u, amount }); }
   let sent = 0, total = 0;
   if (due.length) {
     const text = await renderSystemCommand(plan.cmd, plan.def, { pct: String(plan.pct) });
@@ -27535,7 +27546,7 @@ setTimeout(() => { _refundReminderTick().catch(() => {}); setInterval(() => { _r
 // 60 días, no giró hoy, quiere promos (notifPrefs 'all') y NO recibió otro aviso masivo hoy (no se suma al tope diario: si ya tuvo uno, no sale).
 // A los 3 avisos seguidos sin girar se deja de mandar hasta que vuelva a girar (User.rouletteNudge). Texto editable: /sys_roulette_ready.
 const ROULETTE_NUDGE_TITLE = '🎰 Tu giro GRATIS está listo'; // corto: pushText le pone "🎁 BONO +N% · " adelante (título ≤ 45)
-const ROULETTE_NUDGE_DEFAULT = 'Entrá y girá: podés ganar hasta +{pct}% EXTRA para tu carga de hoy (se juega en slots).';
+const ROULETTE_NUDGE_DEFAULT = 'Entrá y girá: podés ganar hasta +{pct}% EXTRA para tu carga de hoy.';
 let _rlNudgeRunning = false;
 async function _rouletteNudgeTick(force) {
   if (_rlNudgeRunning || process.env.ROULETTE_NUDGE_DISABLED === '1') return null; _rlNudgeRunning = true;
@@ -29495,8 +29506,9 @@ async function _createNotifBatchFromBody(body, user) {
     if (giftType === 'percent' && (!Number.isFinite(amount) || amount < 1 || amount > 200)) {
       return res.status(400).json({ error: 'El % del regalo tiene que estar entre 1 y 200.' });
     }
-    if (giftType === 'fixed' && (!Number.isFinite(amount) || amount < 1 || amount > 500000)) {
-      return res.status(400).json({ error: 'El monto del regalo tiene que estar entre $1 y $500.000.' });
+    const _lotMax = _giftMaxCache > 0 ? _giftMaxCache : 500000; // #1010 tope único por regalo
+    if (giftType === 'fixed' && (!Number.isFinite(amount) || amount < 1 || amount > _lotMax)) {
+      return res.status(400).json({ error: 'El monto del regalo tiene que estar entre $1 y $' + _lotMax.toLocaleString('es-AR') + ' (tope por regalo).' });
     }
 
     const validHours = giftType === 'none' ? (Number(b.validHours) > 0 ? Number(b.validHours) : 24) : Number(b.validHours);

@@ -8,8 +8,8 @@ const N = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'notific
 const fnIn = (src, name) => { const m = new RegExp('^(?:async )?function ' + name + '\\(', 'm').exec(src); if (!m) throw new Error('no está ' + name); let d = 0; const i = src.indexOf('{', m.index); for (let j = i; j < src.length; j++) { if (src[j] === '{') d++; else if (src[j] === '}' && !--d) return src.slice(m.index, j + 1); } return ''; };
 const constIn = (src, name) => { const i = src.indexOf('const ' + name + ' = '); if (i < 0) throw new Error('no está ' + name); let d = 0; for (let j = src.indexOf('=', i); j < src.length; j++) { const c = src[j]; if (c === '[' || c === '{' || c === '(') d++; else if (c === ']' || c === '}' || c === ')') d--; else if (c === ';' && d === 0) return src.slice(i, j + 1); } return ''; };
 
-const R = new Function([constIn(S, 'ROULETTE_FREE_PRIZES'), fnIn(S, '_normalizeRoulettePrizes'), fnIn(S, '_normalizeRouletteFree'), fnIn(S, '_rouletteDateKeyART'), fnIn(S, '_rouletteEndOfDayART'),
-  'return { _normalizeRouletteFree, _rouletteEndOfDayART };'].join('\n'))();
+const R = new Function(['let _giftMaxCache = 15000;', fnIn(S, '_capGift'), constIn(S, 'ROULETTE_FREE_PRIZES'), fnIn(S, '_normalizeRoulettePrizes'), fnIn(S, '_normalizeRouletteFree'), fnIn(S, '_rouletteDateKeyART'), fnIn(S, '_rouletteEndOfDayART'),
+  'return { _normalizeRouletteFree, _rouletteEndOfDayART, _normalizeRoulettePrizes, _capGift };'].join('\n'))();
 const G = new Function([constIn(N, 'ROULETTE_TEXT_RE'), fnIn(N, 'isRouletteText'), 'return { isRouletteText };'].join('\n'))();
 // _refundRemindPlan con dependencias de mentira (rangos fijos) para ver QUÉ DÍAS sale cada aviso.
 const plan = new Function('getRefundTiersByPeriod', 'periodRanges', '_schedArtKey', 'REFUND_REMIND_DEFAULT', 'REFUND_REMIND_WEEKLY_DEFAULT', 'REFUND_REMIND_MONTHLY_DEFAULT',
@@ -43,6 +43,7 @@ const art = (s) => new Date(s + '-03:00'); // hora argentina
     assert.ok(!(await plan('monthly', art('2026-11-01T12:00:00'))).due);
     assert.ok((await plan('monthly', art('2026-11-07T12:00:00'))).due); assert.ok((await plan('monthly', art('2026-11-15T12:00:00'))).due);
   });
+  await caso('tope por regalo $15.000: premio en plata de la ruleta y cualquier monto', () => { const p = R._normalizeRoulettePrizes([{ type: 'cash', value: 50000, weight: 1 }, { type: 'percent', value: 30, weight: 1 }]); assert.strictEqual(p[0].value, 15000); assert.strictEqual(p[1].value, 30); assert.strictEqual(R._capGift(9000), 9000); assert.strictEqual(R._capGift(40000), 15000); });
   await caso('el título del aviso lleva el monto ({monto})', async () => { const p = await plan('daily', art('2026-11-03T11:30:00')); assert.ok(p.title.includes('{monto}')); });
   console.log(`\n${ok}/${ok + fails.length} casos OK`); process.exit(fails.length ? 1 : 0);
 })();

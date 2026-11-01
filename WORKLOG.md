@@ -46,6 +46,14 @@
   y con mucha pauta el resto se quedaba sin oferta); (c) `/sys_second_deposit_offer` vacío en COMANDOS apaga el aviso del todo; si el texto
   editado no dice "slots", se agrega "(se juega en slots)". El "100% pisado por un bono menor" NO pasaba: desde #832 la 1ª carga toma
   primero el bono de bienvenida (los otros quedan pendientes). La oferta de 2ª carga sigue fuera del tope diario a propósito (owner).
+- TOPE ÚNICO POR REGALO (owner: "todos los bonos de ruleta o donde sea que se regale con tope de 15.000 para evitar estafas y no regalar de más"):
+  `Config['giftMaxArs']` ($15.000 por defecto; 0 = sin tope), `_capGift` / `_calcRefundCapped` (server.js, junto a FIRST_DEPOSIT_CAP_DEFAULT; caché que
+  se refresca cada 5 min y en cada `resolveAutoBonus`). Se aplica en la FUENTE (lo grabado = lo acreditado): bono en % de la carga (todas las fuentes de
+  `resolveAutoBonus`), reembolsos diario/semanal/mensual (también el aviso con monto y el estado de la app), acumulativo (`reclamable`; lo que pase queda
+  para el próximo reclamo), ruleta en plata (`_normalizeRoulettePrizes`), fueguito, rakeback, nivel VIP, misiones, reseña y lote en fichas (validación del
+  lote). NO aplica: Bonificación manual del panel, devoluciones de retiro, comisiones de referidos, código de bienvenida (montos fijos del panel).
+- Owner: "lo del aviso sólo slots no hace falta" ⇒ se sacó "(se juega en slots)" de los textos NUEVOS de #1010 (2ª carga, aviso de la ruleta, premio
+  del giro gratis). PWA v655.
 
 ### 1009. 📈 TABLERO DEL NEGOCIO (2026-11-01)
 - Owner: "armá el tablero de negocio completo y mostrá adentro cómo funciona".

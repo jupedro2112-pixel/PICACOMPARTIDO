@@ -218,7 +218,7 @@
                 html += '<div id="rouletteResultBox" class="rl-result win"><div class="rl-emoji">🎉</div><div class="rl-res-k">¡Ganaste!</div>' +
                     '<div class="rl-res-big">+' + _fmt(spin.wonPct || spin.prizePct) + '% extra</div>' +
                     '<div class="rl-res-note">' + (spin.keptHigher ? '✅ Ya tenías un <b>+' + _fmt(spin.prizePct) + '%</b> pendiente (mayor): se te mantiene ése para tu próxima carga.'
-                        : (freeWin ? '✅ Se aplica solo en tu carga de <b>HOY</b> (vence a las 00 h). Se juega en slots.' : '✅ Se aplica solo en tu próxima carga. No tenés que avisar nada.')) + '</div>' +
+                        : (freeWin ? '✅ Se aplica solo en tu carga de <b>HOY</b> (vence a las 00 h).' : '✅ Se aplica solo en tu próxima carga. No tenés que avisar nada.')) + '</div>' +
                     (freeWin && !spin.keptHigher ? '<button type="button" class="rl-spin" onclick="VIP.roulette.close(); if (window.VIP && VIP.home) VIP.home.setHomeMode(\'full\');">Cargar ahora</button>' : '') + '</div>';
             } else if (won && spin.status === 'credited') {
                 html += '<div id="rouletteResultBox" class="rl-result win"><div class="rl-emoji">🎉</div><div class="rl-res-k">¡Ganaste!</div>' +
