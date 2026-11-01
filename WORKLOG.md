@@ -8,6 +8,12 @@
 
 ## Sesión 2026-11-01
 
+### 1007. 🆕 "Los bonos se juegan sólo en SLOTS" (2026-11-01)
+- Owner: "la info del sistema para clientes nuevos, agregá como ACTUALIZADO donde se ajuste: el bono está disponible sólo para slots".
+- Info del servicio (PWA, tarjeta "Cargas y retiros"): recuadro "🆕 ACTUALIZADO: los bonos y regalos se juegan sólo en SLOTS; tu carga
+  en lo que quieras". Historias: bienvenida / 1ª carga (y sus variantes), bono de la semana, regalo al azar y código sorpresa dicen
+  "se juega en slots". La regla la aplica 1girox (configuración del bono allá): esto es sólo el texto. PWA v653.
+
 ### 1006. 🚨 Agentes que se quedaban afuera del panel (2026-11-01, urgente)
 - Síntoma: "Error cargando opers: 504" y el panel volvía al login. Causa: (1) `authMiddleware` respondía **401 "Token inválido"** a
   CUALQUIER error, también cuando la base tardaba ⇒ el panel/app cerraban la sesión; (2) `checkAdminSession` mandaba al login ante

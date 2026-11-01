@@ -352,6 +352,7 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`). Git user: j
   2° y 3° por ranking (puntos con techo diario $300.000 + constancia). Tickets NUNCA se quitan ni se reasignan (índice único). Requisitos para anotarse:
   app, notificaciones, Telegram, **celular cargado** y una carga. Premios se entregan a mano (push + nota al ganador). Panel → App → Sorteos (🎟️ / 🎲)
   y Principal → "Sorteos: ¿sirven?". Un cambio en las reglas de puntos/tickets pasa por `computePoints` y sus tests, nunca por el motor.
+- **BONOS SÓLO EN SLOTS (#1007):** todo texto nuevo al cliente que ofrezca un bono / regalo aclara "se juega en slots" (regla de 1girox).
 - **SESIÓN Y BASE LENTA (#1006):** `authMiddleware` devuelve 401 SÓLO por errores del JWT; un error de la base es 503 `DB_BUSY` (si no, el panel y la
   app cierran la sesión cuando Mongo tarda). `checkAdminSession` (panel) reintenta ante 5xx. No volver a poner un 401 genérico en el catch.
 - **JUEGO ESPEJO (#1004):** `src/services/mirrorScan.js` + `_mirrorTick` (de noche, 15 req/min) cruzan a TODOS los apostadores por franjas de 3 h

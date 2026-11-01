@@ -27021,7 +27021,7 @@ async function _codeDropLaunch(cfg, dropKey, by) {
   try { drop = await CodeDrop.create({ id: uuidv4(), dropKey, code, amount: cfg.amount, maxClaims: cfg.maxClaims, startsAt: now, endsAt: new Date(now.getTime() + cfg.minutes * 60000), createdBy: by || 'automático' }); }
   catch (e) { if (e && e.code === 11000) return null; throw e; }
   const o = { code, amount: cfg.amount, maxClaims: cfg.maxClaims, minutes: cfg.minutes, rx };
-  const storyId = await _cdStory({ title: ('🎁 CÓDIGO ' + code + ': ' + _cdMoney(cfg.amount)).slice(0, 60), text: `${_cdMoney(cfg.amount)} para los primeros ${cfg.maxClaims} que lo reclamen. Vale ${cfg.minutes} minutos: tocá "Reclamar ahora" 🔥`,
+  const storyId = await _cdStory({ title: ('🎁 CÓDIGO ' + code + ': ' + _cdMoney(cfg.amount)).slice(0, 60), text: `${_cdMoney(cfg.amount)} para los primeros ${cfg.maxClaims} que lo reclamen (bono para slots). Vale ${cfg.minutes} minutos: tocá "Reclamar ahora" 🔥`,
     linkUrl: 'app:codigo:' + code, linkLabel: 'Reclamar ahora ›', hours: Math.ceil(cfg.minutes / 60), expiresAt: drop.endsAt, autoKey: 'cd-' + drop.id, autoKind: 'codigo', codeDropId: drop.id }, _cdImg('drop', o));
   await CodeDrop.updateOne({ id: drop.id }, { $set: { storyId } });
   try { await Story.updateMany({ autoKey: new RegExp('^cdt-'), isActive: true }, { $set: { isActive: false } }); } catch (_) {} // el teaser ya cumplió
@@ -27190,7 +27190,7 @@ async function _storyGiftTick() {
       const img = { style: 'page', accent: '#e60023', kicker: 'Regalo para vos', icon: 'regalo', h1: `Te tocó un +${cfg.pct}%`, h2: `por ${cfg.hours} horas`, bullets: [['✓', 'Tocá "Reclamar ahora"', 'Acá, en esta historia'], ['$', 'Tu próxima carga', `Lleva +${cfg.pct}% EXTRA automático`], ['★', 'Sólo vos lo ves', 'Hoy te tocó a vos']], cta: 'Reclamar ahora', note: `El bono se juega ×${rx} y la carga ×${dx} (rollover)` };
       let autoImg = null; try { autoImg = await _storyAutoImgSpec({ img }); } catch (_) {}
       try {
-        await Story.create({ id, title: `🎁 Hoy te tocó a vos: +${cfg.pct}%`, text: `Regalo sorpresa sólo para vos: tocá "Reclamar ahora" y tu próxima carga lleva +${cfg.pct}% extra. Vale ${cfg.hours} horas.`,
+        await Story.create({ id, title: `🎁 Hoy te tocó a vos: +${cfg.pct}%`, text: `Regalo sorpresa sólo para vos: tocá "Reclamar ahora" y tu próxima carga lleva +${cfg.pct}% extra (se juega en slots). Vale ${cfg.hours} horas.`,
           mediaType: autoImg ? 'image' : 'none', mediaUrl: autoImg ? _storyImgUrl(id) : '', autoImg, autoImgVer: autoImg ? STORY_IMG_VER : null, bgColor: autoImg ? '#ffffff' : '#be123c',
           durationSec: 8, hours: cfg.hours, publishedAt: at, expiresAt: new Date(at.getTime() + cfg.hours * 3600000), isActive: true, bonusPct: cfg.pct, bonusHours: cfg.hours, bonusUntil: new Date(at.getTime() + cfg.hours * 3600000),
           audienceUserId: u.id, audience: 'all', autoKey: `rg-${today}-${u.id}`, autoKind: 'regalo_azar', createdBy: 'automático' });
