@@ -8,6 +8,16 @@
 
 ## Sesión 2026-11-01
 
+### 1008. 💸 Un retiro por cliente + push si el saldo no alcanza (2026-11-01)
+- Owner: "que figure siempre 1 por cliente y si se paga que desaparezca" (quedaban duplicados de antes de #1002, y al pagar uno los otros
+  seguían ahí).
+- `_payoutSupersedable(p)` (mismo criterio seguro que #1002: fichas sin descontar, sin envío al banco o envío fallido, nadie lo tocó en 30 min)
+  + `_closeOtherPayouts(userId, keepId, by)`: al PAGAR (banco aceptó en `_payPendingPayout`, o "Ya lo pagué a mano") se anulan los otros
+  pedidos pendientes del cliente (`paidVia:'replaced'`, nota interna). `GET /api/admin/payouts/review` arma UNA tarjeta por cliente (el más
+  nuevo) con `olderPending` ("🔁 Además pidió antes…: pagá sólo este"); los que ya tocaron plata/fichas siguen como tarjeta propia.
+- Saldo insuficiente al confirmar (`_notifyInsufficientAndCloseChat`): además del mensaje en el chat, PUSH "⚠️ Tu retiro no se pudo pagar"
+  (`kind:'personal'`). Admin SW v221.
+
 ### 1007. 🆕 "Los bonos se juegan sólo en SLOTS" (2026-11-01)
 - Owner: "la info del sistema para clientes nuevos, agregá como ACTUALIZADO donde se ajuste: el bono está disponible sólo para slots".
 - Info del servicio (PWA, tarjeta "Cargas y retiros"): recuadro "🆕 ACTUALIZADO: los bonos y regalos se juegan sólo en SLOTS; tu carga

@@ -1597,6 +1597,11 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
   Siguen: login, alta desde el panel (`/api/users`, `/api/admin/users`, publisher-admin) y la creación local de un jugador que YA existe en 1girox.
 - Test: `node scripts/test-fraud-auto.js` (10 casos).
 
+### Un retiro por cliente #1008 (2026-11-01)
+- `_payoutSupersedable` / `_closeOtherPayouts` (server.js, junto a `_payPendingPayout`): pagar un retiro anula los otros pendientes del cliente
+  que no tocaron plata ni fichas. La lista de Pagos a confirmar agrupa por cliente (`olderPending`). Un flujo NUEVO que marque un retiro como
+  pagado tiene que llamar `_closeOtherPayouts`. Saldo insuficiente al confirmar ⇒ chat + push al cliente + nota al agente.
+
 ### Juego espejo global #1004 (2026-11-01)
 - **#1006:** APAGADO por defecto (`Config['mirrorScanCfg'].enabled` true para encenderlo; "Analizar ahora" corre igual); encendido corre una
   vez por noche. `analyze` con topes (150 ganadores / 600 perdedores por franja).

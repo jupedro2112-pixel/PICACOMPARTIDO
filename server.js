@@ -23204,6 +23204,11 @@ async function _notifyInsufficientAndCloseChat(payout, available, agentUser) {
       io.to(`user_${payout.userId}`).emit('new_message', data);
       io.to(`chat_${payout.userId}`).emit('new_message', data);
       notifyAdmins('new_message', { message: data, userId: payout.userId, username: payout.username });
+      // #1008 (owner): también PUSH al celular (si tiene la app cerrada no se enteraba). kind 'personal' = respeta "sólo lo mío".
+      try {
+        const pu = await User.findOne({ id: payout.userId }).select('id username fcmToken fcmTokens notifPrefs').lean();
+        if (pu) sendPushIfOffline(pu, '⚠️ Tu retiro no se pudo pagar', `Tu saldo cambió ($${Number(available || 0).toLocaleString('es-AR')}). Pedí un retiro nuevo con lo disponible.`, { tag: 'withdraw-insufficient', kind: 'personal' }).catch(() => {});
+      } catch (_) {}
     }
     // Cerrar el chat (se reabre solo en "Abiertos" si el cliente escribe).
     try { await delayClockResolve(payout.userId, { responded: false }); } catch (_) {}
@@ -23432,7 +23437,16 @@ async function _payoutCbuUsers(payout) {
 app.get('/api/admin/payouts/review', authMiddleware, withdrawerMiddleware, async (req, res) => {
   try {
     const cfg = await getPayoutReviewConfig();
-    const items = await PendingPayout.find({ status: { $in: ['pending_review', 'failed'] } }).sort({ createdAt: -1 }).limit(100).lean();
+    const all = await PendingPayout.find({ status: { $in: ['pending_review', 'failed'] } }).sort({ createdAt: -1 }).limit(200).lean();
+    // #1008: UNA tarjeta por cliente = su pedido más nuevo; los anteriores que se anulan solos al pagarlo van adentro de esa tarjeta.
+    // Los que ya tocaron plata o fichas (no se pueden anular solos) siguen como tarjeta propia.
+    const items = [], mainBy = new Map();
+    for (const p of all) {
+      const m = mainBy.get(String(p.userId));
+      if (m && _payoutSupersedable(p)) { (m.olderPending = m.olderPending || []).push({ id: p.id, amount: p.amount, createdAt: p.createdAt, status: p.status }); continue; }
+      if (!m) mainBy.set(String(p.userId), p);
+      if (items.length < 100) items.push(p);
+    }
     const out = [];
     for (const p of items) {
       const risk = await _payoutRiskProfile(p.userId); risk.cbuUsers = await _payoutCbuUsers(p);
@@ -23494,6 +23508,33 @@ app.post('/api/admin/payouts/review-config', authMiddleware, adminMiddleware, as
 });
 // #566: el pago de un retiro pendiente vive en una FUNCIÓN (la ruta /pay y el pago AUTOMÁTICO por debajo del umbral la comparten).
 // `actor` = { userId, username, role } (agente o 'auto-retiros'); `baseUrl` = origen para el webhook de hgcash. Devuelve { code, body }.
+// #1008 (owner): "que figure siempre 1 por cliente y si se paga que desaparezca". Al PAGAR un retiro (banco o a mano) se anulan los OTROS
+// pedidos pendientes del mismo cliente con el mismo criterio seguro de #1002: fichas sin descontar, sin envío al banco (o envío fallido) y
+// sin que otro agente lo haya tocado en los últimos 30 min. Los que ya tocaron plata/fichas quedan visibles para resolverlos a mano.
+function _payoutSupersedable(p, now) {
+  if (!p || !['pending_review', 'failed'].includes(p.status) || p.deductAtPay !== true || p.debitConfirmed === true) return false;
+  const bankOk = (!p.hgTransactionId && !p.hgTxId) || /fail|error|reject|cancel/i.test(String(p.hgStatus || ''));
+  const untouched = !p.paidBy || new Date(p.updatedAt || 0).getTime() < (now || Date.now()) - 30 * 60000;
+  return bankOk && untouched;
+}
+async function _closeOtherPayouts(userId, keepId, by) {
+  try {
+    const olds = await PendingPayout.find({ userId: String(userId), id: { $ne: keepId }, status: { $in: ['pending_review', 'failed'] } }).lean();
+    const done = [];
+    for (const o of olds) {
+      if (!_payoutSupersedable(o)) continue;
+      const r = await PendingPayout.updateOne({ id: o.id, status: o.status, debitConfirmed: { $ne: true } },
+        { $set: { status: 'cancelled', paidVia: 'replaced', chipsReturned: false, replacedBy: keepId, error: 'Anulado: se pagó otro retiro del mismo cliente' + (by ? ' (' + by + ')' : '') } });
+      if (r.modifiedCount) done.push(o);
+    }
+    if (done.length) {
+      const u = olds[0] || {};
+      await _emitAdminOnlyChatNote(String(userId), u.username, `🔁 Se pagó un retiro de este cliente: se ANULARON sus otros pedidos pendientes (${done.map((o) => '$' + Number(o.amount).toLocaleString('es-AR')).join(', ')}). No se descontaron fichas de esos.`).catch(() => {});
+      try { io.to('admins').emit('payouts_changed', { userId: String(userId) }); } catch (_) {}
+    }
+    return done.length;
+  } catch (e) { logger.warn('[payouts] anular otros pedidos: ' + e.message); return 0; }
+}
 async function _payPendingPayout(id, actor, baseUrl) {
   const res = { status(c) { this._c = c; return this; }, json(b) { return { code: this._c || 200, body: b }; }, _c: 200 };
   const req = { user: actor };
@@ -23627,6 +23668,7 @@ async function _payPendingPayout(id, actor, baseUrl) {
     const hgStatus = (result.data && result.data.status) || 'PENDING';
     const isDone = String(hgStatus).toUpperCase() === 'DONE';
     _bankPayoutOk().catch(() => {}); // #442: el banco aceptó el pago
+    _closeOtherPayouts(claimed.userId, id, req.user && req.user.username).catch(() => {}); // #1008
     await PendingPayout.updateOne({ id }, {
       $set: {
         hgTransactionId: hgId || null,
@@ -23898,6 +23940,7 @@ app.post('/api/admin/payouts/:id/pay-other-bank', authMiddleware, withdrawerMidd
     await _emitAdminOnlyChatNote(paid.userId, paid.username,
       `🏦 Retiro de $${Number(paid.amount).toLocaleString('es-AR')} pagado desde ${_pLbl} por ${req.user.username}.`);
     await notifyPayoutPaid(paid); // aviso editable /sys_payout_paid (no envía si está vacío)
+    await _closeOtherPayouts(paid.userId, paid.id, req.user.username); // #1008
     res.json({ success: true });
   } catch (error) {
     console.error('Error pagando payout por otro banco:', error);
