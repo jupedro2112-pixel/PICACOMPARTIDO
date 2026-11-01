@@ -75,6 +75,14 @@
   - 👀 PARA REVISAR (Pagos a confirmar, lo ve el de turno): retiros que salieron SOLOS con señal (cuenta < 7 días, primer retiro, retiró > 3× lo
     cargado, sin cargas reales, ≥ $100.000, ya en observación) y cargas acreditadas sin leer el comprobante, con el resultado de la re-lectura.
     ✅ OK / ⚠️ Sospechoso (`shiftReview`; sospechoso ⇒ `fraudReview.watch` + nota). Rutas `/api/admin/shift-review*`. Admin SW v227.
+- Owner: "configuraciones sólo para administradores" ⇒ la Regla de Pagos a confirmar y el mínimo de saldo del banco no se muestran a los agentes
+  (el server ya los rechazaba). REVISIÓN PRE-PUBLICACIÓN (seguridad + roturas), corregido:
+  - guard de duplicado hgcash: excluye las automáticas SÓLO con el lock de `chargeKey` tomado (sin coelsa sigue frenando cualquier repetida);
+  - respaldo de comprobante sin IA: sólo por CBU (no por nombre) y nunca si ese CBU ya lo usó OTRO cliente (`_cbuUsedByOthers`); un comprobante ya
+    re-leído deja de ser candidato (`aiRetryPending:true` en el camino movimiento → comprobante);
+  - cartel del retiro en la app: `.wd-hold-bar[hidden]` (antes no se ocultaba al resolverse) — PWA v657;
+  - retiro `failed` que ya no se reintenta = "en revisión" (no "procesándose"); motivos viejos de umbral / confianza fuera de la lista de pagos;
+    misiones graban el monto ya topeado. Pendiente conocido: campañas programadas con regalo fijo > $15.000 van a fallar al salir (revisarlas).
 
 ### 1009. 📈 TABLERO DEL NEGOCIO (2026-11-01)
 - Owner: "armá el tablero de negocio completo y mostrá adentro cómo funciona".

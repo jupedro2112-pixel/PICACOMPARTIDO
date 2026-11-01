@@ -2293,10 +2293,12 @@ async function _knownSendersOf(userId) {
   for (const r of rows) { const d = _digits(r.fromCBU); if (d.length >= 20) cbus.add(d); const n = _normName(r.fromName); if (n.length >= 5) names.add(n); }
   return { cbus, names };
 }
-function _fromKnownSender(m, ks) { const d = _digits(m.fromCBU); if (d.length >= 20 && ks.cbus.has(d)) return true; const n = _normName(m.fromName); return n.length >= 5 && ks.names.has(n); }
+// Revisión #1010: sólo por CBU (un nombre se repite entre clientes) y el CBU no puede ser cuenta de origen conocida de OTRO cliente.
+function _fromKnownSender(m, ks) { const d = _digits(m.fromCBU); return d.length >= 20 && ks.cbus.has(d); }
+async function _cbuUsedByOthers(fromCBU, userId) { if (!fromCBU) return true; return !!(await BankMovement.exists({ fromCBU, direction: 'Inbound', matchedUserId: { $nin: [String(userId), null] }, matchStatus: { $in: ['auto_charged', 'manual_charged'] } })); }
 async function _receiptTrustedFallback({ userId, username, content, messageId, error }) {
   const t = await _receiptTrust(userId); if (!t.ok) return false;
-  const ks = await _knownSendersOf(userId); if (!ks.cbus.size && !ks.names.size) return false; // sin cuenta de origen conocida: manual
+  const ks = await _knownSendersOf(userId); if (!ks.cbus.size) return false; // sin CBU de origen conocido: manual
   let imageHash = null; try { if (typeof content === 'string' && content.startsWith('data:')) { const m = content.match(/;base64,(.*)$/s); if (m) imageHash = crypto.createHash('sha256').update(m[1]).digest('hex'); } } catch (_) {}
   if (imageHash && await Comprobante.exists({ isComprobante: true, imageHash })) return false; // la misma imagen ya se usó: camino normal (manual)
   const c = { id: uuidv4(), userId, username, messageId, isComprobante: true, aiConfidence: 0, amount: null, status: 'error', errorReason: String(error || '').slice(0, 300),
@@ -2318,14 +2320,14 @@ async function _trustedFallbackMatch({ comprobante, ks, movement }) {
   if (comprobante) {
     const ms = (await BankMovement.find({ direction: 'Inbound', matchStatus: 'pending', createdAt: { $gte: since } }).sort({ createdAt: -1 }).limit(80).lean())
       .filter((m) => _statusAccredited(m.status, cfg) && _fromKnownSender(m, ks));
-    if (ms.length !== 1) return false;
+    if (ms.length !== 1 || await _cbuUsedByOthers(ms[0].fromCBU, comprobante.userId)) return false;
     await hgcashAutoCarga({ movement: ms[0], comprobante, mode: cfg.mode }); return true;
   }
   if (movement) {
-    const cs = await Comprobante.find({ trustedFallback: true, autoCharged: { $ne: true }, bankMatchStatus: { $in: ['none', 'pending'] }, reviewStatus: 'pending', createdAt: { $gte: since } }).sort({ createdAt: -1 }).limit(30).lean();
+    const cs = await Comprobante.find({ trustedFallback: true, aiRetryPending: true /* revisión: ya re-leído ⇒ camino normal */, autoCharged: { $ne: true }, bankMatchStatus: { $in: ['none', 'pending'] }, reviewStatus: 'pending', createdAt: { $gte: since } }).sort({ createdAt: -1 }).limit(30).lean();
     const hits = [];
     for (const c of cs) { if (_fromKnownSender(movement, await _knownSendersOf(c.userId))) hits.push(c); }
-    if (hits.length !== 1) return false;
+    if (hits.length !== 1 || await _cbuUsedByOthers(movement.fromCBU, hits[0].userId)) return false;
     await hgcashAutoCarga({ movement, comprobante: hits[0], mode: cfg.mode }); return true;
   }
   return false;
@@ -3382,7 +3384,7 @@ async function _hgcashCreditToPlatform({ movement, comprobante, user, platformId
       // (el caso "el agente cargó a mano y después llega el aviso del banco"). Dos automáticas son dos transferencias distintas (cada
       // movimiento tiene su chargeKey único): antes la 2ª de $10.000 seguida quedaba en revisión y el cliente esperaba.
       const recent = await Transaction.findOne({
-        userId: user.id, type: 'deposit', amount: Number(amount), timestamp: { $gte: sinceGuard }, adminUsername: { $ne: 'auto-hgcash' }
+        userId: user.id, type: 'deposit', amount: Number(amount), timestamp: { $gte: sinceGuard }, ...(chargeLocked ? { adminUsername: { $ne: 'auto-hgcash' } } : {}) // revisión: sin lock (sin coelsa) sigue frenando cualquier repetida
       }).lean();
       if (recent) {
         if (chargeLocked) { try { await HgcashCharge.deleteOne({ chargeKey }); } catch (_) {} }
@@ -14366,9 +14368,10 @@ async function _notifyWithdrawHold(user, amount) {
 }
 async function _withdrawHoldOf(userId) {
   const p = await PendingPayout.findOne({ userId: String(userId), status: { $in: ['pending_review', 'paying', 'failed'] }, createdAt: { $gte: new Date(Date.now() - 15 * 86400000) } })
-    .sort({ createdAt: -1 }).select('id amount status reviewRequired reviewReason autoPay createdAt').lean();
+    .sort({ createdAt: -1 }).select('id amount status reviewRequired reviewReason autoPay createdAt debitConfirmed error paidBy autoRetries').lean();
   if (!p) return null;
-  const review = !!p.reviewRequired && p.status !== 'paying';
+  const stuck = p.status === 'failed' && (!_payoutRetrySafe(p) || Number(p.autoRetries || 0) >= PAYOUT_AUTO_RETRIES); // ya no se reintenta solo
+  const review = (!!p.reviewRequired || stuck) && p.status !== 'paying';
   // un automático recién pedido no es "retenido": se muestra sólo si tarda más de 3 min
   if (!review && Date.now() - new Date(p.createdAt).getTime() < 3 * 60000) return null;
   return { id: p.id, amount: p.amount, since: p.createdAt, kind: review ? 'review' : 'processing', reason: p.reviewReason || null, status: p.status };
@@ -22715,10 +22718,10 @@ async function _missionCredit(m, st, wk, af) {
   m = Object.assign({}, m, { rewardArs: reward });
   const reference = `vip-mis-${user.id}-${m.id}-${wk}`;
   // Reserva única por usuario/misión/semana. Si ya existe y quedó 'failed' (la plataforma rebotó), se REINTENTA con la misma reference (idempotente).
+  m = Object.assign({}, m, { rewardArs: _capGift(m.rewardArs) }); // #1010 tope (antes de grabar el claim)
   let claim; try { claim = await MissionClaim.create({ id: uuidv4(), userId: user.id, username: user.username, missionId: m.id, weekKey: wk, title: m.title, rewardArs: m.rewardArs, status: 'credited' }); } catch (e) { if (e && e.code === 11000) { claim = await MissionClaim.findOne({ userId: user.id, missionId: m.id, weekKey: wk }); if (!claim || claim.status !== 'failed') return null; await MissionClaim.updateOne({ id: claim.id }, { $set: { status: 'credited', error: null } }); } else throw e; }
   let pid = user.preferredPlatform || 'girox'; let adapter = platforms.getAdapter(pid);
   if (!adapter || typeof adapter.isConnected !== 'function' || !adapter.isConnected() || typeof adapter.creditGift !== 'function') { pid = 'girox'; adapter = girox; }
-  m = Object.assign({}, m, { rewardArs: _capGift(m.rewardArs) }); // #1010
   const credit = await adapter.creditGift(user.username, m.rewardArs, { description: `Misión semanal: ${m.title}`, reference, rolloverX: af.rolloverX || 0 });
   if (!credit || !credit.success) { await MissionClaim.updateOne({ id: claim.id }, { $set: { status: 'failed', error: String((credit && credit.error) || 'unknown').slice(0, 200) } }); logger.error(`[misiones] credit FAIL ${user.username} ${m.id}: ${(credit && credit.error) || 'unknown'}`); return null; }
   const tx = await Transaction.create({ id: uuidv4(), type: 'mission', userId: user.id, username: user.username, amount: m.rewardArs, platform: pid, description: `Misión semanal cumplida: ${m.title}`, transactionId: credit.data && (credit.data.transfer_id || credit.data.transferId) || null, metadata: { source: 'mission', missionId: m.id, weekKey: wk, creditedAs: credit.creditedAs || null, rollover: af.rolloverX || 0, cappedFrom: reward !== (arguments[0] && arguments[0].rewardArs) ? arguments[0].rewardArs : null }, timestamp: new Date() });
@@ -23788,10 +23791,10 @@ app.get('/api/admin/payouts/review', authMiddleware, withdrawerMiddleware, async
       // guardaron el motivo (retiros viejos o por monto).
       const whyAuto = [];
       if (p.status === 'failed') whyAuto.push('el pago automático FALLÓ' + (p.error ? ' (' + String(p.error).slice(0, 80) + ')' : '') + ': antes de reintentar mirá el extracto del banco');
-      if (p.amount > cfg.minArs) whyAuto.push('supera el monto que sale solo (' + '$' + Number(cfg.minArs).toLocaleString('es-AR') + ')');
+      if (p.fraudRecheck && p.fraudRecheck.at) whyAuto.push('el chequeo antifraude no respondió: se reintenta solo (intento ' + (Number(p.fraudRecheck.n || 0) + 1) + ' de 3)'); // #1010 (ya no hay umbral de monto)
       if (!cfg.autoBelow) whyAuto.push('el pago automático está apagado');
       if (!hgcashPay.isEnabled()) whyAuto.push('el banco automático no está conectado');
-      if (!p.reviewReason && !whyAuto.length && cfg.trustedOnly) { try { const t = await _payoutTrust(p.userId, cfg); if (!t.trusted) whyAuto.push('no es cliente de confianza: ' + t.why.join(' · ')); } catch (_) {} }
+      // #1010: ya no hay regla de "cliente de confianza" para retirar (el motivo viejo confundía).
       out.push(Object.assign({}, p, { risk, warnings: warn, whyNotAuto: whyAuto, hgcashEnabled: hgcashPay.isEnabled() }));
     }
     res.json({ success: true, config: cfg, hgcashEnabled: hgcashPay.isEnabled(), items: out, canEditConfig: req.user.role === 'admin' });
