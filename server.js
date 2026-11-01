@@ -27488,7 +27488,7 @@ async function _refundRemindRun(kind, plan, now) {
       for (let i = 0; i < due.length; i += 10) {
         await Promise.all(due.slice(i, i + 10).map(async ({ u, amount }) => {
           const monto = '$' + amount.toLocaleString('es-AR');
-          try { const r = await sendPushIfOffline(u, plan.title.replace('{monto}', monto), String(text).replace(/\{monto\}/g, monto), { url: '/?open=refund', type: 'refund_reminder', kind: 'personal', refundKind: plan.kind, tag: 'refund-' + plan.periodKey }, { forcePush: true }); if (r && r.sent > 0) { sent++; total += amount; } } catch (_) {}
+          try { const r = await sendPushIfOffline(u, plan.title.replace('{monto}', monto), String(text).replace(/\{monto\}/g, monto), { url: '/?open=refund', type: 'refund_reminder', kind: 'system' /* owner 2026-11-01: sale aunque haya elegido "ninguno" (es retención) */, refundKind: plan.kind, tag: 'refund-' + plan.periodKey }, { forcePush: true }); if (r && r.sent > 0) { sent++; total += amount; } } catch (_) {}
         }));
       }
     }
@@ -27537,9 +27537,9 @@ async function _rouletteNudgeTick(force) {
       { $match: { n: { $gte: cfg.free.minDeposits }, last: { $gte: since60 } } }]);
     const ids = agg.map((a) => a._id);
     const users = ids.length ? await User.find({ id: { $in: ids }, role: 'user', isBlocked: { $ne: true }, isActive: { $ne: false }, duplicateOf: null, 'fraudFlags.0': { $exists: false },
-      'notifPrefs.level': { $nin: ['none', 'mine'] }, 'rouletteNudge.n': { $not: { $gte: 3 } } }).select('id username fcmToken fcmTokens fcmTokenContext notifPrefs').lean() : [];
+      'rouletteNudge.n': { $not: { $gte: 3 } } } /* owner 2026-11-01: sin filtro de Perfil → avisos */).select('id username fcmToken fcmTokens fcmTokenContext notifPrefs').lean() : [];
     const spun = new Set(await DailyRouletteSpin.distinct('userId', { dateKey: _rouletteDateKeyART(now) }));
-    let cand = users.filter((u) => !spun.has(u.id) && (!cfg.requireAppInstalled || _rouletteHasAppInstalled(u)) && !(Number(u.notifPrefs && u.notifPrefs.fatigue) >= 10));
+    let cand = users.filter((u) => !spun.has(u.id) && (!cfg.requireAppInstalled || _rouletteHasAppInstalled(u)));
     const dayCounts = await _notifDayCounts(cand.map((u) => u.id), now); cand = cand.filter((u) => !(dayCounts.get(u.id) > 0));
     const maxPct = cfg.free.prizes.reduce((m, p) => Math.max(m, p.type === 'percent' ? Number(p.value) || 0 : 0), 0);
     const text = await renderSystemCommand('/sys_roulette_ready', ROULETTE_NUDGE_DEFAULT, { pct: String(maxPct) });
@@ -27547,7 +27547,7 @@ async function _rouletteNudgeTick(force) {
     if (cand.length && String(text || '').trim()) {
       for (let i = 0; i < cand.length; i += 500) {
         const chunk = cand.slice(i, i + 500);
-        const r = await sendNotificationToUsernames(User, chunk.map((u) => u.username), ROULETTE_NUDGE_TITLE, text, { url: '/?open=roulette', type: 'roulette_ready', kind: 'promo', allowRoulette: '1', tag: 'roulette-' + today });
+        const r = await sendNotificationToUsernames(User, chunk.map((u) => u.username), ROULETTE_NUDGE_TITLE, text, { url: '/?open=roulette', type: 'roulette_ready', kind: 'system', allowRoulette: '1', tag: 'roulette-' + today });
         sent += (r && (r.successCount || r.sent)) || 0;
         await User.updateMany({ id: { $in: chunk.map((u) => u.id) } }, { $inc: { 'rouletteNudge.n': 1 }, $set: { 'rouletteNudge.lastAt': now } }).catch(() => {});
       }

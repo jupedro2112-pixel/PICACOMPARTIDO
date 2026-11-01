@@ -38,6 +38,9 @@
   la publicidad lo promete): migración única `mig1010Welcome` ⇒ `firstDepositBonusPct` 100, `firstDepositCapArs` 15.000 y
   `strategyClientes.secondDeposit` {enabled, 50 %, afterHours 24, validHours 48} (`_secondDepositTick`: oferta por chat + push a quien hizo UNA
   carga hace 24-72 h; no a `noWelcomeGifts` ni con fraudFlags). Texto con "se juega en slots" (#1007). Se sigue editando en Estrategia → Clientes.
+- AVISOS SIEMPRE (owner: "no importa lo que hayan elegido, esos avisos quiero que estén porque es importante para la retención"): los avisos
+  de reembolso y el de "tu giro GRATIS está listo" salen con `kind:'system'` ⇒ ignoran `notifPrefs` (ninguno / sólo lo mío) y la fatiga. La oferta de
+  2ª carga ya salía sin kind (sistema). Siguen: tope de 3 avisos de ruleta sin girar y no mandar la de ruleta el día que ya salió un lote.
 
 ### 1009. 📈 TABLERO DEL NEGOCIO (2026-11-01)
 - Owner: "armá el tablero de negocio completo y mostrá adentro cómo funciona".
