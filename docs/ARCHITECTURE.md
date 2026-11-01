@@ -1597,6 +1597,14 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
   Siguen: login, alta desde el panel (`/api/users`, `/api/admin/users`, publisher-admin) y la creación local de un jugador que YA existe en 1girox.
 - Test: `node scripts/test-fraud-auto.js` (10 casos).
 
+### Tablero del negocio #1009 (2026-11-01)
+- `GET /api/admin/inicio/negocio?period=week|month|30d` (bajo el gate de clave de INICIO) → `_bizBoard` (server.js): `_bizMoney` (cargas reales,
+  retiros `paid` sin `other_bank`, regalos `CASHBACK_GIFT_TX_TYPES`, registrados) del período y del anterior; retención por bloques de 7 días;
+  embudo de registrados hace 7-60 días; rinde de regalos (hace 7-37 días, `$lookup` de cargas ±7 días del primer regalo por cliente/tipo);
+  campañas de 90 días con `_diaSpendByDay`; cohortes `_inicioCohorts`. Lectura y alertas en `src/services/businessBoard.js` (puro, test
+  `scripts/test-business-board.js`). Cache 10 min por período (`fresh=1` recalcula). Un regalo nuevo entra solo si está en `CASHBACK_GIFT_TX_TYPES`
+  (agregarle la etiqueta en `GIFT_LABELS`). Panel: sección `negocio` (admin.js `loadNegocio` / `_bizRender`).
+
 ### Un retiro por cliente #1008 (2026-11-01)
 - `_payoutSupersedable` / `_closeOtherPayouts` (server.js, junto a `_payPendingPayout`): pagar un retiro anula los otros pendientes del cliente
   que no tocaron plata ni fichas. La lista de Pagos a confirmar agrupa por cliente (`olderPending`). Un flujo NUEVO que marque un retiro como

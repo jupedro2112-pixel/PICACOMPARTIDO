@@ -28070,6 +28070,97 @@ app.post('/api/admin/sorteos/:key/draw/:step', authMiddleware, adminMiddleware, 
   } catch (e) { logger.error('[sorteos] draw/' + req.params.step + ': ' + e.message); res.status(500).json({ error: 'Error del servidor' }); }
 });
 // #981: estadística mínima para PRINCIPAL → "¿están sirviendo los sorteos?" (bajo la clave de INICIO)
+// ===== #1009 TABLERO DEL NEGOCIO (Principal 🔒 → 📈 Negocio). Todo por agregaciones de Mongo (#477: nunca bajar movimientos sueltos);
+// la lógica de lectura (alertas, frase, semáforos) está en src/services/businessBoard.js. Cache 10 min por período.
+const businessBoard = require('./src/services/businessBoard');
+const _bizCache = new Map();
+const _BIZ_REAL = { type: 'deposit', status: { $nin: ['failed', 'cancelled'] }, 'metadata.source': { $nin: ['install_bonus', 'welcome_gift', 'welcome_code', 'payout_refund'] }, description: { $not: /PRUEBA/ } };
+function _bizRange(period, now) {
+  const DAY = 86400000;
+  if (period === 'month') {
+    const k = _schedArtKey(now); const from = new Date(k.slice(0, 7) + '-01T00:00:00-03:00'); const days = (now - from) / DAY;
+    const pm = _apMonthAdd(k.slice(0, 7), -1); const pFrom = new Date(pm + '-01T00:00:00-03:00'); const pTo = new Date(Math.min(pFrom.getTime() + days * DAY, from.getTime()));
+    return { from, to: now, pFrom, pTo, label: 'este mes (hasta hoy) vs el mismo tramo del mes anterior' };
+  }
+  const n = period === '30d' ? 30 : 7; const from = new Date(now.getTime() - n * DAY);
+  return { from, to: now, pFrom: new Date(from.getTime() - n * DAY), pTo: from, label: `últimos ${n} días vs los ${n} anteriores` };
+}
+async function _bizMoney(from, to) {
+  const [dep, wd, gift, users] = await Promise.all([
+    Transaction.aggregate([{ $match: Object.assign({ timestamp: { $gte: from, $lt: to } }, _BIZ_REAL) }, { $group: { _id: null, total: { $sum: '$amount' }, n: { $sum: 1 }, users: { $addToSet: '$userId' } } }, { $project: { total: 1, n: 1, users: { $size: '$users' } } }]),
+    PendingPayout.aggregate([{ $match: { status: 'paid', paidAt: { $gte: from, $lt: to }, paidVia: { $nin: ['other_bank'] } } }, { $group: { _id: null, total: { $sum: '$amount' }, n: { $sum: 1 } } }]),
+    Transaction.aggregate([{ $match: { type: { $in: CASHBACK_GIFT_TX_TYPES }, status: { $nin: ['failed', 'cancelled'] }, timestamp: { $gte: from, $lt: to } } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+    User.countDocuments({ role: 'user', createdAt: { $gte: from, $lt: to } })
+  ]);
+  const d = dep[0] || {}, w = wd[0] || {}, g = gift[0] || {};
+  const out = { deposits: d.total || 0, depositCount: d.n || 0, depositors: d.users || 0, withdrawals: w.total || 0, withdrawalCount: w.n || 0, gifts: g.total || 0, registered: users };
+  out.result = out.deposits - out.withdrawals; out.giftRatio = businessBoard.pct(out.gifts, out.deposits); out.ticket = out.depositCount ? out.deposits / out.depositCount : 0;
+  return out;
+}
+async function _bizBoard(period) {
+  const now = new Date(); const DAY = 86400000; const R = _bizRange(period, now);
+  const [cur, prev] = await Promise.all([_bizMoney(R.from, R.to), _bizMoney(R.pFrom, R.pTo)]);
+  const money = Object.assign({}, cur, { prev, resultChg: businessBoard.chg(cur.result, prev.result), depositsChg: businessBoard.chg(cur.deposits, prev.deposits), depositorsChg: businessBoard.chg(cur.depositors, prev.depositors) });
+  // RETENCIÓN: bloques de 7 días hacia atrás (0 = últimos 7 días) en las últimas 7 semanas.
+  const W = 6; const since = new Date(now.getTime() - (W + 1) * 7 * DAY);
+  const blk = await Transaction.aggregate([{ $match: Object.assign({ timestamp: { $gte: since, $lt: now } }, _BIZ_REAL) },
+    { $group: { _id: '$userId', ks: { $addToSet: { $floor: { $divide: [{ $subtract: [now, '$timestamp'] }, 7 * DAY] } } } } }]).allowDiskUse(true);
+  const retention = businessBoard.retention(new Map(blk.map((x) => [x._id, x.ks])), W);
+  // EMBUDO: registrados hace 7 a 60 días (tuvieron tiempo de volver).
+  const fu = await User.find({ role: 'user', createdAt: { $gte: new Date(now.getTime() - 60 * DAY), $lt: new Date(now.getTime() - 7 * DAY) } }).select('id').lean();
+  const fIds = fu.map((u) => u.id);
+  const fRows = fIds.length ? await Transaction.aggregate([{ $match: Object.assign({ userId: { $in: fIds } }, _BIZ_REAL) }, { $group: { _id: '$userId', n: { $sum: 1 }, last: { $max: '$timestamp' } } }]).allowDiskUse(true) : [];
+  const funnel = businessBoard.funnel(fIds.length, fRows, now);
+  // ¿QUÉ REGALO RINDE? Regalos de hace 7 a 37 días (para que la semana de después esté completa): por tipo y cliente, cargas reales
+  // 7 días ANTES vs 7 días DESPUÉS del primer regalo de ese tipo.
+  const gFrom = new Date(now.getTime() - 37 * DAY), gTo = new Date(now.getTime() - 7 * DAY);
+  // Mongo 5+: $lookup con localField + pipeline (usa el índice userId). Si la base es más vieja, la misma cuenta con $expr.
+  const _gLookup = (modern) => ({ $lookup: Object.assign({ from: Transaction.collection.name, as: 'dep' }, modern ? { localField: '_id.u', foreignField: 'userId', let: { f: '$first' } } : { let: { f: '$first', u: '$_id.u' } }, { pipeline: [
+      { $match: Object.assign({}, _BIZ_REAL, { $expr: { $and: [{ $gte: ['$timestamp', { $subtract: ['$$f', 7 * DAY] }] }, { $lt: ['$timestamp', { $add: ['$$f', 7 * DAY] }] }].concat(modern ? [] : [{ $eq: ['$userId', '$$u'] }]) } }) },
+      { $group: { _id: { $gte: ['$timestamp', '$$f'] }, s: { $sum: '$amount' } } }] }) });
+  const _gPipe = (modern) => [
+    { $match: { type: { $in: CASHBACK_GIFT_TX_TYPES }, status: { $nin: ['failed', 'cancelled'] }, timestamp: { $gte: gFrom, $lt: gTo } } },
+    { $group: { _id: { t: '$type', u: '$userId' }, cost: { $sum: '$amount' }, n: { $sum: 1 }, first: { $min: '$timestamp' } } },
+    { $limit: 20000 },
+    _gLookup(modern),
+    { $project: { cost: 1, n: 1, before: { $sum: { $map: { input: { $filter: { input: '$dep', cond: { $eq: ['$$this._id', false] } } }, in: '$$this.s' } } }, after: { $sum: { $map: { input: { $filter: { input: '$dep', cond: { $eq: ['$$this._id', true] } } }, in: '$$this.s' } } } } },
+    { $group: { _id: '$_id.t', users: { $sum: 1 }, n: { $sum: '$n' }, cost: { $sum: '$cost' }, before: { $sum: '$before' }, after: { $sum: '$after' } } }
+  ];
+  let gRows = [];
+  try { gRows = await Transaction.aggregate(_gPipe(true)).allowDiskUse(true); }
+  catch (e) { try { gRows = await Transaction.aggregate(_gPipe(false)).allowDiskUse(true); } catch (e2) { logger.warn('[negocio] regalos: ' + e2.message); } }
+  const gifts = businessBoard.giftLift(gRows.map((r) => ({ type: r._id, users: r.users, n: r.n, cost: r.cost, before: r.before, after: r.after })));
+  // CAMPAÑAS: registrados en los últimos 90 días, por campaña: cuánto cargaron y cuánto retiraron DESDE que se registraron, contra el gasto
+  // en pauta cargado en Datos (Config['adSpend']) de esos mismos 90 días.
+  const cFrom = new Date(now.getTime() - 90 * DAY);
+  const cu = await User.find({ role: 'user', createdAt: { $gte: cFrom } }).select('id acquisitionCampaign acquisitionSource referredByUserId').lean();
+  const campOf = (u) => u.acquisitionCampaign ? String(u.acquisitionCampaign).toUpperCase() : (u.referredByUserId ? 'REFERIDOS' : 'ORGÁNICO');
+  const cIds = cu.map((u) => u.id);
+  const [cDep, cWd] = cIds.length ? await Promise.all([
+    Transaction.aggregate([{ $match: Object.assign({ userId: { $in: cIds } }, _BIZ_REAL) }, { $group: { _id: '$userId', s: { $sum: '$amount' } } }]).allowDiskUse(true),
+    PendingPayout.aggregate([{ $match: { userId: { $in: cIds }, status: 'paid', paidVia: { $nin: ['other_bank'] } } }, { $group: { _id: '$userId', s: { $sum: '$amount' } } }])
+  ]) : [[], []];
+  const depBy = new Map(cDep.map((x) => [x._id, x.s])), wdBy = new Map(cWd.map((x) => [x._id, x.s]));
+  const camp = new Map();
+  for (const u of cu) { const k = campOf(u); const c = camp.get(k) || { campaign: k, users: 0, depositors: 0, deposits: 0, withdrawals: 0, spend: 0 }; c.users++; const d = depBy.get(u.id) || 0; if (d > 0) c.depositors++; c.deposits += d; c.withdrawals += wdBy.get(u.id) || 0; camp.set(k, c); }
+  try { for (const k of camp.keys()) { if (k === 'ORGÁNICO' || k === 'REFERIDOS') continue; const sp = await _diaSpendByDay(cFrom, now, k); camp.get(k).spend = Math.round((sp && sp.total) || 0); } } catch (_) {}
+  try { const cs = await Campaign.find({ code: { $in: [...camp.keys()] } }).select('code publisher name').lean(); for (const c of cs) { const x = camp.get(String(c.code).toUpperCase()); if (x) x.publisher = c.publisher || c.name || null; } } catch (_) {}
+  const campaigns = businessBoard.campaigns([...camp.values()]);
+  let generalSpend = 0; try { const sp = await _diaSpendByDay(cFrom, now, null); generalSpend = Math.round((sp && sp.total) || 0) - campaigns.reduce((a, c) => a + (c.spend || 0), 0); } catch (_) {}
+  const cohorts = await _inicioCohorts({ type: 'deposit', status: { $nin: ['failed', 'cancelled'] }, 'metadata.source': { $nin: ['install_bonus', 'welcome_gift', 'welcome_code', 'payout_refund'] } }).catch(() => []);
+  const board = { period, range: { from: R.from, to: R.to, pFrom: R.pFrom, pTo: R.pTo, label: R.label }, money, giftLevel: businessBoard.giftLevel(money.giftRatio), retention, funnel, gifts, giftsWindow: { from: gFrom, to: gTo }, campaigns, generalSpend: Math.max(0, generalSpend), cohorts, at: now };
+  Object.assign(board, businessBoard.diagnose(board));
+  return board;
+}
+app.get('/api/admin/inicio/negocio', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const period = ['week', 'month', '30d'].includes(String(req.query.period)) ? String(req.query.period) : 'month';
+    const hit = _bizCache.get(period);
+    if (hit && Date.now() - hit.at < 10 * 60000 && req.query.fresh !== '1') return res.json({ success: true, cached: true, board: hit.board });
+    const board = await _bizBoard(period); _bizCache.set(period, { at: Date.now(), board });
+    res.json({ success: true, board });
+  } catch (e) { logger.error('[negocio] ' + e.message); res.status(500).json({ error: 'No se pudo armar el tablero: ' + e.message }); }
+});
 app.get('/api/admin/inicio/sorteos-stats', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const cfg = await _sorteosCfg(); const now = new Date(); const D = sorteosRules.DAY; const draws = (await getConfig('sorteoDraws', null)) || {}; const out = [];

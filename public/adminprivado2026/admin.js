@@ -5048,6 +5048,7 @@ function switchSection(section) {
     if (section === 'inicio') loadInicio(); // #876
     if (section === 'notifCenter') loadNotifCenter(); // #971/#973
     if (section === 'weeklyReview') loadWeeklyReview(); // #973
+    if (section === 'negocio') loadNegocio(); // #1009
     if (section === 'sorteoStats') loadSorteoStats(); // #981
     if (section === 'sorteos') loadSorteos(); // #915
     if (section === 'referrals') loadAdminReferralSummary();
@@ -16578,6 +16579,71 @@ async function loadSorteoStats() {
     } catch (e) { box.innerHTML = '<span style="color:#f87171">' + escHtml(e.message) + '</span>'; }
 }
 window.loadSorteoStats = loadSorteoStats;
+// ═══ #1009: TABLERO DEL NEGOCIO ═══
+let _bizPeriod = 'month';
+async function loadNegocio(period, fresh) {
+    const box = document.getElementById('bizBody'); if (!box) return;
+    if (period) _bizPeriod = period;
+    document.querySelectorAll('#bizPeriods [data-p]').forEach(function (b) { const on = b.dataset.p === _bizPeriod; b.classList.toggle('btn-primary', on); b.classList.toggle('btn-secondary', !on); });
+    box.innerHTML = '<div class="in-note">Calculando… (la primera vez puede tardar unos segundos)</div>';
+    try {
+        const r = await _inicioGuard('/api/admin/inicio/negocio?period=' + _bizPeriod + (fresh ? '&fresh=1' : ''), box); if (!r) return;
+        const j = await r.json(); if (!r.ok) throw new Error(j.error || 'error');
+        box.innerHTML = _bizRender(j.board);
+    } catch (e) { box.innerHTML = '<div class="in-note" style="color:#f87171">No se pudo cargar: ' + escapeHtml(e.message) + '</div>'; }
+}
+function _bizRender(b) {
+    const n = (v) => Math.round(Number(v) || 0).toLocaleString('es-AR'); const money = (v) => (v < 0 ? '−$' : '$') + n(Math.abs(v || 0));
+    const pc = (v) => v == null ? '—' : Math.round(v * 100) + '%';
+    const C = { good: '#22c55e', ok: '#f59e0b', bad: '#ef4444', na: '#9ca3af', nospend: '#9ca3af' };
+    const arrow = (v, invert) => v == null ? '' : '<span style="color:' + ((v >= 0) !== !!invert ? C.good : C.bad) + '">' + (v >= 0 ? '▲ ' : '▼ ') + Math.abs(Math.round(v * 100)) + '%</span> vs anterior';
+    const info = (t) => '<div style="font-size:.74rem;color:#9ab;margin:-2px 0 8px">ⓘ ' + t + '</div>';
+    const h = (t) => '<h3 style="margin:1.2rem 0 4px;font-size:1rem">' + t + '</h3>';
+    const m = b.money || {}; const fd = (d) => new Date(d).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit' });
+    const box1 = (ico, label, val, sub, c) => '<div class="in-box" style="border-top:3px solid ' + c + '"><div class="in-l">' + ico + ' ' + label + '</div><div class="in-v">' + val + '</div><div class="in-s">' + sub + '</div></div>';
+    const lastRet = (b.retention || []).slice(-1)[0] || {}; const prevRet = (b.retention || []).slice(-2)[0] || {};
+    const retChg = lastRet.rate != null && prevRet.rate != null ? lastRet.rate - prevRet.rate : null;
+    let html = '<div class="card" style="border-left:6px solid ' + C[b.color] + ';margin-bottom:1rem"><div style="font-size:.75rem;color:#9ab">🧭 EN UNA LÍNEA · ' + escapeHtml(b.range.label) + '</div><div style="font-size:1.05rem;font-weight:800;margin-top:4px">' + (b.color === 'good' ? '🟢 ' : b.color === 'ok' ? '🟡 ' : '🔴 ') + escapeHtml(b.headline) + '</div></div>';
+    html += '<div class="in-grid">' +
+        box1('💰', 'Resultado (cargas − retiros)', money(m.result), arrow(m.resultChg) + '<br>cargas ' + money(m.deposits) + ' · retiros ' + money(m.withdrawals), m.result >= 0 ? C.good : C.bad) +
+        box1('🎁', 'Regalos / depósitos', pc(m.giftRatio), money(m.gifts) + ' regalado · tope sano 20%', C[b.giftLevel]) +
+        box1('🔁', 'Volvieron a cargar', pc(lastRet.rate), (retChg == null ? '' : '<span style="color:' + (retChg >= 0 ? C.good : C.bad) + '">' + (retChg >= 0 ? '▲ ' : '▼ ') + Math.abs(Math.round(retChg * 100)) + ' pts</span> vs semana anterior<br>') + 'de los que cargaron la semana pasada', retChg == null ? C.na : retChg >= 0 ? C.good : C.bad) +
+        box1('👥', 'Clientes que cargaron', n(m.depositors), arrow(m.depositorsChg) + '<br>' + n(m.registered) + ' registrados · ticket ' + money(m.ticket), m.depositorsChg == null || m.depositorsChg >= 0 ? C.good : C.ok) +
+        '</div>';
+    // alertas arriba (lo más útil)
+    const al = b.alerts || [];
+    html += h('🚨 Para corregir') + (al.length ? al.map(function (a) { return '<div class="card" style="border-left:4px solid ' + C[a.level] + ';margin-bottom:6px;font-size:.84rem"><b>' + escapeHtml(a.text) + '</b><div style="color:#93c5fd;margin-top:3px">👉 ' + escapeHtml(a.fix) + '</div></div>'; }).join('') : '<div class="card" style="color:#22c55e">✅ No hay nada para corregir en este período.</div>');
+    // embudo
+    const f = b.funnel || { steps: [] }; const max = Math.max(1, f.registered || 0);
+    html += h('🪜 Embudo · dónde se cae la gente') + info('Registrados hace 7 a 60 días (' + n(f.registered) + '). El % de la derecha es cuántos pasaron desde el paso anterior.') +
+        '<div class="card" style="font-size:.84rem">' + f.steps.map(function (s) {
+            const w = Math.max(2, Math.round(100 * s.n / max)); const worst = f.worst && f.worst.key === s.key;
+            return '<div style="display:flex;align-items:center;gap:8px;margin:4px 0"><div style="width:42%;min-width:150px">' + escapeHtml(s.label) + '</div><div style="flex:1;background:rgba(127,127,127,.15);border-radius:6px;overflow:hidden"><div style="width:' + w + '%;background:' + (worst ? C.bad : '#6366f1') + ';color:#fff;font-size:.72rem;padding:2px 6px;white-space:nowrap">' + n(s.n) + '</div></div><div style="width:110px;text-align:right">' + pc(s.ofTotal) + (s.ofPrev != null ? ' <small style="color:' + (worst ? C.bad : '#9ab') + '">(' + pc(s.ofPrev) + ')</small>' : '') + '</div></div>';
+        }).join('') + (f.worst ? '<div style="color:' + C.bad + ';margin-top:6px">⚠️ Donde más se pierde: ' + escapeHtml(f.worst.label) + '</div>' : '') + '</div>';
+    // retención
+    const rr = b.retention || [];
+    html += h('🔁 Retención semana a semana') + info('Cada columna son 7 días (la última = los últimos 7). "Volvieron" = de los que cargaron la semana anterior, qué % cargó en esa.') +
+        '<div class="card" style="overflow:auto"><table class="data-table" style="width:100%;font-size:.8rem"><thead><tr><th></th>' + rr.map(function (x) { return '<th>' + (x.k === 0 ? 'Últimos 7 d' : 'hace ' + x.k + ' sem') + '</th>'; }).join('') + '</tr></thead><tbody>' +
+        '<tr><td>Cargaron</td>' + rr.map(function (x) { return '<td>' + n(x.depositors) + '</td>'; }).join('') + '</tr>' +
+        '<tr><td><b>Volvieron</b></td>' + rr.map(function (x, i) { const p = i ? rr[i - 1].rate : null; const c = x.rate == null || p == null ? '' : x.rate >= p ? C.good : C.bad; return '<td style="font-weight:800;color:' + c + '">' + pc(x.rate) + '</td>'; }).join('') + '</tr></tbody></table></div>';
+    const co = b.cohorts || [];
+    if (co.length) html += h('📅 Por mes de registro') + info('De los registrados cada mes: cuántos cargaron alguna vez y cuántos cargaron en ese mes (mes 0) y en los siguientes. Un "—" = todavía no pasó ese mes.') +
+        '<div class="card" style="overflow:auto"><table class="data-table" style="width:100%;font-size:.8rem"><thead><tr><th>Mes</th><th>Registrados</th><th>Cargaron</th><th>Mes 0</th><th>Mes 1</th><th>Mes 2</th><th>Mes 3</th></tr></thead><tbody>' +
+        co.map(function (r) { return '<tr><td>' + escapeHtml(r.month) + '</td><td>' + n(r.regs) + '</td><td>' + n(r.depositors) + '</td>' + r.m.map(function (v) { return '<td>' + (v == null ? '—' : n(v) + ' <small style="color:#9ab">' + pc(r.depositors ? v / r.depositors : null) + '</small>') + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div>';
+    // regalos
+    const g = b.gifts || []; const gw = b.giftsWindow || {};
+    html += h('🎁 ¿Qué regalo rinde?') + info('Regalos del ' + (gw.from ? fd(gw.from) : '') + ' al ' + (gw.to ? fd(gw.to) : '') + '. "Trajo de más" = cargas de los que lo recibieron en los 7 días DESPUÉS menos los 7 días ANTES. Es una estimación para comparar regalos entre sí.') +
+        (g.length ? '<div class="card" style="overflow:auto"><table class="data-table" style="width:100%;font-size:.8rem"><thead><tr><th>Regalo</th><th>Clientes</th><th>Costó</th><th>Cargaron antes</th><th>Cargaron después</th><th>Trajo de más</th><th>Rinde</th></tr></thead><tbody>' +
+        g.map(function (x) { return '<tr><td>' + escapeHtml(x.label) + '</td><td>' + n(x.users) + '</td><td>' + money(x.cost) + '</td><td>' + (x.lift == null ? '—' : money(x.before)) + '</td><td>' + (x.lift == null ? '—' : money(x.after)) + '</td><td>' + (x.lift == null ? '—' : money(x.lift)) + '</td><td style="font-weight:800;color:' + C[x.verdict] + '">' + (x.roi == null ? 'no se mide' : (x.verdict === 'good' ? '🟢 ' : x.verdict === 'ok' ? '🟡 ' : '🔴 ') + '×' + (Math.round(x.roi * 10) / 10).toLocaleString('es-AR')) + '</td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="card">Sin regalos en ese período.</div>');
+    // campañas
+    const cs = b.campaigns || [];
+    html += h('📣 Campañas · ¿la pauta se paga?') + info('Registrados en los últimos 90 días. "Dejaron" = cargas − retiros desde que llegaron. Gasto = lo cargado en Datos para esa campaña.' + (b.generalSpend > 0 ? ' Además hay ' + money(b.generalSpend) + ' de gasto general sin campaña asignada.' : '')) +
+        (cs.length ? '<div class="card" style="overflow:auto"><table class="data-table" style="width:100%;font-size:.8rem"><thead><tr><th>Campaña</th><th>Registrados</th><th>Cargaron</th><th>Dejaron</th><th>Gasto</th><th>Costo x cliente</th><th>Deja x cliente</th><th>¿Se paga?</th></tr></thead><tbody>' +
+        cs.map(function (c) { return '<tr><td><b>' + escapeHtml(c.campaign) + '</b>' + (c.publisher ? '<div style="color:#9ab;font-size:.72rem">' + escapeHtml(c.publisher) + '</div>' : '') + '</td><td>' + n(c.users) + '</td><td>' + n(c.depositors) + ' <small style="color:#9ab">' + pc(c.conv) + '</small></td><td>' + money(c.net) + '</td><td>' + (c.spend ? money(c.spend) : '—') + '</td><td>' + (c.costPerDepositor == null ? '—' : money(c.costPerDepositor)) + '</td><td>' + (c.netPerDepositor == null ? '—' : money(c.netPerDepositor)) + '</td><td style="font-weight:800;color:' + C[c.verdict] + '">' + ({ good: '🟢 sí', ok: '🟡 casi', bad: '🔴 no', nospend: '— sin gasto' })[c.verdict] + '</td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="card">Sin registros en los últimos 90 días.</div>');
+    html += '<div style="font-size:.72rem;color:#9ab;margin-top:10px">Calculado ' + new Date(b.at).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }) + '. El número exacto de plata (con comisiones y gastos) está en Cierres.</div>';
+    return html;
+}
+window.loadNegocio = loadNegocio;
 // ═══ #973: REVISIÓN SEMANAL — informe, decisión, historial y texto para copiar ═══
 let _wrText = '';
 async function loadWeeklyReview() {

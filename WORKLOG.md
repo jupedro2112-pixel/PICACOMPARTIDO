@@ -8,6 +8,17 @@
 
 ## Sesión 2026-11-01
 
+### 1009. 📈 TABLERO DEL NEGOCIO (2026-11-01)
+- Owner: "armá el tablero de negocio completo y mostrá adentro cómo funciona".
+- Panel → PRINCIPAL 🔒 → **📈 Negocio** (clave de INICIO; los agentes no lo ven). Período: 7 días / este mes / 30 días, contra el anterior.
+  Bloques: frase de arriba con semáforo · Resultado (cargas − retiros pagados por nuestras cuentas) · Regalos / depósitos (15 % / 20 %) ·
+  Volvieron a cargar · Clientes que cargaron · 🚨 Para corregir (alertas con sugerencia) · Embudo (registrados hace 7-60 días: 1ª, 2ª, 5
+  cargas, activos 30 d, paso donde más se pierde) · Retención semana a semana (bloques de 7 días) · Por mes de registro (`_inicioCohorts`) ·
+  ¿Qué regalo rinde? (regalos de hace 7-37 días: cargas 7 días después vs antes del primer regalo de cada cliente, por tipo) · Campañas
+  (registrados 90 días: dejaron = cargas − retiros vs gasto de `Config['adSpend']`). Recuadro "📖 Cómo funciona" con cada cálculo explicado.
+- `GET /api/admin/inicio/negocio?period=` (`_bizBoard`, sólo agregaciones, cache 10 min, `$lookup` con fallback para Mongo < 5) +
+  `src/services/businessBoard.js` (puro). Test `scripts/test-business-board.js`. Admin SW v222.
+
 ### 1008. 💸 Un retiro por cliente + push si el saldo no alcanza (2026-11-01)
 - Owner: "que figure siempre 1 por cliente y si se paga que desaparezca" (quedaban duplicados de antes de #1002, y al pagar uno los otros
   seguían ahí).

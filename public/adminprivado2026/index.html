@@ -130,6 +130,10 @@ document.addEventListener('change', function (ev) {
 <span>🧭</span>
 <span>Centro de avisos</span>
 </a>
+<a href="#" class="nav-item" data-section="negocio" title="El negocio en una pantalla: resultado, retención, embudo, qué regalo rinde, campañas y qué corregir">
+<span>📈</span>
+<span>Negocio</span>
+</a>
 <a href="#" class="nav-item" data-section="weeklyReview" title="Cada lunes mide la semana y ajusta sola los regalos; informe completo para analizar">
 <span>📏</span>
 <span>Revisión semanal</span>
@@ -2741,6 +2745,32 @@ Responder 2xx. Con 5xx / timeout se reintenta; con 4xx no.</pre>
                 <div id="ssBody">Cargando…</div>
             </section>
             <!-- #973: REVISIÓN SEMANAL automática (Principal, clave de INICIO) -->
+            <!-- #1009 TABLERO DEL NEGOCIO -->
+            <section id="negocioSection" class="section">
+                <div class="panel-header"><h2>📈 Negocio</h2><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap" id="bizPeriods">
+                    <button class="btn btn-secondary btn-small" data-p="week" onclick="loadNegocio('week')">7 días</button>
+                    <button class="btn btn-primary btn-small" data-p="month" onclick="loadNegocio('month')">Este mes</button>
+                    <button class="btn btn-secondary btn-small" data-p="30d" onclick="loadNegocio('30d')">30 días</button>
+                    <button class="btn btn-secondary btn-small" onclick="loadNegocio(null, true)" title="Recalcular ahora (si no, se guarda 10 minutos)">🔄</button></div></div>
+                <details class="card" style="margin-bottom:1rem;font-size:.82rem;line-height:1.55">
+                    <summary style="cursor:pointer;font-weight:800">📖 Cómo funciona este tablero (tocá para leer)</summary>
+                    <div style="margin-top:8px">
+                        <p><b>Para qué sirve:</b> ver en una sola pantalla si el negocio va bien y <b>qué corregir</b>. Arriba está la conclusión escrita; abajo, el detalle. No cambia nada solo: sólo muestra y sugiere.</p>
+                        <p><b>De dónde salen los números:</b> de las cargas reales (sin regalos, devoluciones ni pruebas), de los retiros PAGADOS por nuestras cuentas, de los regalos acreditados y del gasto en pauta que cargás en Datos. Se recalcula cada 10 minutos (🔄 para forzar).</p>
+                        <p><b>🧭 En una línea:</b> el resultado del período y lo más urgente de la lista "Para corregir". Verde = da positivo y nada grave · Amarillo = da positivo pero hay algo para mirar · Rojo = da negativo.</p>
+                        <p><b>💰 Resultado:</b> cargas − retiros pagados. Es plata de caja aproximada: <b>no</b> descuenta comisiones del banco, $ por transferencia ni gastos (eso está en Cierres, que es el número exacto). Los retiros pagados desde un banco externo no se restan porque esa plata no salió de nuestras cuentas.</p>
+                        <p><b>🎁 Regalos / depósitos:</b> todo lo regalado (bonos, reembolsos, fueguito, misiones, VIP, referidos, códigos…) sobre lo cargado. Hasta 15% verde, hasta 20% amarillo, más es rojo. Los regalos son fichas con rollover: no todo se convierte en retiro, pero si esta cifra sube mucho, los regalos se comen la ganancia.</p>
+                        <p><b>🔁 Retención:</b> de los que cargaron en una semana (7 días), qué % volvió a cargar en la semana siguiente. Es el número que más dice si la gente se queda. Si baja 2 semanas seguidas, salta una alerta.</p>
+                        <p><b>🪜 Embudo:</b> los que se registraron hace entre 7 y 60 días (tuvieron tiempo de volver): cuántos hicieron la 1ª carga, la 2ª, llegaron a 5 y siguen activos. Marca el paso donde más gente se pierde.</p>
+                        <p><b>🎁 ¿Qué regalo rinde?</b> Para cada tipo de regalo de hace 7 a 37 días: cuánto costó y cuánto cargaron los que lo recibieron <b>7 días después</b> contra <b>7 días antes</b>. "Rinde ×2" = por cada $1 regalado cargaron $2 más. Es una <b>estimación</b> (no un experimento): un reembolso, por ejemplo, llega después de perder, así que el "antes" puede ser alto. Sirve para comparar regalos entre sí y apagar los que salen rojo. Los bonos que entran pegados a una carga (bono %, extra por instalar) no se pueden medir así y muestran sólo el costo.</p>
+                        <p><b>📣 Campañas:</b> los registrados en los últimos 90 días, por campaña / publicista: cuántos, cuántos cargaron, cuánto dejaron (cargas − retiros desde que llegaron) y el gasto en pauta de esa campaña cargado en Datos. "Se paga" = dejaron más de lo que costó. Sin gasto cargado no se puede decir.</p>
+                        <p><b>📅 Por mes de registro:</b> de los que se registraron cada mes, cuántos cargaron en ese mes y en los 3 siguientes.</p>
+                        <p><b>🚨 Para corregir:</b> las alertas con la sugerencia concreta. Vos decidís; el sistema no toca nada.</p>
+                    </div>
+                </details>
+                <div id="bizBody"><div class="in-note">Cargando…</div></div>
+            </section>
+
             <section id="weeklyReviewSection" class="section">
                 <div class="panel-header"><h2>📏 Revisión semanal</h2><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn btn-secondary" onclick="wrCopy()" title="Copia el informe en texto para pegarlo donde quieras analizarlo">📋 Copiar informe</button><button class="btn btn-secondary" onclick="wrRun()">▶ Medir ahora</button><button class="btn btn-secondary" onclick="loadWeeklyReview()">🔄</button></div></div>
                 <div class="card" style="margin-bottom:1rem;font-size:.8rem;color:#9ab">Todos los lunes a las 10 h el sistema mide la semana (cuántos cargaron, cuántos volvieron, cuánto se regaló sobre lo depositado, cuánto convirtió cada paso del recorrido y la campaña masiva, reembolsos, app instalada, avisos bajados) y decide solo: <b>impulsar</b> (más % y más fichas en el recorrido, más puntos en la campaña), <b>mantener</b> o <b>frenar</b>. Nunca toca el reembolso. Acá queda el informe completo y el historial.</div>

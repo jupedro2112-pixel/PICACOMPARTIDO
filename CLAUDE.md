@@ -352,6 +352,8 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`). Git user: j
   2° y 3° por ranking (puntos con techo diario $300.000 + constancia). Tickets NUNCA se quitan ni se reasignan (índice único). Requisitos para anotarse:
   app, notificaciones, Telegram, **celular cargado** y una carga. Premios se entregan a mano (push + nota al ganador). Panel → App → Sorteos (🎟️ / 🎲)
   y Principal → "Sorteos: ¿sirven?". Un cambio en las reglas de puntos/tickets pasa por `computePoints` y sus tests, nunca por el motor.
+- **TABLERO DEL NEGOCIO (#1009):** Principal → 📈 Negocio (`/api/admin/inicio/negocio`, lógica en `src/services/businessBoard.js`, test
+  `scripts/test-business-board.js`). Todo por agregaciones; un tipo de regalo nuevo ⇒ etiqueta en `GIFT_LABELS`.
 - **UN RETIRO POR CLIENTE (#1008):** pagar un retiro llama `_closeOtherPayouts` (anula los otros pendientes seguros del cliente); un flujo nuevo
   que marque un retiro pagado tiene que llamarla. Pagos a confirmar muestra una tarjeta por cliente.
 - **BONOS SÓLO EN SLOTS (#1007):** todo texto nuevo al cliente que ofrezca un bono / regalo aclara "se juega en slots" (regla de 1girox).
