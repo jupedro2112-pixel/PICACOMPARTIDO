@@ -1598,6 +1598,8 @@ ranking (`_sorteoWinners(key, pk, excludeUserId)`). Requisito teléfono = 10 dí
 - Test: `node scripts/test-fraud-auto.js` (10 casos).
 
 ### Juego espejo global #1004 (2026-11-01)
+- **#1006:** APAGADO por defecto (`Config['mirrorScanCfg'].enabled` true para encenderlo; "Analizar ahora" corre igual); encendido corre una
+  vez por noche. `analyze` con topes (150 ganadores / 600 perdedores por franja).
 - `src/services/mirrorScan.js` (`analyze`, `bucketsFor`, `normalize`; puro, test `scripts/test-mirror-scan.js`) + `_mirrorTick` en server.js
   (cada 10 min, sólo de noche `nightFrom..nightTo` ART salvo "Analizar ahora"; `_cronClaim('mirror')`; pasada < 8 min y sigue en la
   próxima). Franjas CERRADAS de `bucketHours` en `MirrorBucket` (key única `YYYY-MM-DDTHH+h`, se borran a días+2). Jugadores = los que

@@ -4237,6 +4237,12 @@ const authMiddleware = async (req, res, next) => {
 
     next();
   } catch (error) {
+    // #1006: si falló la BASE (lenta / reconectando), NO es un token inválido: 503 para que el panel y la app reintenten en vez de cerrar
+    // la sesión. Sólo los errores del JWT (firma, vencido, mal formado) son 401.
+    if (error && !/^(JsonWebTokenError|TokenExpiredError|NotBeforeError)$/.test(error.name || '')) {
+      logger.warn(`[auth] error de base, no de token: ${error.message}`);
+      return res.status(503).json({ error: 'Servicio temporalmente no disponible. Probá en unos segundos.', code: 'DB_BUSY' });
+    }
     return res.status(401).json({ error: 'Token inválido' });
   }
 };
@@ -27083,6 +27089,7 @@ async function _mirrorTick() {
   const hourArt = (new Date().getUTCHours() + 21) % 24; const night = cfg.nightFrom < cfg.nightTo ? (hourArt >= cfg.nightFrom && hourArt < cfg.nightTo) : (hourArt >= cfg.nightFrom || hourArt < cfg.nightTo);
   if (!night && !_mirrorForce) return;
   if (!(await _cronClaim('mirror', 9 * 60000))) return;
+  if (!_mirrorForce) { const _last = await getConfig('mirrorScan', null); if (_last && _last.at && Date.now() - new Date(_last.at).getTime() < 20 * 3600000) return; } // #1006: encendido, una vez por noche
   _mirrorRunning = true; const t0 = Date.now();
   try {
     const want = mirrorScan.bucketsFor(new Date(), cfg); const have = new Set((await MirrorBucket.find({ key: { $in: want.map((b) => b.key) }, complete: true }).select('key').lean()).map((b) => b.key));
@@ -27104,8 +27111,9 @@ async function _mirrorTick() {
         _mirrorProgress.done++;
       }
     }
+    const nDone = await MirrorBucket.countDocuments({ key: { $in: want.map((b) => b.key) }, complete: true }); // #1006: contar antes de traer todo
+    if (nDone < want.length) { Object.assign(_mirrorProgress, { state: 'faltan ' + (want.length - nDone) + ' franjas (sigue en la próxima pasada)' }); return; }
     const done = await MirrorBucket.find({ key: { $in: want.map((b) => b.key) }, complete: true }).lean();
-    if (done.length < want.length) { Object.assign(_mirrorProgress, { state: 'faltan ' + (want.length - done.length) + ' franjas (sigue en la próxima pasada)' }); return; }
     _mirrorProgress.state = 'analizando';
     const since = new Date(Date.now() - cfg.days * 86400000);
     const [gifts, wds] = await Promise.all([Transaction.distinct('username', { type: { $in: fraudRadar.GIFT_TX }, createdAt: { $gte: since } }), PendingPayout.distinct('username', { createdAt: { $gte: since } })]);

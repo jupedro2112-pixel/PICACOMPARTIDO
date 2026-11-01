@@ -477,12 +477,19 @@ async function handleLogin(e) {
     }
 }
 
-async function checkAdminSession() {
+async function checkAdminSession(_try) {
+    _try = _try || 0;
     try {
         const response = await fetch(`${API_URL}/api/admin/me`, {
             credentials: 'include',
             headers: { 'Authorization': `Bearer ${currentToken}` }
         });
+        // #1006: servidor lento / reiniciando (502-504) NO es sesión vencida: se reintenta en vez de mandar al agente al login.
+        if (response.status >= 500 && _try < 8) {
+            if (_try === 0) showToast('El servidor está lento, reintentando… (no hace falta volver a entrar)', 'info');
+            setTimeout(function () { checkAdminSession(_try + 1); }, Math.min(15000, 3000 * (_try + 1)));
+            return;
+        }
         
         if (response.ok) {
             const data = await response.json();
@@ -510,6 +517,7 @@ async function checkAdminSession() {
         }
     } catch (error) {
         console.error('Session check error:', error);
+        if (_try < 8) { setTimeout(function () { checkAdminSession(_try + 1); }, Math.min(15000, 3000 * (_try + 1))); return; } // #1006: sin conexión ⇒ reintenta
         showLogin();
     }
 }

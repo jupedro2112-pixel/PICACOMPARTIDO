@@ -8,6 +8,16 @@
 
 ## Sesión 2026-11-01
 
+### 1006. 🚨 Agentes que se quedaban afuera del panel (2026-11-01, urgente)
+- Síntoma: "Error cargando opers: 504" y el panel volvía al login. Causa: (1) `authMiddleware` respondía **401 "Token inválido"** a
+  CUALQUIER error, también cuando la base tardaba ⇒ el panel/app cerraban la sesión; (2) `checkAdminSession` mandaba al login ante
+  cualquier respuesta no-OK (502/504 del balanceador incluidos).
+- Arreglo: error que no es del JWT ⇒ **503 `DB_BUSY`** (la sesión sigue); `checkAdminSession` reintenta hasta 8 veces ante 5xx o sin
+  conexión antes de mostrar el login.
+- Juego espejo (#1004) **APAGADO por defecto** (`enabled:false`; corre con "Analizar ahora" o si el admin lo enciende) y más liviano:
+  topes por franja (150 ganadores / 600 perdedores, búsqueda binaria), cuenta las franjas antes de traerlas y, encendido, una vez por
+  noche. 3.000 jugadores × 56 franjas ≈ 2 s. Admin SW v220.
+
 ### 1005. Pagos a confirmar: botón "🏦 Ya lo pagué a mano" (2026-11-01)
 - Antes decía "Pagado por banco externo" y los agentes no lo usaban cuando la transferencia salía a mano del MISMO banco (falló la API).
   El botón es el mismo (`payReviewOtherBank` → `payViaPick`): pregunta desde dónde salió (mismo banco a mano / cuenta secundaria / otro

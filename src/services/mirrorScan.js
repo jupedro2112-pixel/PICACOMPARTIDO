@@ -9,11 +9,11 @@
  * suelta es azar (con cientos de jugadores pasa); lo que delata el espejo es que el MISMO grupo coincide en VARIAS franjas y que casi siempre
  * que juega uno juega el otro. Funciones puras (test: scripts/test-mirror-scan.js); el motor que pide los datos está en server.js.
  */
-const DEFAULT = { enabled: true, bucketHours: 3, days: 7, minWagered: 10000, minWin: 10000, tol: 0.25, wagRatio: 3, minHits: 2, minHitsNoFlag: 3, coactivity: 0.5, nightFrom: 3, nightTo: 8, rpm: 15 };
+const DEFAULT = { enabled: false, bucketHours: 3, days: 7, minWagered: 10000, minWin: 10000, tol: 0.25, wagRatio: 3, minHits: 2, minHitsNoFlag: 3, coactivity: 0.5, nightFrom: 3, nightTo: 8, rpm: 15 };
 function normalize(c) {
   c = c || {}; const n = (v, d, lo, hi) => { const x = Number(v); return Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : d; }; const D = DEFAULT;
   const bh = [1, 2, 3, 4, 6, 8, 12, 24].includes(Number(c.bucketHours)) ? Number(c.bucketHours) : D.bucketHours;
-  return { enabled: c.enabled !== false, bucketHours: bh, days: Math.round(n(c.days, D.days, 1, 30)), minWagered: n(c.minWagered, D.minWagered, 500, 1e8), minWin: n(c.minWin, D.minWin, 500, 1e8),
+  return { enabled: c.enabled === true, bucketHours: bh, days: Math.round(n(c.days, D.days, 1, 30)), minWagered: n(c.minWagered, D.minWagered, 500, 1e8), minWin: n(c.minWin, D.minWin, 500, 1e8),
     tol: n(c.tol, D.tol, 0.05, 0.6), wagRatio: n(c.wagRatio, D.wagRatio, 1.2, 10), minHits: Math.round(n(c.minHits, D.minHits, 1, 20)), minHitsNoFlag: Math.round(n(c.minHitsNoFlag, D.minHitsNoFlag, 1, 30)),
     coactivity: n(c.coactivity, D.coactivity, 0, 1), nightFrom: Math.round(n(c.nightFrom, D.nightFrom, 0, 23)), nightTo: Math.round(n(c.nightTo, D.nightTo, 1, 24)), rpm: Math.round(n(c.rpm, D.rpm, 2, 40)) };
 }
@@ -30,9 +30,10 @@ function analyze(buckets, flags, cfgRaw) {
   for (const b of buckets || []) {
     const ps = Object.entries(b.players || {}).map(([u, s]) => ({ u, wag: num(s.wagered), nw: num(s.netwin), bon: num(s.bonusGranted) }));
     for (const p of ps) if (p.wag >= cfg.minWagered * 0.3) active.set(p.u, (active.get(p.u) || 0) + 1);
-    const winners = ps.filter((p) => -p.nw >= cfg.minWin && p.wag >= cfg.minWagered);
+    // #1006: topes para que nunca trabe el servidor (los 150 que más ganaron y los 600 que más perdieron de la franja)
+    const winners = ps.filter((p) => -p.nw >= cfg.minWin && p.wag >= cfg.minWagered).sort((a, b) => a.nw - b.nw).slice(0, 150);
     if (!winners.length) continue;
-    const losers = ps.filter((p) => p.nw > 0 && p.wag >= cfg.minWagered * 0.3).sort((a, b) => a.nw - b.nw);
+    const losers = ps.filter((p) => p.nw > 0 && p.wag >= cfg.minWagered * 0.3).sort((a, b) => b.nw - a.nw).slice(0, 600).sort((a, b) => a.nw - b.nw);
     const okWag = (w, ls) => { const lw = ls.reduce((a, l) => a + l.wag, 0); return lw > 0 && w.wag / lw <= cfg.wagRatio && lw / w.wag <= cfg.wagRatio; };
     const add = (w, ls) => {
       const members = [w.u, ...ls.map((l) => l.u)].sort(); const k = members.join('|');
@@ -44,14 +45,15 @@ function analyze(buckets, flags, cfgRaw) {
       const win = -w.nw, lo = win * (1 - cfg.tol), hi = win * (1 + cfg.tol);
       const cand = losers.filter((l) => l.u !== w.u && l.nw <= hi);
       for (const l of cand) if (l.nw >= lo && okWag(w, [l])) add(w, [l]);
-      // 2 cuentas que pierden entre las dos lo que ganó la otra (cada una aporta al menos el 20 %); dos punteros sobre la lista ordenada
-      let i = 0, j = cand.length - 1, made = 0;
-      while (i < j && made < 25) {
-        const s = cand[i].nw + cand[j].nw;
-        if (s > hi) { j--; continue; }
-        if (s < lo) { i++; continue; }
-        for (let k = i + 1; k <= j && made < 25; k++) { const t = cand[i].nw + cand[k].nw; if (t >= lo && t <= hi && Math.min(cand[i].nw, cand[k].nw) >= win * 0.2 && okWag(w, [cand[i], cand[k]])) { add(w, [cand[i], cand[k]]); made++; } }
-        i++;
+      // 2 cuentas que pierden entre las dos lo que ganó la otra (cada una aporta al menos el 20 %). Lista ordenada ⇒ para cada i el
+      // compañero válido está en un tramo contiguo: búsqueda binaria + recorrido corto (tope de pasos y de hallazgos).
+      let made = 0, steps = 0;
+      for (let i = 0; i < cand.length && made < 25 && steps < 20000; i++) {
+        const a = cand[i].nw; if (a < win * 0.2) continue; if (a * 2 > hi) break;
+        let L = i + 1, R = cand.length; const want = lo - a; while (L < R) { const m = (L + R) >> 1; if (cand[m].nw < want) L = m + 1; else R = m; }
+        for (let k = Math.max(L, i + 1); k < cand.length && cand[k].nw <= hi - a && made < 25 && steps < 20000; k++, steps++) {
+          if (okWag(w, [cand[i], cand[k]])) { add(w, [cand[i], cand[k]]); made++; }
+        }
       }
     }
   }
