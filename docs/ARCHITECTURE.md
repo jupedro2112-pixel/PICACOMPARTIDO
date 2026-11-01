@@ -973,6 +973,9 @@ VIPCARGAS con su JWT, y el cliente nunca más necesita conocer su clave del casi
   "⏳ Cargas pendientes" (`/api/admin/deposit-reviews*`): Confirmar = `_agentDepositHandler` (la función de
   `POST /api/admin/deposit`, extraída para reusarla) · Rechazar = `/sys_deposit_rejected`. Duplicados → el cliente recibe
   `/sys_receipt_duplicate`. Cliente: `GET /api/deposits/pending` + socket `deposit_review_update` → franja "⏳ Carga pendiente".
+  **#1012 — `Config['hgcash']` NUNCA se reescribe entero salvo desde el panel:** cambios puntuales con `_hgcashSetFields` ($set sin upsert);
+  `getConfig` devuelve el default si la base falla, así que leer→mezclar→guardar puede pisar la config con DEFAULTS (pasó: banco apagado).
+  `_hgcashGuardTick` restaura `Config['hgcashLastGood']` si aparece apagada sin `manualOff`. Apagar/sombra desde el panel exige `confirmOff`.
   **#1011 (2026-11-01) — reenvío propio NO es "ya usado":** si el duplicado es del MISMO cliente y ninguna copia se acreditó
   (`autoCharged` / `reviewStatus:'confirmed'`), no se manda `/sys_receipt_duplicate`: nota interna "reenvió… todavía NO se acreditó" y, si el
   envío está completo y el original sigue pendiente, `/sys_receipt_already_pending`. `/sys_receipt_unreadable` y `/sys_receipt_to_agent` explican

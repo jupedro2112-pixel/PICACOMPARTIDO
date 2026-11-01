@@ -7875,10 +7875,15 @@ async function saveHgcashConfig() {
     if (enabled && mode === 'auto' && !confirm('Vas a activar la CARGA AUTOMÁTICA real (modo auto). Las transferencias que matcheen se van a acreditar solas. ¿Confirmás?')) {
         return;
     }
+    // #1012: apagarlo o pasarlo a sombra deja las cargas sin acreditarse solas ⇒ confirmación explícita.
+    const confirmOff = (!enabled || mode !== 'auto')
+        ? confirm('⚠️ Vas a ' + (!enabled ? 'APAGAR' : 'pasar a SOMBRA') + ' el banco automático: las cargas NO van a entrar solas hasta que lo vuelvas a activar. ¿Seguro?')
+        : false;
+    if ((!enabled || mode !== 'auto') && !confirmOff) return;
     try {
         const r = await authFetch('/api/admin/hgcash/config', {
             method: 'POST',
-            body: JSON.stringify({ accountName: accountName.trim(), cbu: cbu.trim(), mode, windowMinutes, enabled })
+            body: JSON.stringify({ accountName: accountName.trim(), cbu: cbu.trim(), mode, windowMinutes, enabled, confirmOff })
         });
         const j = await r.json();
         if (r.ok && j.success) {

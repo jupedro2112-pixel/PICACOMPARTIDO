@@ -367,6 +367,9 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`). Git user: j
 - **UN RETIRO POR CLIENTE (#1008):** pagar un retiro llama `_closeOtherPayouts` (anula los otros pendientes seguros del cliente); un flujo nuevo
   que marque un retiro pagado tiene que llamarla. Pagos a confirmar muestra una tarjeta por cliente.
 - **BONOS SÓLO EN SLOTS (#1007):** los textos viejos aclaran "se juega en slots"; desde #1010 el owner pidió NO agregarlo en los avisos nuevos.
+- **BANCO AUTOMÁTICO BLINDADO (#1012):** `getConfig` devuelve el default si la base falla ⇒ NUNCA leer→mezclar→guardar `Config['hgcash']` entero
+  (lo apagaba solo). Cambios puntuales con `_hgcashSetFields`; sólo el panel guarda el objeto (con `confirmOff` para apagar). `_hgcashGuardTick`
+  restaura `Config['hgcashLastGood']` si aparece apagado sin `manualOff`. Misma trampa para cualquier Config crítica: usar $set de campo.
 - **COMPROBANTE SIN LECTURA (#1010):** si la IA de comprobantes falla y el cliente es de CONFIANZA (`_receiptTrust`: 7+ días, 3+ cargas, sin marcas
   ni comprobantes repetidos/rechazados), `_receiptTrustedFallback` acredita con la transferencia que llegue de una cuenta que ya usó (`_knownSendersOf`,
   sólo si hay UNA) y `_receiptAiRecheckTick` re-lee la imagen cuando vuelve la IA (si no coincide ⇒ cliente en observación + nota PRIORIDAD ALTA).

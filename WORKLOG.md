@@ -8,6 +8,16 @@
 
 ## Sesión 2026-11-01
 
+### 1012. 🏦 El banco automático ya no se apaga solo (2026-11-01, urgente)
+- Owner: "no está cargando automático ningún comprobante… desde la última vez que publiqué no estaba cargado". El panel mostraba
+  "Integración apagada · modo SOMBRA" con nombre y CBU vacíos.
+- Causa: con la base lenta tras publicar, `getConfig` (config/database.js) traga el error y devuelve null ⇒ `getHgcashConfig` = DEFAULTS
+  (apagado, sombra, vacío) y `resolveHgcashAccountId` / `ensureHgcashAccountIdSaved` / credenciales REESCRIBÍAN `Config['hgcash']` entero con eso.
+- Arreglo: `_hgcashSetFields` ($set sólo del campo, sin upsert) para accountId y migraciones; el POST del panel lee con `_hgcashConfigStrict`
+  (503 si la base falla, no guarda nada), pide `confirmOff` para apagar/sombra (confirm en el panel) y registra `manualOff {by, at}`;
+  `Config['hgcashLastGood']` = última config activa en auto; `_hgcashGuardTick` (5 min) la RESTAURA si aparece apagada sin `manualOff` (toast rojo)
+  y, si la apagó un admin, recuerda cada 2 h. Admin SW v231.
+
 ### 1011. 📸 Comprobante incompleto: explicar cómo mandarlo + reenvío propio ya no es "ya usado" (2026-11-01)
 - Owner (captura de soporte): el cliente manda la pantalla resumen ("Transferiste $10.000") sin datos; al reenviarla el sistema le decía
   "Ese comprobante ya fue usado" (falso y asusta) y "no hace falta que hagas nada"; recién con el comprobante detallado se cargaba solo.

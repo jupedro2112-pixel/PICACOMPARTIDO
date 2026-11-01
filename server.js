@@ -2583,6 +2583,40 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
 //   chica evita que una transferencia nueva cargue contra un comprobante viejo/sobrante.
 const HGCASH_DEFAULTS = { enabled: false, cbu: '', accountId: '', accountName: '', mode: 'shadow', windowMinutes: 60, raceWindowMinutes: 10, currency: 'ARS', acceptStatuses: ['done'], duplicateGuardMinutes: 8, minChargeARS: 2000 };
 
+// #1012 (owner 2026-11-01: "desde la última vez que publiqué no estaba cargado"): con la base lenta, getConfig devuelve null ⇒ getHgcashConfig da los
+// DEFAULTS (apagado, sombra, sin nombre) y quien guardaba el accountId REESCRIBÍA todo el objeto con eso ⇒ el banco quedaba apagado. Ahora:
+//  · nadie reescribe el objeto entero salvo el panel: los cambios puntuales van por _hgcashSetFields ($set de ese campo, nunca crea defaults);
+//  · Config['hgcashLastGood'] guarda la última config ACTIVA en AUTO y _hgcashGuardTick la restaura si aparece apagada sin que un admin la haya
+//    apagado a mano (`manualOff`, sólo desde el panel con confirmación), con toast rojo al panel.
+async function _hgcashSetFields(fields) {
+  const $set = { updatedAt: new Date() }; for (const [k, v] of Object.entries(fields || {})) $set['value.' + k] = v;
+  await Config.collection.updateOne({ key: 'hgcash' }, { $set }); // sin upsert: si no existe, no se inventa una config apagada
+  try { Config._cache && Config._cache.clear(); } catch (_) {}
+}
+async function _hgcashConfigStrict() { const d = await Config.findOne({ key: 'hgcash' }).lean(); return d && d.value && typeof d.value === 'object' ? d.value : null; } // tira si la base falla
+async function _hgcashGuardTick() {
+  try {
+    if (!(await _cronClaim('hgcashguard', 4 * 60000))) return;
+    const cur = await _hgcashConfigStrict(); const good = (await Config.findOne({ key: 'hgcashLastGood' }).lean() || {}).value || null;
+    const ok = cur && cur.enabled === true && cur.mode === 'auto' && String(cur.accountName || cur.cbu || '').trim();
+    if (ok) { const pick = (o) => JSON.stringify([o.enabled, o.mode, o.accountName, o.cbu, o.windowMinutes]); if (!good || pick(good) !== pick(cur)) await Config.set('hgcashLastGood', Object.assign({}, cur, { savedAt: new Date().toISOString() }), 'system'); return; }
+    if (cur && cur.manualOff) { // lo apagó un admin a mano: no se toca, pero se recuerda cada 2 h
+      const st = (await getConfig('hgcashGuardState', null)) || {};
+      if (!st.alertedAt || Date.now() - new Date(st.alertedAt).getTime() > 2 * 3600000) {
+        try { io.to('admins').emit('security_alert', { message: `⚪ El BANCO AUTOMÁTICO está ${cur.enabled ? 'en modo SOMBRA' : 'APAGADO'} (lo cambió ${cur.manualOff.by || 'un admin'}): las cargas no entran solas. Comandos → Banco automático.`, at: new Date() }); } catch (_) {}
+        await Config.set('hgcashGuardState', { alertedAt: new Date().toISOString() }, 'system');
+      }
+      return;
+    }
+    if (!good) return;
+    const restored = Object.assign({}, cur || {}, good, { accountId: (cur && cur.accountId) || good.accountId || '' }); delete restored.savedAt; delete restored.manualOff;
+    await setConfig('hgcash', restored);
+    logger.error(`[hgcash] ⚠️ la config del banco automático apareció ${cur ? (cur.enabled ? 'en sombra' : 'apagada') : 'borrada'} sin que nadie la apague: RESTAURADA (activa, auto)`);
+    try { io.to('admins').emit('security_alert', { message: '🏦 El banco automático apareció apagado sin que nadie lo apague: se volvió a ACTIVAR solo (modo auto, mismos datos).', at: new Date() }); } catch (_) {}
+  } catch (e) { logger.warn('[hgcash] guard: ' + e.message); }
+}
+setInterval(() => { _hgcashGuardTick(); }, 5 * 60000);
+setTimeout(() => { _hgcashGuardTick(); }, 90 * 1000);
 async function getHgcashConfig() {
   const cfg = await getConfig('hgcash', null);
   const merged = Object.assign({}, HGCASH_DEFAULTS, cfg || {});
@@ -2794,7 +2828,7 @@ async function ensureHgcashAccountIdSaved(accountId) {
   try {
     const cfg = await getHgcashConfig();
     if (!cfg.accountId && accountId) {
-      await setConfig('hgcash', Object.assign({}, cfg, { accountId: String(accountId) }));
+      await _hgcashSetFields({ accountId: String(accountId) }); // #1012: sólo ese campo
       logger.info(`[hgcash] accountId auto-guardado: ${accountId}`);
     }
   } catch (_) {}
@@ -13329,7 +13363,7 @@ async function initializeData() {
   // #897 (owner: "configurá todo con carga mínima $2.000 para toda la página"): una vez; después se cambia en el panel.
   // #906: el texto de "Comprobante no válido" pide los datos completos en la foto (sólo si nadie lo editó).
   try { if (!(await getConfig('mig906SqComp', null))) { await Command.updateOne({ name: '/sys_sq_comprobante', response: '📎 Tu comprobante no es válido o no se pudo leer. Volvé a adjuntarlo ENTERO (que se vean titular, monto, fecha y N° de operación) tocando el botón de abajo y tu carga se genera sola.' }, { $set: { response: '📎 Tu comprobante no es válido o no se pudo leer. Sacá la captura de nuevo con TODOS los datos completos y bien visibles en la foto (titular, CUIT, monto, fecha y hora y N° de operación), sin recortar, y adjuntala tocando el botón de abajo: tu carga se genera sola.' } }); await Config.set('mig906SqComp', new Date().toISOString(), 'mig#906'); } } catch (e) { console.warn('[startup-migration] #906:', e.message); }
-  try { if (!(await getConfig('mig897MinDep2000', null))) { await Config.set('minDepositArs', 2000, 'mig#897'); const hg = (await getConfig('hgcash', null)) || {}; if (typeof hg === 'object' && Number(hg.minChargeARS) > 2000) await Config.set('hgcash', Object.assign({}, hg, { minChargeARS: 2000 }), 'mig#897'); await Config.set('mig897MinDep2000', new Date().toISOString(), 'mig#897'); console.log('✅ #897: carga mínima $2.000'); } } catch (e) { console.warn('[startup-migration] #897:', e.message); }
+  try { if (!(await getConfig('mig897MinDep2000', null))) { await Config.set('minDepositArs', 2000, 'mig#897'); const hg = (await getConfig('hgcash', null)) || {}; if (typeof hg === 'object' && Number(hg.minChargeARS) > 2000) await _hgcashSetFields({ minChargeARS: 2000 }); await Config.set('mig897MinDep2000', new Date().toISOString(), 'mig#897'); console.log('✅ #897: carga mínima $2.000'); } } catch (e) { console.warn('[startup-migration] #897:', e.message); }
   try { if (!(await getConfig('mig890NoFriction', null))) { const bs = (await getConfig('bankOutageSettings', null)) || {}; await Config.set('bankOutageSettings', Object.assign({}, BANK_SETTINGS_DEFAULT, typeof bs === 'object' ? bs : {}, { notifyFailedClient: false }), 'mig#890'); await Command.updateOne({ name: '/sys_withdraw_delayed', response: WITHDRAW_DELAYED_OLD_820 }, { $set: { response: WITHDRAW_DELAYED_DEFAULT } }); await Config.set('mig890NoFriction', new Date().toISOString(), 'mig#890'); } } catch (e) { console.warn('[startup-migration] #890:', e.message); }
   try { if (!(await getConfig('mig885FirePlazo', null))) { const fm = await getConfig('fireMilestones', null); if (Array.isArray(fm) && fm.length) await Config.set('fireMilestones', fm.map((m) => Object.assign({}, m, { depositDays: (parseInt(m.day, 10) || 15) * 2 })), 'mig#885'); await Config.set('firePlazoSince', new Date().toISOString(), 'mig#885'); await Config.set('mig885FirePlazo', new Date().toISOString(), 'mig#885'); } } catch (e) { console.warn('[startup-migration] #885:', e.message); }
   try { if (!(await getConfig('mig884RetiroText', null))) { await Command.updateOne({ name: '/sys_support_topic_retiro', response: SUPPORT_RETIRO_OLD_878 }, { $set: { response: SUPPORT_TOPIC_RETIRO_DEFAULT } }); await Config.set('mig884RetiroText', new Date().toISOString(), 'mig#884'); } } catch (e) { console.warn('[startup-migration] #884:', e.message); }
@@ -13367,8 +13401,7 @@ async function initializeData() {
     if (!(await getConfig('mig814Auto100k', null))) {
       const pr = (await getConfig('payoutReview', null)) || {};
       await Config.set('payoutReview', Object.assign({}, typeof pr === 'object' ? pr : {}, { minArs: 100000, autoBelow: true }), 'mig#814');
-      const hg = (await getConfig('hgcash', null)) || {};
-      if (hg && typeof hg === 'object' && hg.mode !== 'auto') await Config.set('hgcash', Object.assign({}, hg, { mode: 'auto' }), 'mig#814');
+      await _hgcashSetFields({ mode: 'auto' }); // #1012
       const bs = (await getConfig('bankOutageSettings', null)) || {};
       const bsObj = typeof bs === 'object' ? bs : {};
       if (!(parseInt(bsObj.failThreshold, 10) >= 3)) await Config.set('bankOutageSettings', Object.assign({}, bsObj, { failThreshold: 3 }), 'mig#814');
@@ -13381,8 +13414,7 @@ async function initializeData() {
   // pasa a "en breve tu carga será realizada" (sólo si el texto guardado seguía siendo el viejo).
   try {
     if (!(await getConfig('mig811AllAuto', null))) {
-      const hg = (await getConfig('hgcash', null)) || {};
-      await Config.set('hgcash', Object.assign({}, typeof hg === 'object' ? hg : {}, { mode: 'auto' }), 'mig#811');
+      await _hgcashSetFields({ mode: 'auto' }); // #1012
       const pr = (await getConfig('payoutReview', null)) || {};
       await Config.set('payoutReview', Object.assign({}, typeof pr === 'object' ? pr : {}, { autoBelow: true }), 'mig#811');
       const rr = await Command.findOne({ name: '/sys_receipt_received' }).lean();
@@ -21133,7 +21165,7 @@ app.post('/api/admin/hgcash/credentials', authMiddleware, adminMiddleware, async
     await setConfig('hgcashCredentials', next);
     if (token) {
       // Cuenta nueva → el accountId cacheado es de la VIEJA: se limpia y se resuelve con el token nuevo (#53).
-      try { const cfg = await getHgcashConfig(); await setConfig('hgcash', Object.assign({}, cfg, { accountId: null })); } catch (_) {}
+      try { await _hgcashSetFields({ accountId: null }); } catch (_) {} // #1012
     }
     await _loadHgcashCredentials();
     logger.warn(`[hgcash] credenciales cambiadas desde el panel por ${req.user.username}: ${token ? 'token …' + token.slice(-4) : ''}${token && secret ? ' + ' : ''}${secret ? 'secreto …' + secret.slice(-4) : ''}`);
@@ -21144,7 +21176,7 @@ app.delete('/api/admin/hgcash/credentials', authMiddleware, adminMiddleware, asy
   try {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
     await setConfig('hgcashCredentials', { tokenEnc: null, secretEnc: null, tokenLast4: null, secretLast4: null, updatedBy: req.user.username, updatedAt: new Date() });
-    try { const cfg = await getHgcashConfig(); await setConfig('hgcash', Object.assign({}, cfg, { accountId: null })); } catch (_) {}
+    try { await _hgcashSetFields({ accountId: null }); } catch (_) {} // #1012
     await _loadHgcashCredentials();
     logger.warn(`[hgcash] credenciales del panel BORRADAS por ${req.user.username} → vuelve a SSM`);
     res.json({ success: true, tokenSource: hgcashPay.getTokenSource() });
@@ -21524,7 +21556,8 @@ app.get('/api/admin/hgcash/config', authMiddleware, adminMiddleware, async (req,
 app.post('/api/admin/hgcash/config', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
-    const cur = await getHgcashConfig();
+    let raw; try { raw = await _hgcashConfigStrict(); } catch (_) { return res.status(503).json({ error: 'La base tardó en responder: no se guardó nada. Probá de nuevo en un minuto.' }); } // #1012
+    const cur = Object.assign({}, HGCASH_DEFAULTS, raw || {});
     const b = req.body || {};
     const mode = (b.mode === 'auto') ? 'auto' : 'shadow';
     const windowMinutes = Math.min(1440, Math.max(1, parseInt(b.windowMinutes, 10) || cur.windowMinutes || 60));
@@ -21541,7 +21574,14 @@ app.post('/api/admin/hgcash/config', authMiddleware, adminMiddleware, async (req
         ? b.acceptStatuses.map(s => String(s).toLowerCase().trim()).filter(Boolean)
         : (cur.acceptStatuses || ['done'])
     };
+    // #1012: apagarlo o pasarlo a sombra (las cargas dejan de entrar solas) pide confirmación explícita y queda registrado quién.
+    const turningOff = !next.enabled || next.mode !== 'auto';
+    if (turningOff && b.confirmOff !== true) return res.status(409).json({ error: 'CONFIRM_OFF', message: 'Vas a dejar las cargas SIN acreditarse solas. Confirmá para guardar.' });
+    if (next.enabled && !String(next.accountName || next.cbu || '').trim()) return res.status(400).json({ error: 'Falta el NOMBRE de la cuenta (o el CBU): sin eso no se puede activar.' });
+    if (turningOff) next.manualOff = { by: req.user.username, at: new Date().toISOString() };
+    for (const k of ['duplicateGuardMinutes', 'minChargeARS']) if (cur[k] != null) next[k] = cur[k]; // no perder lo que el form no manda
     await setConfig('hgcash', next);
+    if (!turningOff) { try { await Config.set('hgcashLastGood', Object.assign({}, next, { savedAt: new Date().toISOString() }), req.user.username); } catch (_) {} }
     logger.info(`[hgcash] config actualizada por ${req.user.username}: enabled=${next.enabled} mode=${next.mode} cbu=${next.cbu ? '***' + String(next.cbu).slice(-4) : 'vacío'}`);
     res.json({ success: true, config: next });
   } catch (error) {
@@ -23390,7 +23430,7 @@ async function resolveHgcashAccountId({ force = false } = {}) {
         if (pick && pick.id) {
           // Cachear si cambió (o si veníamos de un accountId viejo).
           if (String(cfg.accountId || '') !== String(pick.id)) {
-            await setConfig('hgcash', Object.assign({}, cfg, { accountId: String(pick.id) }));
+            await _hgcashSetFields({ accountId: String(pick.id) }); // #1012: nunca reescribir el resto con defaults
             logger.info(`[hgcash] accountId resuelto vía API: ${pick.id} (${pick.currency || '?'}/${pick.status || '?'})`);
           }
           return String(pick.id);
