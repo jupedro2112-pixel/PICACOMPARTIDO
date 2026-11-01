@@ -14378,9 +14378,12 @@ async function _withdrawHoldOf(userId) {
 }
 async function _payoutHoldSupportNote(userId, username) {
   try {
-    const h = await _withdrawHoldOf(userId); if (!h) return;
-    const key = 'payoutHoldNote:' + userId; const last = _payoutHoldNoteAt.get(key) || 0;
-    if (Date.now() - last < 2 * 3600000) return; _payoutHoldNoteAt.set(key, Date.now());
+    // revisión #1010: primero el freno en memoria (sin ir a la base en cada mensaje); sin retiro ⇒ no se vuelve a mirar por 60 s.
+    const key = 'payoutHoldNote:' + userId; const last = _payoutHoldNoteAt.get(key) || 0; const nk = 'noHold:' + userId;
+    if (Date.now() - last < 2 * 3600000 || Date.now() - (_payoutHoldNoteAt.get(nk) || 0) < 60000) return;
+    if (_payoutHoldNoteAt.size > 20000) _payoutHoldNoteAt.clear();
+    const h = await _withdrawHoldOf(userId); if (!h) { _payoutHoldNoteAt.set(nk, Date.now()); return; }
+    _payoutHoldNoteAt.set(key, Date.now());
     const hora = new Date(h.since).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     await _emitAdminOnlyChatNote(userId, username, h.kind === 'review'
       ? `⏸️ ESTE CLIENTE TIENE UN RETIRO RETENIDO EN REVISIÓN: $${Number(h.amount).toLocaleString('es-AR')} (pedido ${hora}). Motivo: ${h.reason || 'sin detalle'}. Si pregunta por el pago: está en revisión de seguridad; se confirma o rechaza en Panel → Confirmación de pagos.`
@@ -22780,6 +22783,7 @@ setInterval(() => { _storiesRepeatTick().catch(() => {}); }, 60 * 60 * 1000);
 // Segunda carga: ofrece a los que hicieron UNA sola carga hace entre afterHours y afterHours+48 h; expira los vencidos.
 async function _secondDepositTick() {
   try {
+    if (!(await _cronClaim('seconddeposit', 8 * 60000))) return; // revisión #1010: una instancia por pasada
     const cfg = await getStrategyConfig(); const sd = cfg.secondDeposit; const now = new Date();
     await User.updateMany({ 'secondDepositOffer.status': 'offered', 'secondDepositOffer.expiresAt': { $lt: now } }, { $set: { 'secondDepositOffer.status': 'expired' } });
     if (!sd.enabled || !(sd.pct > 0)) return;
@@ -23593,8 +23597,8 @@ app.post('/api/admin/bank-low-balance', authMiddleware, adminMiddleware, async (
 });
 const SHIFT_HIGH_ARS = 100000;
 // #1010: retiros automáticos con señales (lo usan 👀 Para revisar y el Análisis semanal).
-async function _shiftPayouts(since, all) {
-  const pays = await PendingPayout.find({ status: 'paid', paidBy: PAYOUT_AUTO_ACTOR.username, paidAt: { $gte: since } }).sort({ paidAt: -1 }).limit(300)
+async function _shiftPayouts(since, all, until, max) {
+  const pays = await PendingPayout.find({ status: 'paid', paidBy: PAYOUT_AUTO_ACTOR.username, paidAt: until ? { $gte: since, $lt: until } : { $gte: since } }).sort({ paidAt: -1 }).limit(max || 300)
     .select('id userId username amount paidAt createdAt shiftReview').lean();
   const ids = [...new Set(pays.map((p) => p.userId).filter(Boolean))];
   const [users, deps, prevPaid] = await Promise.all([
@@ -27790,7 +27794,7 @@ async function _refundRemindPlan(kind, now) {
 async function _refundRemindRun(kind, plan, now) {
   const from = new Date(plan.r.fromEpoch * 1000), to = new Date(plan.r.toEpoch * 1000);
   const ids = await Transaction.distinct('userId', { type: 'deposit', status: { $nin: ['failed', 'cancelled'] }, 'metadata.source': { $nin: ['install_bonus', 'welcome_gift', 'welcome_code', 'payout_refund'] }, timestamp: { $gte: new Date(now.getTime() - plan.activeDays * 86400000) } });
-  const users = ids.length ? await User.find({ id: { $in: ids }, role: 'user', isActive: { $ne: false }, isBlocked: { $ne: true }, 'notifPrefs.level': { $ne: 'none' }, $or: [{ fcmToken: { $nin: [null, ''] } }, { 'fcmTokens.0': { $exists: true } }] }).select('id username fcmToken fcmTokens notifPrefs').lean() : [];
+  const users = ids.length ? await User.find({ id: { $in: ids }, role: 'user', isActive: { $ne: false }, isBlocked: { $ne: true } /* owner 2026-11-01: sale aunque haya elegido 'ninguno' */, $or: [{ fcmToken: { $nin: [null, ''] } }, { 'fcmTokens.0': { $exists: true } }] }).select('id username fcmToken fcmTokens notifPrefs').lean() : [];
   const claimed = new Set((await RefundClaim.find({ type: plan.kind, periodKey: plan.periodKey, userId: { $in: users.map((u) => u.id) } }).select('userId').lean()).map((c) => c.userId));
   const pending = users.filter((u) => !claimed.has(u.id)); const byName = new Map(pending.map((u) => [u.username, u]));
   const names = pending.map((u) => u.username);
@@ -27832,9 +27836,10 @@ async function _refundReminderTick() {
     for (const kind of ['daily', 'weekly', 'monthly', 'daily_last']) {
       const plan = await _refundRemindPlan(kind, now); if (!plan.due || !(plan.pct > 0) || slots[kind] === plan.slot) continue;
       if (kind === 'daily_last' && slots.daily !== plan.slot) continue; // el último aviso sólo después del primero del día
-      if (!claimed) { if (!(await _cronClaim('refundremind', 10 * 60000))) return; claimed = true; } // una instancia por pasada
+      if (!claimed) { if (!(await _cronClaim('refundremind', 60 * 60000))) return; claimed = true; } // una instancia por pasada (revisión: 60 min, el envío puede tardar)
+      const prevSlot = slots[kind]; slots[kind] = plan.slot; await Config.set('refundRemindLast', Object.assign({}, last, { slots }), 'system'); // revisión #1010: marcado ANTES de mandar (otra instancia no lo repite)
       const r = await _refundRemindRun(kind, plan, now);
-      if (r.error) { logger.warn('[reembolso-aviso] ' + kind + ': ' + r.error + ': se reintenta en la próxima pasada'); continue; }
+      if (r.error) { slots[kind] = prevSlot; await Config.set('refundRemindLast', Object.assign({}, last, { slots }), 'system'); logger.warn('[reembolso-aviso] ' + kind + ': ' + r.error + ': se reintenta en la próxima pasada'); continue; }
       slots[kind] = plan.slot; const kinds = Object.assign({}, last.kinds || {}); kinds[kind] = r;
       Object.assign(last, { day: _schedArtKey(now), at: now.toISOString(), kind, candidates: r.candidates, losers: r.losers, withRefund: r.withRefund, sent: r.sent, slots, kinds });
       await Config.set('refundRemindLast', last, 'system');
@@ -27857,13 +27862,15 @@ async function _rouletteNudgeTick(force) {
     const nc = await getNotifCenterConfig(); if (nc.rouletteReminder === false) return null;
     const today = _schedArtKey(now); const last = await getConfig('rouletteNudgeLast', null); if (!force && last && last.day === today) return null;
     const cfg = await getDailyRouletteConfig(); if (!cfg.enabled || !cfg.free || !cfg.free.enabled) return null;
-    if (!(await _cronClaim('roulettenudge', 15 * 60000))) return null;
+    if (!(await _cronClaim('roulettenudge', 60 * 60000))) return null;
     const since60 = new Date(now.getTime() - 60 * 86400000);
-    const agg = await Transaction.aggregate([{ $match: Object.assign({ userId: { $ne: null } }, SCHED_ADAPTER.realDepositMatch()) }, { $group: { _id: '$userId', n: { $sum: 1 }, last: { $max: '$timestamp' } } },
-      { $match: { n: { $gte: cfg.free.minDeposits }, last: { $gte: since60 } } }]);
-    const ids = agg.map((a) => a._id);
+    // revisión #1010: primero los que cargaron en 60 días (índice por fecha); la cuenta de la vida sólo para ellos y sólo si piden más de 1 carga.
+    const ids60 = (await Transaction.distinct('userId', Object.assign({ timestamp: { $gte: since60 } }, SCHED_ADAPTER.realDepositMatch()))).filter(Boolean);
+    const ids = cfg.free.minDeposits <= 1 || !ids60.length ? ids60 : (await Transaction.aggregate([{ $match: Object.assign({ userId: { $in: ids60 } }, SCHED_ADAPTER.realDepositMatch()) },
+      { $group: { _id: '$userId', n: { $sum: 1 } } }, { $match: { n: { $gte: cfg.free.minDeposits } } }])).map((a) => a._id);
+    const todayStart = new Date(today + 'T00:00:00-03:00');
     const users = ids.length ? await User.find({ id: { $in: ids }, role: 'user', isBlocked: { $ne: true }, isActive: { $ne: false }, duplicateOf: null, 'fraudFlags.0': { $exists: false },
-      'rouletteNudge.n': { $not: { $gte: 3 } } } /* owner 2026-11-01: sin filtro de Perfil → avisos */).select('id username fcmToken fcmTokens fcmTokenContext notifPrefs').lean() : [];
+      'rouletteNudge.n': { $not: { $gte: 3 } }, 'rouletteNudge.lastAt': { $not: { $gte: todayStart } } /* revisión: nunca dos veces el mismo día (multi-instancia) */ } /* owner 2026-11-01: sin filtro de Perfil → avisos */).select('id username fcmToken fcmTokens fcmTokenContext notifPrefs').lean() : [];
     const spun = new Set(await DailyRouletteSpin.distinct('userId', { dateKey: _rouletteDateKeyART(now) }));
     let cand = users.filter((u) => !spun.has(u.id) && (!cfg.requireAppInstalled || _rouletteHasAppInstalled(u)));
     const dayCounts = await _notifDayCounts(cand.map((u) => u.id), now); cand = cand.filter((u) => !(dayCounts.get(u.id) > 0));
@@ -28617,7 +28624,7 @@ async function _bizStalls(from, to) {
   };
 }
 async function _bizBoard(period, at) {
-  const now = at ? new Date(at) : new Date(); // at = fin del período (cierre semanal: lunes 00 h) const DAY = 86400000; const R = _bizRange(period, now);
+  const now = at ? new Date(at) : new Date(); const DAY = 86400000; const R = _bizRange(period, now); // at = fin del período (cierre semanal: lunes 00 h)
   const [cur, prev] = await Promise.all([_bizMoney(R.from, R.to), _bizMoney(R.pFrom, R.pTo)]);
   const money = Object.assign({}, cur, { prev, resultChg: businessBoard.chg(cur.result, prev.result), depositsChg: businessBoard.chg(cur.deposits, prev.deposits), depositorsChg: businessBoard.chg(cur.depositors, prev.depositors) });
   // RETENCIÓN: bloques de 7 días hacia atrás (0 = últimos 7 días) en las últimas 7 semanas.
@@ -28670,12 +28677,14 @@ async function _bizBoard(period, at) {
   // #1010 RULETA: giros del período (gratis / dorado), cuántos cargaron ese MISMO día después de girar y cuánto costó en plata.
   let roulette = null;
   try {
-    const rr = await DailyRouletteSpin.aggregate([{ $match: { spunAt: { $gte: R.from, $lt: R.to } } },
-      { $lookup: { from: Transaction.collection.name, let: { u: '$userId', t: '$spunAt', d: '$dateKey' }, pipeline: [
-        { $match: Object.assign({ $expr: { $and: [{ $eq: ['$userId', '$$u'] }, { $gte: ['$timestamp', '$$t'] }, { $lt: ['$timestamp', { $add: [{ $dateFromString: { dateString: { $concat: ['$$d', 'T00:00:00-03:00'] } } }, 86400000] }] }] } }, _BIZ_REAL) },
-        { $limit: 1 }, { $project: { _id: 1 } }], as: 'dep' } },
+    // revisión #1010: $lookup con localField (usa el índice userId de Transaction); base vieja ⇒ la misma cuenta con $expr.
+    const _rlPipe = (modern) => [{ $match: { spunAt: { $gte: R.from, $lt: R.to } } },
+      { $lookup: Object.assign({ from: Transaction.collection.name, as: 'dep' }, modern ? { localField: 'userId', foreignField: 'userId' } : {}, { let: { u: '$userId', t: '$spunAt', d: '$dateKey' }, pipeline: [
+        { $match: Object.assign({ $expr: { $and: (modern ? [] : [{ $eq: ['$userId', '$$u'] }]).concat([{ $gte: ['$timestamp', '$$t'] }, { $lt: ['$timestamp', { $add: [{ $dateFromString: { dateString: { $concat: ['$$d', 'T00:00:00-03:00'] } } }, 86400000] }] }]) } }, _BIZ_REAL) },
+        { $limit: 1 }, { $project: { _id: 1 } }] }) },
       { $group: { _id: { $ifNull: ['$mode', 'gold'] }, spins: { $sum: 1 }, users: { $addToSet: '$userId' }, depositedAfter: { $sum: { $cond: [{ $gt: [{ $size: '$dep' }, 0] }, 1, 0] } },
-        cash: { $sum: { $cond: [{ $eq: ['$status', 'credited'] }, '$prizeARS', 0] } }, pctWins: { $sum: { $cond: [{ $eq: ['$prizeType', 'percent'] }, 1, 0] } } } }]).allowDiskUse(true);
+        cash: { $sum: { $cond: [{ $eq: ['$status', 'credited'] }, '$prizeARS', 0] } }, pctWins: { $sum: { $cond: [{ $eq: ['$prizeType', 'percent'] }, 1, 0] } } } }];
+    let rr; try { rr = await DailyRouletteSpin.aggregate(_rlPipe(true)).allowDiskUse(true); } catch (_) { rr = await DailyRouletteSpin.aggregate(_rlPipe(false)).allowDiskUse(true); }
     const days = Math.max(1, Math.round((R.to - R.from) / DAY));
     const m = (k) => { const x = rr.find((r) => r._id === k) || { spins: 0, users: [], depositedAfter: 0, cash: 0, pctWins: 0 }; return { spins: x.spins, users: x.users.length, perDay: Math.round(x.spins / days), depositedAfter: x.depositedAfter, depositRate: x.spins ? x.depositedAfter / x.spins : null, cash: Math.round(x.cash), pctWins: x.pctWins }; };
     roulette = { free: m('free'), gold: m('gold'), days };
@@ -28686,12 +28695,14 @@ async function _bizBoard(period, at) {
   Object.assign(board, businessBoard.diagnose(board));
   return board;
 }
+const _bizInflight = new Map();
 app.get('/api/admin/inicio/negocio', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const period = ['week', 'month', '30d'].includes(String(req.query.period)) ? String(req.query.period) : 'month';
     const hit = _bizCache.get(period);
     if (hit && Date.now() - hit.at < 10 * 60000 && req.query.fresh !== '1') return res.json({ success: true, cached: true, board: hit.board });
-    const board = await _bizBoard(period); _bizCache.set(period, { at: Date.now(), board });
+    // revisión #1010: una sola cuenta a la vez por período (los demás esperan la misma).
+    const board = await (_bizInflight.get(period) || (() => { const p = _bizBoard(period).finally(() => _bizInflight.delete(period)); _bizInflight.set(period, p); return p; })()); _bizCache.set(period, { at: Date.now(), board });
     res.json({ success: true, board });
   } catch (e) { logger.error('[negocio] ' + e.message); res.status(500).json({ error: 'No se pudo armar el tablero: ' + e.message }); }
 });
@@ -28701,6 +28712,7 @@ app.get('/api/admin/inicio/negocio', authMiddleware, adminMiddleware, async (req
 // weekKey = lunes de esa semana, idempotente). El análisis en vivo se compara contra el último cierre y arma la evolución con todos.
 const BLOCK_WHAT = { block: 'bloqueado a mano', auto_block: 'bloqueado por el antifraude', watch: 'puesto en observación', auto_watch: 'en observación (antifraude)',
   payout_reject: 'retiro rechazado', payout_reject_block: 'retiro rechazado y bloqueado', unblock: 'desbloqueado', legit: 'marcado como legítimo' };
+let _waCache = {}, _waInflight = null;
 async function _weeklyAnalysisBuild(at) {
   const now = at ? new Date(at) : new Date(); const from = new Date(now.getTime() - 7 * 86400000); const W = { $gte: from, $lt: now };
   const board = await _bizBoard('week', now);
@@ -28710,7 +28722,7 @@ async function _weeklyAnalysisBuild(at) {
     BlockEvent.countDocuments({ createdAt: W, action: { $in: ['block', 'auto_block', 'payout_reject_block'] } }),
     BlockEvent.countDocuments({ createdAt: W, action: { $in: ['watch', 'auto_watch'] } }),
     BlockEvent.countDocuments({ createdAt: W, action: { $in: ['payout_reject', 'payout_reject_block'] } }),
-    _shiftPayouts(from, false).then((a) => a.filter((p) => !p.paidAt || new Date(p.paidAt) < now)),
+    _shiftPayouts(from, false, now, 3000), // revisión: toda la semana (antes 300 = contaba de menos)
     at ? null : getConfig('bankLowBalanceState', null),
     BlockEvent.find({ createdAt: W }).sort({ createdAt: -1 }).limit(200).select('username action reason by createdAt').lean(),
     PendingPayout.find({ 'shiftReview.verdict': 'suspicious', 'shiftReview.at': W }).select('username amount shiftReview').limit(50).lean(),
@@ -28752,7 +28764,10 @@ setTimeout(() => { _weeklyCloseTick().catch((e) => logger.warn('[cierre semanal]
 app.get('/api/admin/inicio/weekly-analysis', authMiddleware, adminMiddleware, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Sólo administradores' });
   try {
-    const { board, analysis } = await _weeklyAnalysisBuild(null); _bizCache.set('week', { at: Date.now(), board });
+    // revisión #1010: una sola cuenta a la vez (varios clics / varios admins esperan la misma) y se guarda 5 min (🔄 = fresh=1 recalcula).
+    const hit = _waCache.at && Date.now() - _waCache.at < 5 * 60000 && req.query.fresh !== '1' ? _waCache.v : null;
+    const { board, analysis } = hit || await (_waInflight || (_waInflight = _weeklyAnalysisBuild(null).then((v) => { _waCache = { at: Date.now(), v }; return v; }).finally(() => { _waInflight = null; })));
+    _bizCache.set('week', { at: _waCache.at || Date.now(), board });
     const closes = ((await getConfig('weeklyCloses', [])) || []).map((c) => ({ weekKey: c.weekKey, from: c.from, to: c.to, verdict: c.verdict, head: c.head, numbers: c.numbers }));
     res.json({ success: true, analysis, closes });
   } catch (e) { logger.error('[análisis semanal] ' + e.message); res.status(500).json({ error: 'No se pudo armar el análisis: ' + e.message }); }
@@ -28764,7 +28779,7 @@ app.get('/api/admin/inicio/weekly-closes/:weekKey', authMiddleware, adminMiddlew
 });
 app.post('/api/admin/inicio/weekly-closes/run', authMiddleware, adminMiddleware, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Sólo administradores' });
-  try { const c = await _weeklyCloseTick(true); res.json({ success: true, close: c }); } catch (e) { res.status(500).json({ error: 'No se pudo cerrar la semana: ' + e.message }); }
+  try { const c = await _weeklyCloseTick(true); if (!c) return res.status(409).json({ error: 'Ya se está cerrando la semana: probá de nuevo en unos minutos' }); _waCache = {}; res.json({ success: true, close: c }); } catch (e) { res.status(500).json({ error: 'No se pudo cerrar la semana: ' + e.message }); }
 });
 app.get('/api/admin/inicio/sorteos-stats', authMiddleware, adminMiddleware, async (req, res) => {
   try {
@@ -29233,9 +29248,9 @@ async function _notifDayCounts(ids, now) {
   const start = new Date(_schedArtKey(now || new Date()) + 'T00:00:00-03:00');
   const rows = await NotifBatch.aggregate([
     { $match: { sentAt: { $gte: start }, isPublic: { $ne: true }, 'recipients.userId': { $in: ids } } },
-    { $project: { recipients: { $filter: { input: '$recipients', as: 'r', cond: { $in: ['$$r.userId', ids] } } } } },
-    { $unwind: '$recipients' },
-    { $group: { _id: '$recipients.userId', n: { $sum: 1 } } }
+    { $project: { recipients: '$recipients.userId' } }, { $unwind: '$recipients' }, // revisión #1010: $match con $in (hash) en vez de $filter (lineal × destinatarios)
+    { $match: { recipients: { $in: ids } } },
+    { $group: { _id: '$recipients', n: { $sum: 1 } } }
   ]);
   return new Map(rows.map((r) => [r._id, r.n]));
 }
@@ -29244,9 +29259,9 @@ async function _notifMonthCounts(ids, now) {
   if (!ids.length) return new Map();
   const rows = await NotifBatch.aggregate([
     { $match: { sentAt: { $gte: _notifMonthStartART(now) }, isPublic: { $ne: true }, 'recipients.userId': { $in: ids } } },
-    { $project: { recipients: { $filter: { input: '$recipients', as: 'r', cond: { $in: ['$$r.userId', ids] } } } } },
-    { $unwind: '$recipients' },
-    { $group: { _id: '$recipients.userId', n: { $sum: 1 } } }
+    { $project: { recipients: '$recipients.userId' } }, { $unwind: '$recipients' }, // revisión #1010: $match con $in (hash) en vez de $filter (lineal × destinatarios)
+    { $match: { recipients: { $in: ids } } },
+    { $group: { _id: '$recipients', n: { $sum: 1 } } }
   ]);
   return new Map(rows.map((r) => [r._id, r.n]));
 }

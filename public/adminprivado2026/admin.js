@@ -6460,7 +6460,7 @@ async function shiftReviewMark(kind, id, verdict) {
 }
 async function loadPayReview() {
     try { atencionAnalisis('pay'); } catch (_) {} // #750
-    try { loadShiftReview(); } catch (_) {} // #1010
+    try { if (Date.now() - (window._shiftAutoAt || 0) > 15000) { window._shiftAutoAt = Date.now(); loadShiftReview(); } } catch (_) {} // #1010 (revisión: como mucho cada 15 s por los avisos en vivo)
     const box = document.getElementById('payReviewList'); if (!box) return;
     try {
         const r = await authFetch('/api/admin/payouts/review'); const j = await r.json();

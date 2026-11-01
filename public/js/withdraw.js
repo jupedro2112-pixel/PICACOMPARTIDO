@@ -435,7 +435,7 @@ VIP.withdraw = (function () {
     let _holdTimer = null;
     async function loadHold() {
         try {
-            if (!(VIP.state && VIP.state.currentToken)) return;
+            if (!(VIP.state && VIP.state.currentToken) || document.hidden) return; // revisión #1010: no consultar con la app en segundo plano
             const r = await fetch(`${VIP.config.API_URL}/api/withdrawal/hold`, { headers: { 'Authorization': `Bearer ${VIP.state.currentToken}` } });
             const j = await r.json().catch(() => ({}));
             _paintHold(j && j.hold);

@@ -13085,3 +13085,16 @@ la app pueda expandir todo lo que ya tenemos; el chat con el mismo formato y fon
   **Cierre semanal** automático cada lunes 06 h ART (`_weeklyCloseTick`, `Config['weeklyCloses']`, 52 semanas) con tabla comparativa y "Ver" de
   cada cierre; botón "Cerrar semana pasada ahora". `_bizBoard(period, at)` acepta fin de período; `_shiftPayouts` extraído de 👀 Para revisar.
   Tests 14/14 en test-business-board. Admin SW v228.
+- Owner: "revisá todo, que la página funcione rápida y no haya trabas con mucha información". REVISIÓN DE VELOCIDAD + ROTURAS, corregido:
+  - 🔴 `_bizBoard`: un comentario se había comido `DAY`/`R` en el commit anterior ⇒ Negocio, el Análisis semanal y el cierre semanal daban error. Arreglado.
+  - Negocio y Análisis semanal: una sola cuenta a la vez (varios clics / admins esperan la misma: `_bizInflight`, `_waInflight`) y el análisis se
+    guarda 5 min (`_waCache`); "Cerrar semana pasada ahora" responde 409 si ya se está cerrando.
+  - Ruleta en Negocio: `$lookup` con localField (índice) + respaldo `$expr`. `_notifDayCounts`/`_notifMonthCounts`: `$unwind`+`$match $in` (hash)
+    en vez de `$filter` lineal.
+  - Aviso del giro gratis: candidatos por cargas de 60 días (antes toda la historia), nunca dos veces el mismo día (`rouletteNudge.lastAt`), lock 60 min.
+    Aviso de reembolso: el turno se marca ANTES de mandar (otra instancia no lo repite; si falla se desmarca), lock 60 min, sin filtro de Perfil.
+  - `_secondDepositTick` con `_cronClaim`. Índices nuevos: User `secondDepositOffer.status+expiresAt`, `secondDepositOffer.offeredAt`, `duplicateOf.at`;
+    PendingPayout `shiftReview.at`.
+  - Nota del retiro retenido en el chat: freno en memoria ANTES de ir a la base (+60 s sin retiro). PWA: el cartel no consulta con la app en segundo
+    plano (v658). Panel: Para revisar se recarga como mucho cada 15 s (admin SW v229). Análisis: cuenta TODOS los retiros de la semana (antes 300).
+

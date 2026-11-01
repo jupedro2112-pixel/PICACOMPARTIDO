@@ -828,6 +828,10 @@ userSchema.index({ 'fcmTokens.token': 1 });
 // Audiencias de recuperación/inactividad y cron de reglas (cada 5 min):
 // countDocuments/find por role + rango de lastLogin.
 userSchema.index({ role: 1, lastLogin: 1 });
+// #1010 (revisión de velocidad): vencimiento de la oferta de 2ª carga (cron cada 10 min), análisis semanal (ofertas y cuentas secundarias de la semana).
+userSchema.index({ 'secondDepositOffer.status': 1, 'secondDepositOffer.expiresAt': 1 });
+userSchema.index({ 'secondDepositOffer.offeredAt': 1 }, { sparse: true });
+userSchema.index({ 'duplicateOf.at': 1 }, { sparse: true });
 
 // Virtual para verificar si es admin
 userSchema.virtual('isAdmin').get(function() {
