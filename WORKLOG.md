@@ -8,6 +8,11 @@
 
 ## Sesión 2026-11-01
 
+### 1005. Pagos a confirmar: botón "🏦 Ya lo pagué a mano" (2026-11-01)
+- Antes decía "Pagado por banco externo" y los agentes no lo usaban cuando la transferencia salía a mano del MISMO banco (falló la API).
+  El botón es el mismo (`payReviewOtherBank` → `payViaPick`): pregunta desde dónde salió (mismo banco a mano / cuenta secundaria / otro
+  banco). Admin SW v219.
+
 ### 1004. 🪞 JUEGO ESPEJO entre cuentas SIN vínculo (2026-11-01)
 - Owner: "hay usuarios que repiten una apuesta, uno gana y otro pierde; hay que analizar todo el panel según lo apostado, no sólo
   ganadores: cuando quieren estafar 1 o 2 pierden y otro gana con el bono".

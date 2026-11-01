@@ -6413,7 +6413,7 @@ async function loadPayReview() {
                 (rk.fraudNotes && rk.fraudNotes.length ? '<div style="color:#888;font-size:11px;">' + rk.fraudNotes.map(function (n) { return escapeHtml(n.note || ''); }).join(' · ') + '</div>' : '') +
                 '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">' +
                 '<button type="button" class="btn-primary btn-small" onclick="payReviewApprove(\'' + p.id + '\')">✅ Confirmar y pagar</button>' +
-                '<button type="button" class="btn-secondary btn-small" onclick="payReviewOtherBank(\'' + p.id + '\')" title="Ya lo pagaste desde otra cuenta: descuenta las fichas y lo marca pagado (no sale por el banco automático)">🏦 Pagado por banco externo</button>' + // #904
+                '<button type="button" class="btn-secondary btn-small" onclick="payReviewOtherBank(\'' + p.id + '\')" title="Ya hiciste la transferencia A MANO (mismo banco porque falló la API, una cuenta secundaria u otro banco): descuenta las fichas y lo marca pagado; te pregunta desde dónde salió">🏦 Ya lo pagué a mano</button>' + // #904
                 '<button type="button" class="btn-secondary btn-small" onclick="payReviewReject(\'' + p.id + '\')" style="color:#ff8080;">⛔ Rechazar</button>' +
                 '<button type="button" class="btn-secondary btn-small" onclick="payReviewRejectBlock(\'' + p.id + '\')" style="color:#fff;background:#b3001b;border-color:#b3001b;" title="Rechaza el retiro y bloquea la cuenta (cierra la sesión). Queda en el historial con tu usuario y el motivo.">🚫 Rechazar y bloquear</button>' + // #996
                 '<button type="button" class="btn-secondary btn-small" onclick="try{viewUserChat(\'' + p.userId + '\')}catch(e){showSection(\'chats\')}">💬 Ver chat</button>' +
