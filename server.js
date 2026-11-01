@@ -1075,6 +1075,20 @@ app.use('/adminprivado2026/', adminHostCheck, (req, res) => {
   res.status(404).send('Not found');
 });
 
+// #1013 OFICINA: página aparte (mismo login del panel, misma cookie /api). Sólo index.html y oficina.js por handler; todo lo demás 404.
+app.get(['/oficina', '/oficina/'], adminHostCheck, (req, res) => {
+  const content = readFileCached(path.join(__dirname, 'public', 'oficina', 'index.html'));
+  if (!content) return res.status(500).send('Error');
+  res.setHeader('Content-Type', 'text/html'); res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
+  res.send(content);
+});
+app.get('/oficina/oficina.js', adminHostCheck, (req, res) => {
+  const content = readFileCached(path.join(__dirname, 'public', 'oficina', 'oficina.js'));
+  if (!content) return res.status(404).send('Not found');
+  res.setHeader('Content-Type', 'application/javascript'); res.setHeader('Cache-Control', 'no-store'); res.send(content);
+});
+app.use('/oficina/', adminHostCheck, (req, res) => { res.status(404).send('Not found'); });
+
 // Slugifier para matching de vanity URL contra publisher names. Convierte
 // "Juan Pérez" → "juan-perez". Quita acentos, espacios → guion, normaliza
 // case y limpia caracteres especiales. Idempotente.
@@ -28855,6 +28869,245 @@ app.get('/api/admin/inicio/weekly-closes/:weekKey', authMiddleware, adminMiddlew
 app.post('/api/admin/inicio/weekly-closes/run', authMiddleware, adminMiddleware, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Sólo administradores' });
   try { const c = await _weeklyCloseTick(true); if (!c) return res.status(409).json({ error: 'Ya se está cerrando la semana: probá de nuevo en unos minutos' }); _waCache = {}; res.json({ success: true, close: c }); } catch (e) { res.status(500).json({ error: 'No se pudo cerrar la semana: ' + e.message }); }
+});
+
+// ============================================================
+// #1013 OFICINA — página aparte /oficina (owner 2026-11-01: "una oficina con un puesto en cada uno y un trabajo dentro de las 24 hs a cada
+// uno… en otra página… con formato interactivo que se vea cómo trabajan"). Cada puesto = analista automático (services/office.js, reglas sobre
+// los números de las últimas 24 h) + la/s persona/s asignada/s que tildan sus tareas del día. Guardado: OfficeDay (informe + tareas por puesto y
+// día ART; se rehace a las 07 h y cada 6 h conservando lo tildado), Config['officeConfig'] { desks: { key: { people: [{username, shift}],
+// extraTasks } } }, Config['officePresence'] { usernameCodificado: { at, desk, username } } (quién está conectado). Admin: todo, con la clave de INICIO
+// (/api/admin/inicio/office*). Staff: sólo sus puestos (/api/admin/office/*). Sólo LEE el negocio; escribe tareas, presencia y el gasto en pauta
+// (Config['adSpend'], el mismo de Datos IA).
+// ============================================================
+const OfficeDay = require('./src/models/OfficeDay');
+const office = require('./src/services/office');
+const OFFICE_SHIFTS = ['mañana', 'tarde', 'noche', 'completo'];
+const OFFICE_STAFF_ROLES = ['admin', 'depositor', 'withdrawer', 'comunidad'];
+const _offKey = (u) => encodeURIComponent(String(u || '')).replace(/\./g, '%2E'); // claves de Mongo sin puntos
+async function getOfficeConfig() {
+  const c = (await getConfig('officeConfig', null)) || {}; const desks = {};
+  for (const k of office.DESK_KEYS) {
+    const x = (c.desks || {})[k] || {};
+    desks[k] = { people: (Array.isArray(x.people) ? x.people : []).filter((p) => p && p.username).slice(0, 6).map((p) => ({ username: String(p.username).slice(0, 60), shift: OFFICE_SHIFTS.includes(p.shift) ? p.shift : 'completo' })),
+      extraTasks: (Array.isArray(x.extraTasks) ? x.extraTasks : []).map((t) => String(t).trim().slice(0, 200)).filter(Boolean).slice(0, 15) };
+  }
+  return { desks };
+}
+function _officeDesksOf(cfg, username) { return office.DESK_KEYS.filter((k) => cfg.desks[k].people.some((p) => p.username === username)); }
+async function _officeGather(now) {
+  const DAY = 86400000; const from = new Date(now.getTime() - DAY); const W = { $gte: from, $lt: now };
+  const todayKey = _schedArtKey(now), yKey = _schedArtKey(new Date(now.getTime() - DAY));
+  const safe = async (p, dflt) => { try { return await p; } catch (e) { logger.warn('[oficina] ' + e.message); return dflt; } };
+  const [money, prevMoney, monthMoney, stalls] = await Promise.all([_bizMoney(from, now), safe(_bizMoney(new Date(from.getTime() - DAY), from), {}),
+    safe(_bizMoney(new Date(todayKey.slice(0, 7) + '-01T00:00:00-03:00'), now), {}), safe(_bizStalls(from, now), {})]);
+  // SISTEMA
+  const t0 = Date.now(); await safe(Config.findOne({ key: 'officeConfig' }).select('_id').lean(), null); const dbMs = Date.now() - t0;
+  const hg = (await safe(_hgcashConfigStrict(), null)) || {};
+  const diag = (await safe(mongoose.connection.collection('hgcash_webhook_diag').findOne({ _id: todayKey }), null)) || {};
+  const sys = { giroxOk: girox.isEnabled(), hgcashToken: hgcashPay.isEnabled(), hgcashEnabled: hg.enabled === true, hgcashMode: hg.mode || 'shadow', aiOk: comprobanteAi.isEnabled(), dbMs, webhookLastOkAt: diag.lastOkAt || null, pollError: diag.lastPollError || null };
+  // BANCO
+  const bl = (await safe(getConfig('bankLowBalanceState', null), null)) || {}; const outage = (await safe(getBankOutage(), null)) || {};
+  const lastClose = await safe(DailyClose.findOne({ dateKey: { $lt: todayKey } }).sort({ dateKey: -1 }).select('dateKey check').lean(), null);
+  const [failedPayouts, unresolved] = await Promise.all([
+    safe(PendingPayout.countDocuments({ status: 'failed', createdAt: { $gte: new Date(now.getTime() - 15 * DAY) } }), 0),
+    safe(BankMovement.countDocuments({ direction: { $regex: /^inbound$/i }, matchStatus: { $in: ['needs_review', 'no_match'] }, createdAt: { $gte: new Date(now.getTime() - 3 * DAY) } }), 0)]);
+  const bank = { balance: bl.balance != null ? bl.balance : null, minArs: bl.minArs || 0, low: !!bl.low, outage: !!outage.active, failedPayouts, unresolved,
+    lastCloseKey: lastClose ? lastClose.dateKey : null, lastCloseOk: lastClose && lastClose.check ? lastClose.check.estado === 'ok' : null };
+  // SEGURIDAD
+  const bev = await safe(BlockEvent.find({ createdAt: W }).sort({ createdAt: -1 }).limit(300).select('username action reason createdAt').lean(), []);
+  const cnt = (acts) => bev.filter((e) => acts.includes(e.action)).length;
+  const shiftP = await safe(_shiftPayouts(from, false, now, 500), []);
+  const [dups, watchingNow, heldAntifraud, suspicious] = await Promise.all([
+    safe(User.countDocuments({ role: 'user', 'duplicateOf.at': W }), 0), safe(User.countDocuments({ role: 'user', 'fraudReview.status': 'watch' }), 0),
+    safe(PendingPayout.countDocuments({ status: 'pending_review', reviewRequired: true, createdAt: { $gte: new Date(now.getTime() - 15 * DAY) } }), 0),
+    safe(PendingPayout.countDocuments({ 'shiftReview.verdict': 'suspicious', 'shiftReview.at': W }), 0)]);
+  const sec = { blocks: cnt(['block', 'auto_block', 'payout_reject_block']), autoBlocks: cnt(['auto_block']), watches: cnt(['watch', 'auto_watch']), rejects: cnt(['payout_reject', 'payout_reject_block']),
+    dups, watchingNow, heldAntifraud, suspicious, unreviewedFlagged: shiftP.filter((p) => !p.review).length,
+    recent: bev.slice(0, 8).map((e) => ({ username: e.username, what: BLOCK_WHAT[e.action] || e.action, reason: e.reason || '' })) };
+  // ATENCIÓN
+  const [openChats, waiting, oldestW, delays, pendingReceipts, oldestR, guestsOpen] = await Promise.all([
+    safe(ChatStatus.countDocuments({ status: 'open' }), 0), safe(ChatStatus.countDocuments({ pendingSince: { $ne: null } }), 0),
+    safe(ChatStatus.findOne({ pendingSince: { $ne: null } }).sort({ pendingSince: 1 }).select('pendingSince').lean(), null),
+    safe(ChatDelay.aggregate([{ $match: { userMessageAt: W } }, { $group: { _id: '$status', n: { $sum: 1 }, avg: { $avg: '$delaySeconds' } } }]), []),
+    safe(Comprobante.countDocuments({ isComprobante: true, reviewStatus: 'pending', createdAt: { $gte: new Date(now.getTime() - 7 * DAY) } }), 0),
+    safe(Comprobante.findOne({ isComprobante: true, reviewStatus: 'pending', createdAt: { $gte: new Date(now.getTime() - 7 * DAY) } }).sort({ createdAt: 1 }).select('createdAt').lean(), null),
+    safe(GuestThread.countDocuments({ status: 'open', lastFrom: 'guest' }), 0)]);
+  const dl = (k) => delays.find((x) => x._id === k) || { n: 0, avg: null };
+  const support = { openChats, waiting, oldestWaitMin: oldestW ? (now - new Date(oldestW.pendingSince)) / 60000 : null, delays24: dl('responded').n + dl('unanswered').n,
+    avgDelayMin: dl('responded').avg != null ? dl('responded').avg / 60 : null, unanswered24: dl('unanswered').n, pendingReceipts, oldestReceiptMin: oldestR ? (now - new Date(oldestR.createdAt)) / 60000 : null, guestsOpen };
+  // MARKETING
+  const spendArr = (await safe(getConfig('adSpend', []), [])) || [];
+  const yNoon = new Date(yKey + 'T12:00:00-03:00');
+  const firstDepsSince = async (since) => {
+    const ids = await Transaction.distinct('userId', Object.assign({ timestamp: { $gte: since, $lt: now } }, _BIZ_REAL)); if (!ids.length) return [];
+    const rows = await Transaction.aggregate([{ $match: Object.assign({ userId: { $in: ids } }, _BIZ_REAL) }, { $group: { _id: '$userId', first: { $min: '$timestamp' } } }, { $match: { first: { $gte: since } } }]).allowDiskUse(true);
+    return rows.map((r) => r._id);
+  };
+  const [spendY, spend7, fd24, fd7, regs] = await Promise.all([safe(_diaSpendFor(yNoon, yNoon, null), 0), safe(_diaSpendFor(new Date(now.getTime() - 7 * DAY), now, null), 0),
+    safe(firstDepsSince(from), []), safe(firstDepsSince(new Date(now.getTime() - 7 * DAY)), []), safe(User.find({ role: 'user', createdAt: W }).select('id acquisitionCampaign referredByUserId').lean(), [])]);
+  const fdU = fd24.length ? await safe(User.find({ id: { $in: fd24 } }).select('id acquisitionCampaign referredByUserId').lean(), []) : [];
+  const campOf = (u) => u.acquisitionCampaign ? String(u.acquisitionCampaign).toUpperCase() : (u.referredByUserId ? 'REFERIDOS' : 'ORGÁNICO');
+  const bc = new Map(); const bump = (u, f) => { const k = campOf(u); const c = bc.get(k) || { campaign: k, registered: 0, firstDeps: 0 }; c[f]++; bc.set(k, c); };
+  regs.forEach((u) => bump(u, 'registered')); fdU.forEach((u) => bump(u, 'firstDeps'));
+  const mkt = { yesterdayKey: yKey, spendYesterday: spendY, spendYesterdayLoaded: spendArr.some((e) => e && e.from <= yKey && e.to >= yKey), spend7,
+    registered24: regs.length, firstDeps24: fd24.length, firstDeps7: fd7.length, byCampaign24: [...bc.values()].sort((a, b) => b.registered - a.registered) };
+  // RECONTACTO: 2+ cargas reales, la última hace 5 a 30 días; los que más cargaron primero; sin bloqueados, secundarias ni recontactados en 7 días.
+  const rc = await safe(Transaction.aggregate([{ $match: Object.assign({ timestamp: { $gte: new Date(now.getTime() - 120 * DAY) } }, _BIZ_REAL) },
+    { $group: { _id: '$userId', n: { $sum: 1 }, total: { $sum: '$amount' }, last: { $max: '$timestamp' } } },
+    { $match: { n: { $gte: 2 }, last: { $lt: new Date(now.getTime() - 5 * DAY), $gte: new Date(now.getTime() - 30 * DAY) } } },
+    { $facet: { cooling: [{ $match: { last: { $gte: new Date(now.getTime() - 14 * DAY) } } }, { $count: 'n' }], lost: [{ $match: { last: { $lt: new Date(now.getTime() - 14 * DAY) } } }, { $count: 'n' }], top: [{ $sort: { total: -1 } }, { $limit: 80 }] } }]).allowDiskUse(true), [{}]);
+  const rf = rc[0] || {}; const top = rf.top || [];
+  const done7 = (await safe(getConfig('officeRecontacted', null), null)) || {};
+  const ru = top.length ? await safe(User.find({ id: { $in: top.map((x) => x._id) } }).select('id username isBlocked duplicateOf fcmToken fcmTokens').lean(), []) : [];
+  const RU = new Map(ru.map((u) => [u.id, u])); const list = [];
+  for (const x of top) {
+    const u = RU.get(x._id); if (!u || u.isBlocked || (u.duplicateOf && u.duplicateOf.at)) continue;
+    const at = done7[_offKey(u.username)]; if (at && now - new Date(at) < 7 * DAY) continue;
+    list.push({ username: u.username, deposits: x.n, total: Math.round(x.total), lastDays: Math.floor((now - new Date(x.last)) / DAY), hasApp: !!(u.fcmToken || (u.fcmTokens && u.fcmTokens.length)) });
+    if (list.length >= 15) break;
+  }
+  const recon = { cooling: ((rf.cooling || [])[0] || {}).n || 0, lost: ((rf.lost || [])[0] || {}).n || 0, list };
+  // CONTENIDO
+  const st24 = await safe(Story.find({ publishedAt: W, audienceUserId: null }).select('title text views clicks reactions autoKey').lean(), []);
+  const best = await safe(Story.findOne({ publishedAt: { $gte: new Date(now.getTime() - 7 * DAY) }, audienceUserId: null, views: { $gt: 0 } }).sort({ clicks: -1, views: -1 }).select('title text views clicks').lean(), null);
+  const sd = (await safe(getConfig('storyAutoDiag', null), null)) || {};
+  const reacts = (r) => Object.values(r || {}).reduce((a, v) => a + (Number(v) || 0), 0);
+  const content = { stories24: st24.map((s) => ({ title: s.title || String(s.text || '').slice(0, 40), views: s.views || 0, clicks: s.clicks || 0, reactions: reacts(s.reactions), auto: !!s.autoKey })).sort((a, b) => b.views - a.views),
+    best7: best ? { title: best.title || String(best.text || '').slice(0, 40), views: best.views || 0, clicks: best.clicks || 0 } : null,
+    paid24: { n: money.withdrawalCount || 0, total: money.withdrawals || 0 }, tomorrowDow: new Date(now.getTime() + DAY - SCHED_ART_OFFSET_MS).getUTCDay(),
+    autoErr: sd.lastError && sd.lastTickAt && now - new Date(sd.lastTickAt) < DAY ? sd.lastError : null };
+  // PROMOS
+  const W7 = { $gte: new Date(now.getTime() - 7 * DAY), $lt: now };
+  const [freeSpins24, secondOffered7, secondUsed7] = await Promise.all([safe(DailyRouletteSpin.countDocuments({ spunAt: W, mode: 'free' }), 0),
+    safe(User.countDocuments({ role: 'user', 'secondDepositOffer.offeredAt': W7 }), 0), safe(User.countDocuments({ role: 'user', 'secondDepositOffer.offeredAt': W7, 'secondDepositOffer.status': 'used' }), 0)]);
+  const promo = { monthGiftRatio: monthMoney.giftRatio != null ? monthMoney.giftRatio : null, freeSpins24, secondOffered7, secondUsed7 };
+  return { now, money, prevMoney, stalls, sys, bank, sec, support, mkt, recon, content, promo };
+}
+let _officeInflight = null;
+function _officeBuild() {
+  if (_officeInflight) return _officeInflight;
+  _officeInflight = (async () => {
+    const now = new Date(); const dk = _schedArtKey(now), yk = _schedArtKey(new Date(now.getTime() - 86400000));
+    const [d, cfg, prevDocs] = await Promise.all([_officeGather(now), getOfficeConfig(), OfficeDay.find({ dateKey: yk }).select('desk tasks').lean()]);
+    const prevDone = {}; for (const x of prevDocs) { const t = (x.tasks || []).filter((y) => !y.stale); prevDone[x.desk] = { done: t.filter((y) => y.done).length, total: t.length }; }
+    const reps = office.buildAll(d, prevDone);
+    for (const k of office.DESK_KEYS) {
+      const rep = reps[k]; if (!rep) continue;
+      const own = cfg.desks[k].extraTasks.map((t) => ({ id: office.taskId(k + '|p|' + t), text: t, kind: 'propia' }));
+      const report = Object.assign({}, rep); delete report.tasks;
+      const cur = await OfficeDay.findOne({ dateKey: dk, desk: k }).select('tasks').lean(); // recién ahora: lo tildado mientras se calculaba no se pierde
+      const tasks = office.mergeTasks((cur && cur.tasks) || [], rep.tasks.concat(own));
+      try { await OfficeDay.updateOne({ dateKey: dk, desk: k }, { $set: { report, tasks, builtAt: now }, $setOnInsert: { createdAt: now } }, { upsert: true }); } catch (e) { if (!(e && e.code === 11000)) throw e; }
+    }
+    logger.info(`[oficina] informes del ${dk} armados en ${Date.now() - now.getTime()} ms`);
+    return dk;
+  })().finally(() => { _officeInflight = null; });
+  return _officeInflight;
+}
+async function _officeTick() {
+  try {
+    const now = new Date(); if (new Date(now.getTime() - SCHED_ART_OFFSET_MS).getUTCHours() < 7) return; // de 07 a 24 h ART
+    const last = await OfficeDay.findOne({ dateKey: _schedArtKey(now), desk: 'direccion' }).select('builtAt').lean();
+    if (last && last.builtAt && now - new Date(last.builtAt) < 6 * 3600000) return;
+    if (!(await _cronClaim('office', 10 * 60000))) return;
+    try { await _officeBuild(); } finally { _cronRelease('office'); }
+  } catch (e) { logger.warn('[oficina] ' + e.message); }
+}
+setTimeout(() => { _officeTick(); setInterval(() => { _officeTick(); }, 15 * 60000); }, 4 * 60000);
+async function _officeView(dk, deskKeys, isAdmin) {
+  let docs = await OfficeDay.find({ dateKey: dk, desk: { $in: deskKeys } }).lean();
+  if (!docs.length && dk === _schedArtKey(new Date())) { await _officeBuild(); docs = await OfficeDay.find({ dateKey: dk, desk: { $in: deskKeys } }).lean(); }
+  const cfg = await getOfficeConfig(); const pres = (await getConfig('officePresence', null)) || {}; const now = Date.now();
+  const D = new Map(docs.map((x) => [x.desk, x]));
+  const desks = deskKeys.map((k) => {
+    const meta = office.DESKS.find((x) => x.key === k); const doc = D.get(k) || {}; const tasks = (doc.tasks || []);
+    const people = cfg.desks[k].people.map((p) => { const pr = pres[_offKey(p.username)]; const at = pr && pr.at ? new Date(pr.at).getTime() : 0; return Object.assign({}, p, { online: now - at < 3 * 60000, lastAt: at ? new Date(at) : null, here: !!(pr && pr.desk === k && now - at < 3 * 60000) }); });
+    const live = tasks.filter((t) => !t.stale);
+    return { key: k, icon: meta.icon, name: meta.name, mission: meta.mission, staffing: meta.staffing, people, report: doc.report || null, tasks, builtAt: doc.builtAt || null,
+      progress: { done: live.filter((t) => t.done).length, total: live.length }, extraTasks: isAdmin ? cfg.desks[k].extraTasks : undefined };
+  });
+  const feed = [];
+  for (const x of docs) for (const t of x.tasks || []) if (t.done && t.doneAt) feed.push({ desk: x.desk, icon: (office.DESKS.find((y) => y.key === x.desk) || {}).icon, text: t.text, by: t.doneBy, at: t.doneAt, note: t.note || '' });
+  feed.sort((a, b) => new Date(b.at) - new Date(a.at));
+  return { date: dk, today: _schedArtKey(new Date()), desks, feed: feed.slice(0, 40) };
+}
+const _offDate = (q) => (/^\d{4}-\d{2}-\d{2}$/.test(String(q || '')) ? String(q) : _schedArtKey(new Date()));
+// Dueño / admin: toda la oficina (clave de INICIO).
+app.get('/api/admin/inicio/office', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const v = await _officeView(_offDate(req.query.date), ['direccion'].concat(office.DESK_KEYS.filter((k) => k !== 'direccion')), true);
+    const staff = await User.find({ role: { $in: OFFICE_STAFF_ROLES } }).select('username role').sort({ username: 1 }).limit(300).lean();
+    res.set('Cache-Control', 'no-store'); res.json(Object.assign({ success: true, admin: true, staff: staff.map((u) => ({ username: u.username, role: u.role })) }, v));
+  } catch (e) { logger.error('[oficina] ' + e.message); res.status(500).json({ error: 'No se pudo armar la oficina: ' + e.message }); }
+});
+app.post('/api/admin/inicio/office/rebuild', authMiddleware, adminMiddleware, async (req, res) => {
+  try { if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' }); await _officeBuild(); res.json({ success: true }); }
+  catch (e) { res.status(500).json({ error: 'No se pudo rehacer: ' + e.message }); }
+});
+app.post('/api/admin/inicio/office/config', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const b = req.body || {}; const k = String(b.desk || ''); if (!office.DESK_KEYS.includes(k)) return res.status(400).json({ error: 'Puesto inválido' });
+    const cfg = await getOfficeConfig(); const cur = cfg.desks[k];
+    if (Array.isArray(b.people)) {
+      const names = [...new Set(b.people.map((p) => String((p && p.username) || '').trim()).filter(Boolean))].slice(0, 6);
+      const ok = new Set((await User.find({ username: { $in: names }, role: { $in: OFFICE_STAFF_ROLES } }).select('username').lean()).map((u) => u.username));
+      const bad = names.filter((n) => !ok.has(n)); if (bad.length) return res.status(400).json({ error: 'No son del equipo (o no existen): ' + bad.join(', ') });
+      cur.people = names.map((n) => { const p = b.people.find((x) => String(x.username).trim() === n) || {}; return { username: n, shift: OFFICE_SHIFTS.includes(p.shift) ? p.shift : 'completo' }; });
+    }
+    if (Array.isArray(b.extraTasks)) cur.extraTasks = b.extraTasks.map((t) => String(t).trim().slice(0, 200)).filter(Boolean).slice(0, 15);
+    await Config.set('officeConfig', cfg, req.user.username);
+    res.json({ success: true, desk: cur });
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+// Equipo: sus puestos (y el admin también puede usarla para tildar sin clave).
+app.get('/api/admin/office/mine', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const cfg = await getOfficeConfig(); const mine = _officeDesksOf(cfg, req.user.username);
+    if (!mine.length) return res.json({ success: true, admin: req.user.role === 'admin', me: req.user.username, desks: [], feed: [], date: _schedArtKey(new Date()), today: _schedArtKey(new Date()) });
+    const v = await _officeView(_offDate(req.query.date), mine, false);
+    res.set('Cache-Control', 'no-store'); res.json(Object.assign({ success: true, admin: req.user.role === 'admin', me: req.user.username }, v));
+  } catch (e) { logger.error('[oficina] mine ' + e.message); res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.post('/api/admin/office/ping', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const desk = office.DESK_KEYS.includes(String((req.body || {}).desk)) ? String(req.body.desk) : null;
+    await Config.collection.updateOne({ key: 'officePresence' }, { $set: { ['value.' + _offKey(req.user.username)]: { at: new Date(), desk, username: req.user.username }, updatedAt: new Date() } }, { upsert: true });
+    try { Config._cache && Config._cache.delete('officePresence'); } catch (_) {}
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: 'Error' }); }
+});
+app.post('/api/admin/office/task', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const b = req.body || {}; const desk = String(b.desk || ''); const dk = _offDate(b.date);
+    if (!office.DESK_KEYS.includes(desk)) return res.status(400).json({ error: 'Puesto inválido' });
+    const today = _schedArtKey(new Date()), yest = _schedArtKey(new Date(Date.now() - 86400000)); if (dk !== today && dk !== yest) return res.status(400).json({ error: 'Sólo se pueden tildar tareas de hoy o de ayer' });
+    if (req.user.role !== 'admin' && !_officeDesksOf(await getOfficeConfig(), req.user.username).includes(desk)) return res.status(403).json({ error: 'No es tu puesto' });
+    const set = {}; if (typeof b.done === 'boolean') { set['tasks.$.done'] = b.done; set['tasks.$.doneBy'] = b.done ? req.user.username : null; set['tasks.$.doneAt'] = b.done ? new Date() : null; }
+    if (typeof b.note === 'string') set['tasks.$.note'] = b.note.slice(0, 500);
+    if (!Object.keys(set).length) return res.status(400).json({ error: 'Nada para guardar' });
+    const r = await OfficeDay.updateOne({ dateKey: dk, desk, 'tasks.id': String(b.taskId || '') }, { $set: set });
+    if (!r.matchedCount) return res.status(404).json({ error: 'Tarea no encontrada (se rehízo el informe: recargá)' });
+    if (desk === 'recontacto' && b.done === true) { // el cliente recontactado no vuelve a la lista por 7 días
+      const doc = await OfficeDay.findOne({ dateKey: dk, desk }).select('tasks').lean(); const t = ((doc && doc.tasks) || []).find((x) => x.id === String(b.taskId));
+      const m = t && /^Escribirle a @(\S+)/.exec(t.text); if (m) { await Config.collection.updateOne({ key: 'officeRecontacted' }, { $set: { ['value.' + _offKey(m[1])]: new Date(), updatedAt: new Date() } }, { upsert: true }); try { Config._cache && Config._cache.delete('officeRecontacted'); } catch (_) {} }
+    }
+    res.json({ success: true });
+  } catch (e) { logger.warn('[oficina] task ' + e.message); res.status(500).json({ error: 'Error del servidor' }); }
+});
+// Marketing: cargar el gasto en pauta del día (mismo registro que Datos IA → gasto).
+app.post('/api/admin/office/spend', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin' && !_officeDesksOf(await getOfficeConfig(), req.user.username).includes('marketing')) return res.status(403).json({ error: 'Sólo el puesto de Marketing o un admin' });
+    const b = req.body || {}; const day = String(b.date || '').slice(0, 10); const amount = Math.round(Number(b.amount));
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !(amount > 0) || amount > 100000000) return res.status(400).json({ error: 'Poné la fecha y un monto válido' });
+    const arr = (await getConfig('adSpend', [])) || [];
+    arr.push({ id: uuidv4(), from: day, to: day, campaign: String(b.campaign || '').toUpperCase().replace(/[^A-Z0-9_\-ÁÉÍÓÚÑ ]/g, '').slice(0, 40), amount, note: String(b.note || '').slice(0, 120) + ' (Oficina)', createdAt: new Date().toISOString(), by: req.user.username });
+    await Config.set('adSpend', arr.slice(-500), req.user.username);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
 });
 app.get('/api/admin/inicio/sorteos-stats', authMiddleware, adminMiddleware, async (req, res) => {
   try {

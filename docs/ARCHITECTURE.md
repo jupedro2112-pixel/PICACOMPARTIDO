@@ -973,6 +973,9 @@ VIPCARGAS con su JWT, y el cliente nunca más necesita conocer su clave del casi
   "⏳ Cargas pendientes" (`/api/admin/deposit-reviews*`): Confirmar = `_agentDepositHandler` (la función de
   `POST /api/admin/deposit`, extraída para reusarla) · Rechazar = `/sys_deposit_rejected`. Duplicados → el cliente recibe
   `/sys_receipt_duplicate`. Cliente: `GET /api/deposits/pending` + socket `deposit_review_update` → franja "⏳ Carga pendiente".
+  **#1013 — OFICINA (/oficina):** página aparte con un puesto por área (services/office.js = reglas puras; `_officeGather` en server.js junta los
+  números de 24 h con las mismas agregaciones de 📈 Negocio). Informe + tareas en `OfficeDay` (se rehace 07 h y cada 6 h, conserva lo tildado). Un puesto
+  NUEVO ⇒ entrada en `DESKS` + función en `DESK_BUILD` + datos en `_officeGather` + caso en `scripts/test-office.js`. Sólo lee el negocio.
   **#1012 — `Config['hgcash']` NUNCA se reescribe entero salvo desde el panel:** cambios puntuales con `_hgcashSetFields` ($set sin upsert);
   `getConfig` devuelve el default si la base falla, así que leer→mezclar→guardar puede pisar la config con DEFAULTS (pasó: banco apagado).
   `_hgcashGuardTick` restaura `Config['hgcashLastGood']` si aparece apagada sin `manualOff`. Apagar/sombra desde el panel exige `confirmOff`.

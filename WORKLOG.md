@@ -8,6 +8,21 @@
 
 ## Sesión 2026-11-01
 
+### 1013. 🏢 OFICINA en página aparte: /oficina (2026-11-01)
+- Owner: "una oficina con un puesto en cada uno y un trabajo dentro de las 24 hs a cada uno, para un análisis completo de estructura, seguridad,
+  marketing (cargar cuánto gastamos), bancario, recontacto, diseño de contenido para historias" + "automático + persona" + "meter personas para lo que
+  es el rubro, ver qué más falta" + "en otra página" + "formato interactivo que se vea cómo trabajan".
+- `/oficina` (public/oficina/index.html + oficina.js, servidos por handler con `adminHostCheck`; el resto de /oficina/ = 404). Mismo login del panel
+  (cookie /api). Admin + clave de INICIO ⇒ toda la oficina; el resto del equipo ⇒ sólo sus puestos.
+- 9 puestos (`src/services/office.js`, puro, test `scripts/test-office.js`): Dirección (incluye el chequeo técnico: 1girox, banco automático, IA, base),
+  Operaciones (cargas/retiros), Atención, Seguridad, Banco y caja, Marketing (carga el gasto ⇒ `Config['adSpend']`), Recontacto (15 clientes por día,
+  2+ cargas y 5-30 días sin cargar; el tildado no vuelve por 7 días, `Config['officeRecontacted']`), Contenido (historias + ideas), Promos.
+  Cada uno: 🤖 informe (últimas 24 h) + tareas del día (alertas + rutina + extras del admin) que la persona tilda con nota.
+- `OfficeDay` (dateKey+desk único, TTL 120 d), `_officeTick` 07 h ART y cada 6 h (lock `office`), `_officeBuild` single-flight y conserva lo tildado
+  (`office.mergeTasks`). Personas y turnos: `Config['officeConfig']`. Presencia (🟢 / titila = trabajando en ese puesto): `Config['officePresence']` (ping 60 s).
+- Rutas: GET `/api/admin/inicio/office`, POST `.../rebuild`, `.../config` (admin + clave) · GET `/api/admin/office/mine`, POST `/api/admin/office/ping|task|spend`
+  (la persona del puesto o admin; tareas sólo de hoy/ayer).
+
 ### 1012. 🏦 El banco automático ya no se apaga solo (2026-11-01, urgente)
 - Owner: "no está cargando automático ningún comprobante… desde la última vez que publiqué no estaba cargado". El panel mostraba
   "Integración apagada · modo SOMBRA" con nombre y CBU vacíos.
