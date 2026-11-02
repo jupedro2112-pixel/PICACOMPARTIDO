@@ -8,6 +8,11 @@
 
 ## Sesión 2026-11-01
 
+### 1016. 🛟 La base espera al primario nuevo en vez de fallar (2026-11-02)
+- Logs del incidente: `not primary and secondaryOk=false` y `connection ... timed out` ⇒ MongoDB Atlas cambiando de primario una y otra vez
+  (no es el código: siguió igual con la versión vieja y sin la Oficina). `serverSelectionTimeoutMS` 5 s → 15 s en config/database.js: una
+  elección tarda ~10-12 s y antes todo pedido en ese lapso daba 500. La causa de fondo hay que verla en Atlas (Activity Feed / Metrics).
+
 ### 1015. 🗑️ Se QUITÓ la Oficina (/oficina) entera (2026-11-02)
 - Incidente 00:07 ART (cambio de día): 5xx y cortes con la base. Sospecha fuerte: sin `OfficeDay` del día nuevo, `_officeView` armaba los informes
   (consultas pesadas) en CADA refresco de /oficina. Owner: "borrá de cuajo oficina, no la voy a usar" ⇒ fuera página, rutas, cron, rol `oficina`,

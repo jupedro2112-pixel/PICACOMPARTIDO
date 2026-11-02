@@ -68,7 +68,10 @@ async function connectDB() {
   try {
     await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/sala-de-juegos', {
       maxPoolSize: 20,
-      serverSelectionTimeoutMS: 5000,
+      // #1016 (incidente 2026-11-02): Atlas cambió de primario varias veces ("not primary and secondaryOk=false"); una elección tarda ~10-12 s.
+      // Con 5 s todo pedido en ese lapso fallaba con 500: con 15 s espera al primario nuevo y sigue (los reintentos de lectura/escritura del driver
+      // están activos por defecto).
+      serverSelectionTimeoutMS: 15000,
       socketTimeoutMS: 45000,
     });
     console.log('✅ MongoDB conectado');
