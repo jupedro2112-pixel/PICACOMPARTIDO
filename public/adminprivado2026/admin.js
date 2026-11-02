@@ -6480,7 +6480,7 @@ async function loadPayReview() {
         if (pto) { pto.checked = j.config.trustedOnly !== false; pto.disabled = !j.canEditConfig; } if (ptd) { ptd.value = j.config.trustedDays || 7; ptd.disabled = !j.canEditConfig; } if (ptm) { ptm.value = j.config.trustedMinDeposits != null ? j.config.trustedMinDeposits : 3; ptm.disabled = !j.canEditConfig; }
         try { loadPayHistory(); } catch (_) {} // #593
         if (st) st.textContent = j.hgcashEnabled ? '' : '⚠️ Banco no configurado: todo queda en revisión y se paga a mano.';
-        const review = _prItems.filter(function (p) { return p.reviewRequired || p.status === 'failed'; });
+        const review = _prItems.filter(function (p) { return p.reviewRequired || p.status === 'failed' || p.status === 'paying'; });
         const badge = document.getElementById('payReviewBadge'); if (badge) { badge.textContent = String(review.length); badge.style.display = review.length ? '' : 'none'; }
         // #1000: los de 🚨 prioridad alta del antifraude, primero.
         const _prHi = function (p) { return /PRIORIDAD ALTA/.test(p.reviewReason || '') ? 1 : 0; };
@@ -6503,13 +6503,16 @@ async function loadPayReview() {
                 '<div style="color:#aaa;">Cliente: ' + (rk.daysOld !== null && rk.daysOld !== undefined ? rk.daysOld + ' días' : '—') + ' · cargó ' + rk.deposits + ' veces (' + fmtARS(rk.depositsTotal) + ') · retiró ' + rk.withdrawalsPaid + ' veces (' + fmtARS(rk.withdrawalsTotal) + ') · celular ' + (rk.phoneVerified ? '✅' : '❌') + (rk.acquisitionSource ? ' · origen ' + escapeHtml(rk.acquisitionSource) : '') + '</div>' +
                 (warn.length ? '<div style="color:' + color + ';font-weight:700;">⚠️ ' + warn.map(escapeHtml).join(' · ') + '</div>' : '<div style="color:#66ff99;">✅ Sin señales de alerta</div>') +
                 (rk.fraudNotes && rk.fraudNotes.length ? '<div style="color:#888;font-size:11px;">' + rk.fraudNotes.map(function (n) { return escapeHtml(n.note || ''); }).join(' · ') + '</div>' : '') +
+                (p.status === 'paying' ? '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;"><span style="background:#2a6df0;color:#fff;border-radius:9px;padding:2px 8px;font-size:11px;">⏳ En proceso en el banco</span>' +
+                    '<button type="button" class="btn-primary btn-small" onclick="payReviewSync(\'' + p.id + '\')">🔄 Consultar al banco</button>' +
+                    '<button type="button" class="btn-secondary btn-small" onclick="try{viewUserChat(\'' + p.userId + '\')}catch(e){showSection(\'chats\')}">💬 Ver chat</button></div></div>' :
                 '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">' +
                 '<button type="button" class="btn-primary btn-small" onclick="payReviewApprove(\'' + p.id + '\')">✅ Confirmar y pagar</button>' +
                 '<button type="button" class="btn-secondary btn-small" onclick="payReviewOtherBank(\'' + p.id + '\')" title="Ya hiciste la transferencia A MANO (mismo banco porque falló la API, una cuenta secundaria u otro banco): descuenta las fichas y lo marca pagado; te pregunta desde dónde salió">🏦 Ya lo pagué a mano</button>' + // #904
                 '<button type="button" class="btn-secondary btn-small" onclick="payReviewReject(\'' + p.id + '\')" style="color:#ff8080;">⛔ Rechazar</button>' +
                 '<button type="button" class="btn-secondary btn-small" onclick="payReviewRejectBlock(\'' + p.id + '\')" style="color:#fff;background:#b3001b;border-color:#b3001b;" title="Rechaza el retiro y bloquea la cuenta (cierra la sesión). Queda en el historial con tu usuario y el motivo.">🚫 Rechazar y bloquear</button>' + // #996
                 '<button type="button" class="btn-secondary btn-small" onclick="try{viewUserChat(\'' + p.userId + '\')}catch(e){showSection(\'chats\')}">💬 Ver chat</button>' +
-                '</div></div>';
+                '</div></div>');
         };
         box.innerHTML = _prItems.map(_prItemHtml).join('');
         if (fxBox) fxBox.innerHTML = _fxItems.length ? '<div style="display:grid;gap:10px;">' + _fxItems.map(_prItemHtml).join('') + '</div>' : '<div class="card" style="color:#22c55e">✅ No hay retiros frenados por el antifraude.</div>';
@@ -6562,6 +6565,16 @@ async function payReviewSaveCfg() {
         showToast(j.config.autoBelow ? 'Regla guardada: todos los retiros salen solos (sólo frena el antifraude)' : 'Regla guardada: pago automático APAGADO, todo a mano', 'success'); // #1010
     } catch (_) { showToast('Error de conexión', 'error'); }
 }
+// #1014: un retiro que quedó "en proceso" en hg: pregunta el estado real (pagado ⇒ avisa al cliente; error ⇒ pasa a fallido y se puede reintentar).
+async function payReviewSync(id) {
+    try {
+        const r = await _payoutPost(id, 'sync', {}); const j = await r.json().catch(function () { return {}; });
+        if (!r.ok) showToast(j.error || 'No se pudo consultar', 'error');
+        else showToast(j.status === 'paid' ? '✅ El banco lo pagó: ya se avisó al cliente' : (j.status === 'failed' ? '❌ El banco lo rechazó (' + (j.hgStatus || '') + '): ahora podés reintentar o pagar a mano' : '⏳ Sigue en proceso en el banco (' + (j.hgStatus || 's/estado') + ')'), j.status === 'failed' ? 'error' : 'success');
+        loadPayReview();
+    } catch (_) { showToast('Error de conexión', 'error'); }
+}
+window.payReviewSync = payReviewSync;
 async function payReviewApprove(id) {
     const p = _prItems.find(function (x) { return x.id === id; });
     if (!confirm('¿Confirmar y PAGAR ' + (p ? fmtARS(p.amount) + ' a ' + p.username : 'este retiro') + '? Se descuentan las fichas y sale por el banco.')) return;

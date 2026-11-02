@@ -8,6 +8,12 @@
 
 ## Sesión 2026-11-01
 
+### 1014. 💸 Retiros "en proceso" en el banco ya se ven en Pagos a confirmar (2026-11-02)
+- Owner: "está fallando pero no aparece en pagos pendientes". La lista `/api/admin/payouts/review` sólo traía `pending_review`/`failed`: un retiro
+  que quedó `paying` (enviado a hg sin confirmación, o sin número de operación) no salía en ningún lado. Ahora entran los `paying` de más de 10 min
+  (últimos 7 días) con "⏳ En proceso en el banco" y SÓLO el botón 🔄 Consultar al banco (`/payouts/:id/sync`): pagado ⇒ aviso al cliente; error ⇒
+  pasa a fallido y se puede reintentar o pagar a mano. Sin número de hg: mirar el extracto antes de tocar nada. Admin SW v233.
+
 ### 1013. 🏢 OFICINA en página aparte: /oficina (2026-11-01)
 - Owner: "una oficina con un puesto en cada uno y un trabajo dentro de las 24 hs a cada uno, para un análisis completo de estructura, seguridad,
   marketing (cargar cuánto gastamos), bancario, recontacto, diseño de contenido para historias" + "automático + persona" + "meter personas para lo que

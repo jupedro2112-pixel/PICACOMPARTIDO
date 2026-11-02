@@ -23859,7 +23859,9 @@ async function _payoutCbuUsers(payout) {
 app.get('/api/admin/payouts/review', authMiddleware, withdrawerMiddleware, async (req, res) => {
   try {
     const cfg = await getPayoutReviewConfig();
-    const all = await PendingPayout.find({ status: { $in: ['pending_review', 'failed'] } }).sort({ createdAt: -1 }).limit(200).lean();
+    // #1014 (owner: "está fallando pero no aparece en pagos pendientes"): también los que quedaron EN PROCESO en el banco (status 'paying')
+    // hace más de 10 min sin confirmar: antes no salían en ninguna lista. Sólo se pueden CONSULTAR (no se paga ni se rechaza: el banco puede haberlo enviado).
+    const all = await PendingPayout.find({ $or: [{ status: { $in: ['pending_review', 'failed'] } }, { status: 'paying', updatedAt: { $lte: new Date(Date.now() - 10 * 60000) }, createdAt: { $gte: new Date(Date.now() - 7 * 86400000) } }] }).sort({ createdAt: -1 }).limit(200).lean();
     // #1008: UNA tarjeta por cliente = su pedido más nuevo; los anteriores que se anulan solos al pagarlo van adentro de esa tarjeta.
     // Los que ya tocaron plata o fichas (no se pueden anular solos) siguen como tarjeta propia.
     const items = [], mainBy = new Map();
@@ -23882,6 +23884,7 @@ app.get('/api/admin/payouts/review', authMiddleware, withdrawerMiddleware, async
       // Revisión #1003 (owner: "no están pasando para pagos automáticos, ¿qué detecta?"): POR QUÉ no salió solo, también para los que no
       // guardaron el motivo (retiros viejos o por monto).
       const whyAuto = [];
+      if (p.status === 'paying') whyAuto.push('quedó EN PROCESO en el banco sin confirmar' + (p.hgTransactionId ? ' (hg ' + String(p.hgStatus || 'sin estado') + '): tocá 🔄 Consultar al banco' : ' y SIN número de operación de hg: mirá el extracto antes de hacer nada'));
       if (p.status === 'failed') whyAuto.push('el pago automático FALLÓ' + (p.error ? ' (' + String(p.error).slice(0, 80) + ')' : '') + ': antes de reintentar mirá el extracto del banco');
       if (p.fraudRecheck && p.fraudRecheck.at) whyAuto.push('el chequeo antifraude no respondió: se reintenta solo (intento ' + (Number(p.fraudRecheck.n || 0) + 1) + ' de 3)'); // #1010 (ya no hay umbral de monto)
       if (!cfg.autoBelow) whyAuto.push('el pago automático está apagado');
