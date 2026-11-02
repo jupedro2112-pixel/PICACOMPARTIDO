@@ -368,10 +368,7 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`). Git user: j
 - **UN RETIRO POR CLIENTE (#1008):** pagar un retiro llama `_closeOtherPayouts` (anula los otros pendientes seguros del cliente); un flujo nuevo
   que marque un retiro pagado tiene que llamarla. Pagos a confirmar muestra una tarjeta por cliente.
 - **BONOS SÓLO EN SLOTS (#1007):** los textos viejos aclaran "se juega en slots"; desde #1010 el owner pidió NO agregarlo en los avisos nuevos.
-- **OFICINA (#1013):** página aparte `/oficina` (no es sección del panel; mismo login). Puestos en `src/services/office.js` (test `scripts/test-office.js`),
-  ROL `oficina` = sólo /oficina (`officeMiddleware`; `adminMiddleware` lo rechaza: NO agregarlo ahí). Clave provisoria ⇒ `User.officeMustChange`.
-  NUNCA llamar `_officeBuild` desde una ruta de lectura (#1015: saturó la base a las 00 h); sólo cron con lock o botón del admin.
-  datos en `_officeGather`, guardado en `OfficeDay` + `Config['officeConfig'|'officePresence'|'officeRecontacted']`. Admin con clave de INICIO; equipo, sus puestos.
+- **OFICINA (#1013) ELIMINADA (#1015):** saturó la base al cambiar el día (armaba informes pesados en cada refresco). Nunca hacer cálculos pesados dentro de una ruta de lectura: sólo cron con lock.
 - **BANCO AUTOMÁTICO BLINDADO (#1012):** `getConfig` devuelve el default si la base falla ⇒ NUNCA leer→mezclar→guardar `Config['hgcash']` entero
   (lo apagaba solo). Cambios puntuales con `_hgcashSetFields`; sólo el panel guarda el objeto (con `confirmOff` para apagar). `_hgcashGuardTick`
   restaura `Config['hgcashLastGood']` si aparece apagado sin `manualOff`. Misma trampa para cualquier Config crítica: usar $set de campo.

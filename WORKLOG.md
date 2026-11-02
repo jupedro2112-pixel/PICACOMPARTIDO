@@ -8,11 +8,11 @@
 
 ## Sesión 2026-11-01
 
-### 1015. 🚑 La Oficina ya no arma informes dentro de un pedido (2026-11-02)
-- Incidente 00:07 ART: errores 5xx y cortes con la base justo al cambiar el día. A las 00 h no hay `OfficeDay` del día nuevo y `_officeView`
-  llamaba `_officeBuild` en CADA refresco de /oficina (cada 60 s, por pestaña y por instancia) ⇒ consultas pesadas en loop (sospecha fuerte).
-  Ahora sin informe de hoy muestra el último que haya; sólo arma el cron (07 h, con lock) o el botón del admin (con lock, 409 si ya corre).
-  `maxTimeMS` 20 s en las consultas pesadas de `_officeGather` y el primer `_bizMoney` envuelto en `safe`.
+### 1015. 🗑️ Se QUITÓ la Oficina (/oficina) entera (2026-11-02)
+- Incidente 00:07 ART (cambio de día): 5xx y cortes con la base. Sospecha fuerte: sin `OfficeDay` del día nuevo, `_officeView` armaba los informes
+  (consultas pesadas) en CADA refresco de /oficina. Owner: "borrá de cuajo oficina, no la voy a usar" ⇒ fuera página, rutas, cron, rol `oficina`,
+  `User.officeMustChange`, `src/services/office.js`, `OfficeDay`, test y el botón del panel (admin SW v234). Lo de #1013 que sigue abajo es historia.
+  Lección: nunca armar un informe pesado dentro de una ruta de lectura (sólo cron con lock).
 
 ### 1014. 💸 Retiros "en proceso" en el banco ya se ven en Pagos a confirmar (2026-11-02)
 - Owner: "está fallando pero no aparece en pagos pendientes". La lista `/api/admin/payouts/review` sólo traía `pending_review`/`failed`: un retiro

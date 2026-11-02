@@ -77,7 +77,7 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['user', 'admin', 'depositor', 'withdrawer', 'publisher_admin', 'comunidad', 'oficina'], // #1013 oficina = sólo /oficina
+    enum: ['user', 'admin', 'depositor', 'withdrawer', 'publisher_admin', 'comunidad'],
     default: 'user',
     index: true
   },
@@ -138,8 +138,6 @@ const userSchema = new mongoose.Schema({
   // non-allow-listed path returns 403 with `code: 'MUST_CHANGE_PASSWORD'` while
   // this flag is true. This prevents bypassing the mandatory change modal by
   // simply reloading the page.
-  // #1013: cuenta creada desde la Oficina con clave provisoria ⇒ la cambia al entrar (la Oficina no deja hacer nada hasta entonces).
-  officeMustChange: { type: Boolean, default: false },
   mustChangePassword: {
     type: Boolean,
     default: false,
