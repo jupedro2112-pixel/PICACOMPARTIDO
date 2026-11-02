@@ -411,6 +411,7 @@ async function handleLogin(e) {
         if (data.token) {
             currentToken = data.token;
             currentAdmin = data.user;
+            if (currentAdmin && currentAdmin.role === 'oficina') { location.href = '/oficina'; return; } // #1013: cuenta sólo de la Oficina
             
             // Configurar UI según el rol
             setupRoleBasedUI();
@@ -495,6 +496,7 @@ async function checkAdminSession(_try) {
             const data = await response.json();
             currentToken = data.token || null;
             currentAdmin = data.user;
+            if (currentAdmin && currentAdmin.role === 'oficina') { location.href = '/oficina'; return; } // #1013
             setupRoleBasedUI();
             showApp();
             // publisher_admin: vista limitada — no carga socket / chats /

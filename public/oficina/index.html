@@ -71,8 +71,13 @@ header .sp{flex:1}
 .tag{font-size:10px;font-weight:800;padding:1px 6px;border-radius:99px;background:var(--desk);border:1px solid var(--line);margin-right:4px}
 .tag.alerta{color:var(--bad)}.tag.rutina{color:var(--mute)}.tag.propia{color:#7c3aed}.tag.dato{color:#2563eb}
 .sec{margin:16px 0 6px;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--mute)}
-.login{max-width:360px;margin:12vh auto;background:var(--card);border-radius:18px;box-shadow:var(--shadow);padding:22px}
-.login input{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;margin:6px 0;background:var(--bg)}
+.login{max-width:380px;margin:10vh auto;background:var(--card);border-radius:22px;box-shadow:0 10px 40px rgba(0,0,0,.12);padding:28px 24px}
+.lg-logo{text-align:center;margin-bottom:16px}
+.lg-logo img{width:76px;height:76px;border-radius:20px;box-shadow:0 4px 14px rgba(230,0,35,.25)}
+.lg-logo h1{margin:10px 0 2px;font-size:22px;font-weight:900;letter-spacing:.3px}
+.lg-logo p{margin:0;color:var(--mute);font-size:13px;font-weight:600}
+.btn.big{width:100%;padding:11px 14px;font-size:15px}
+.login input{width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:12px;margin:6px 0;background:var(--bg);font-size:15px}
 .err{color:var(--bad);font-size:13px;min-height:18px}
 .row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .row input,.row select{border:1px solid var(--line);border-radius:8px;padding:5px 8px;background:var(--bg)}
@@ -82,24 +87,36 @@ header .sp{flex:1}
 <body>
 <div class="wrap">
   <div id="loginView" class="login" hidden>
-    <h2 style="margin:0 0 4px">🏢 Oficina PicaRoja</h2>
-    <div class="small" style="margin-bottom:10px">Entrá con tu usuario del panel.</div>
+    <div class="lg-logo"><img src="/icons/icon-192x192.png" alt=""><h1>PICA ROJA oficial</h1><p>🏢 Oficina · ingreso del equipo</p></div>
     <form id="loginForm">
-      <input id="lu" autocomplete="username" placeholder="Usuario" required>
-      <input id="lp" type="password" autocomplete="current-password" placeholder="Clave" required>
+      <input id="lu" autocomplete="username" placeholder="👤 Usuario del panel" required>
+      <input id="lp" type="password" autocomplete="current-password" placeholder="🔒 Contraseña" required>
       <div class="err" id="lerr"></div>
-      <button class="btn red" style="width:100%">Entrar</button>
+      <button class="btn red big">Ingresar</button>
     </form>
+    <div class="small" style="text-align:center;margin-top:10px">Mismo usuario y clave que el panel de administración.</div>
   </div>
   <div id="pinView" class="login" hidden>
-    <h2 style="margin:0 0 4px">🔒 Clave de INICIO</h2>
-    <div class="small" style="margin-bottom:10px">Para ver TODA la oficina (admin) poné la clave de INICIO del panel.</div>
+    <div class="lg-logo"><img src="/icons/icon-192x192.png" alt=""><h1>PICA ROJA oficial</h1><p>🔒 Clave de INICIO</p></div>
+    <div class="small" style="margin-bottom:10px;text-align:center">Para ver TODA la oficina poné la clave de INICIO del panel.</div>
     <form id="pinForm">
       <input id="pinIn" type="password" autocomplete="off" placeholder="Clave de INICIO" required>
       <div class="err" id="perr"></div>
-      <button class="btn red" style="width:100%">Abrir la oficina</button>
+      <button class="btn red big">Abrir la oficina</button>
     </form>
-    <button class="btn" id="pinMine" style="width:100%;margin-top:8px">Sólo ver mis puestos</button>
+    <button class="btn big" id="pinMine" style="margin-top:8px">Sólo ver mis puestos</button>
+  </div>
+  <div id="pwView" class="login" hidden>
+    <div class="lg-logo"><img src="/icons/icon-192x192.png" alt=""><h1>PICA ROJA oficial</h1><p>🔑 Elegí tu clave</p></div>
+    <div class="small" style="margin-bottom:10px;text-align:center" id="pwMsg">Es tu primer ingreso: cambiá la clave provisoria por una tuya (mínimo 8 caracteres). No se la pases a nadie.</div>
+    <form id="pwForm">
+      <input id="pwCur" type="password" autocomplete="current-password" placeholder="Clave actual (la provisoria)" required>
+      <input id="pwNew" type="password" autocomplete="new-password" placeholder="Clave nueva (mínimo 8)" required minlength="8">
+      <input id="pwNew2" type="password" autocomplete="new-password" placeholder="Repetí la clave nueva" required minlength="8">
+      <div class="err" id="pwErr"></div>
+      <button class="btn red big">Guardar mi clave</button>
+    </form>
+    <button class="btn big" id="pwCancel" style="margin-top:8px" hidden>Volver</button>
   </div>
   <div id="appView" hidden>
     <header>
@@ -109,6 +126,8 @@ header .sp{flex:1}
       <select id="daySel" class="btn sm"></select>
       <button class="btn sm" id="btnRefresh" title="Volver a cargar">🔄</button>
       <button class="btn sm" id="btnRebuild" hidden title="Rehacer el análisis de todos los puestos con los números de ahora">🤖 Rehacer análisis</button>
+      <button class="btn sm" id="btnUsers" hidden title="Crear una cuenta para alguien del equipo">➕ Crear usuario</button>
+      <button class="btn sm" id="btnPw" title="Cambiar mi clave">🔑 Mi clave</button>
       <button class="btn sm" id="btnTheme" title="Modo nocturno">🌙</button>
       <button class="btn sm" id="btnOut">Salir</button>
     </header>

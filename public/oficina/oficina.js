@@ -15,7 +15,7 @@
   let me = null, mode = 'mine', data = null, openDesk = null, day = null, seenFeed = null;
 
   function toast(t) { const el = $('toast'); el.textContent = t; el.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => { el.hidden = true; }, 2600); }
-  function show(v) { for (const id of ['loginView', 'pinView', 'appView']) $(id).hidden = id !== v; }
+  function show(v) { for (const id of ['loginView', 'pinView', 'pwView', 'appView']) $(id).hidden = id !== v; }
   async function api(url, opt) {
     const o = Object.assign({ credentials: 'same-origin', headers: {} }, opt || {});
     o.headers = Object.assign({ 'Content-Type': 'application/json' }, o.headers);
@@ -23,6 +23,7 @@
     const r = await fetch(url, o); let j = {}; try { j = await r.json(); } catch (_) {}
     if (r.status === 401) { show('loginView'); throw new Error('Sesión vencida: volvé a entrar'); }
     if (r.status === 423 || r.status === 428) { ss.set('inicio_pin', null); show('pinView'); $('perr').textContent = j.error || 'Clave incorrecta'; throw new Error('clave'); }
+    if (r.status === 403 && j.code === 'OFFICE_MUST_CHANGE') { showPw(true); throw new Error('clave'); }
     if (!r.ok) throw new Error(j.error || ('Error ' + r.status));
     return j;
   }
@@ -58,6 +59,38 @@
     $('btnRebuild').disabled = true; toast('🤖 Los analistas están revisando los números…'); document.querySelectorAll('.monitor .bot').forEach((b) => { b.insertAdjacentHTML('beforeend', '<span class="typing"><i></i><i></i><i></i></span>'); });
     try { await api('/api/admin/inicio/office/rebuild', { method: 'POST', body: '{}' }); toast('✅ Análisis nuevo listo'); await load(true); } catch (e) { toast('❌ ' + e.message); } finally { $('btnRebuild').disabled = false; }
   });
+  // ---------- clave propia ----------
+  function showPw(forced) { show('pwView'); $('pwCancel').hidden = !!forced; $('pwMsg').textContent = forced ? 'Es tu primer ingreso: cambiá la clave provisoria por una tuya (mínimo 8 caracteres). No se la pases a nadie.' : 'Cambiá tu clave (mínimo 8 caracteres).'; $('pwErr').textContent = ''; }
+  $('btnPw').addEventListener('click', () => showPw(false));
+  $('pwCancel').addEventListener('click', () => show('appView'));
+  $('pwForm').addEventListener('submit', async (e) => {
+    e.preventDefault(); $('pwErr').textContent = '';
+    if ($('pwNew').value !== $('pwNew2').value) { $('pwErr').textContent = 'Las dos claves nuevas no coinciden'; return; }
+    try {
+      const r = await fetch('/api/admin/office/password', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ currentPassword: $('pwCur').value, newPassword: $('pwNew').value }) });
+      const j = await r.json().catch(() => ({})); if (!r.ok) { $('pwErr').textContent = j.error || 'No se pudo cambiar'; return; }
+      $('pwCur').value = $('pwNew').value = $('pwNew2').value = ''; toast('✅ Clave cambiada'); show('appView'); load(true);
+    } catch (_) { $('pwErr').textContent = 'Error de conexión'; }
+  });
+  // ---------- crear cuenta de la oficina (admin) ----------
+  $('btnUsers').addEventListener('click', () => {
+    openDesk = null; $('drawer').hidden = false;
+    const opts = (data && data.desks || []).map((d) => '<option value="' + esc(d.key) + '">' + d.icon + ' ' + esc(d.name) + '</option>').join('');
+    $('pane').innerHTML = '<div class="row" style="justify-content:space-between"><h2 style="margin:0">➕ Crear usuario de la oficina</h2><button class="btn sm" id="dClose">✕ Cerrar</button></div>' +
+      '<div class="small" style="margin:6px 0 12px">Crea una cuenta con rol <b>oficina</b>: entra SÓLO acá (no al panel, no puede cargar fichas ni pagar). Le das una clave provisoria y al entrar la tiene que cambiar por una suya.</div>' +
+      '<div class="kv" style="grid-template-columns:1fr"><input id="nuUser" placeholder="Usuario (ej. oficina, marketing.ana)" style="padding:9px;border:1px solid var(--line);border-radius:10px;background:var(--bg)">' +
+      '<input id="nuPass" type="text" autocomplete="off" placeholder="Clave provisoria (mínimo 6)" style="padding:9px;border:1px solid var(--line);border-radius:10px;background:var(--bg)">' +
+      '<select id="nuDesk" style="padding:9px;border:1px solid var(--line);border-radius:10px;background:var(--bg)"><option value="">Puesto (opcional)</option>' + opts + '</select>' +
+      '<select id="nuShift" style="padding:9px;border:1px solid var(--line);border-radius:10px;background:var(--bg)"><option>completo</option><option>mañana</option><option>tarde</option><option>noche</option></select>' +
+      '<button class="btn red big" id="nuSave">Crear usuario</button><div class="err" id="nuErr"></div></div>' +
+      '<div class="small" style="margin-top:10px">Pasale la clave provisoria en persona o por llamada. Para Operaciones y Atención, que necesitan cargar o pagar, usá los usuarios del panel (cargas / retiros).</div>';
+    $('dClose').onclick = closeDesk;
+    $('nuSave').onclick = async () => {
+      $('nuErr').textContent = '';
+      try { const j = await api('/api/admin/inicio/office/users', { method: 'POST', body: JSON.stringify({ username: $('nuUser').value.trim(), password: $('nuPass').value, desk: $('nuDesk').value, shift: $('nuShift').value }) });
+        toast('✅ Usuario ' + j.username + ' creado'); closeDesk(); load(true); } catch (e) { $('nuErr').textContent = e.message; }
+    };
+  });
   $('daySel').addEventListener('change', () => { day = $('daySel').value; seenFeed = null; load(true); });
   $('drawer').addEventListener('click', (e) => { if (e.target === $('drawer')) closeDesk(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDesk(); });
@@ -65,7 +98,7 @@
   let timers = [];
   function startApp() {
     show('appView'); $('who').textContent = '· ' + me.username + (mode === 'all' ? ' (toda la oficina)' : '');
-    $('btnRebuild').hidden = mode !== 'all';
+    $('btnRebuild').hidden = mode !== 'all'; $('btnUsers').hidden = mode !== 'all';
     const sel = $('daySel'); sel.innerHTML = ''; const now = new Date();
     for (let i = 0; i < 7; i++) { const k = artKey(new Date(now.getTime() - i * 86400000)); sel.insertAdjacentHTML('beforeend', '<option value="' + k + '">' + (i === 0 ? 'Hoy' : i === 1 ? 'Ayer' : k.slice(8, 10) + '/' + k.slice(5, 7)) + '</option>'); }
     day = artKey(now);
@@ -83,6 +116,7 @@
       const url = (mode === 'all' ? '/api/admin/inicio/office' : '/api/admin/office/mine') + '?date=' + encodeURIComponent(day || '');
       if (force && !data) $('desks').innerHTML = '<div class="small">🤖 Los analistas están armando los informes del día… (la primera vez tarda unos segundos)</div>';
       data = await api(url);
+      if (data.mustChange) { showPw(true); return; }
       render();
       if (openDesk) { const a = document.activeElement; if (!(a && $('pane').contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName))) renderDesk(openDesk); }
     } catch (e) { if (e.message !== 'clave') toast('❌ ' + e.message); }

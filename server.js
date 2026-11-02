@@ -812,7 +812,7 @@ const USER_PUBLIC_FIELDS = 'id username email phone phoneVerified phoneVerificat
 // agentes de carga/retiro, y publisher_admin (cuenta dedicada a un publicista).
 // Estas cuentas se saltan toda la lógica de JUGAYGANA sync, default-password
 // detection, mustChangePassword forzado, Meta CAPI tracking, etc.
-const ADMIN_ROLES = ['admin', 'depositor', 'withdrawer', 'publisher_admin', 'comunidad'];
+const ADMIN_ROLES = ['admin', 'depositor', 'withdrawer', 'publisher_admin', 'comunidad', 'oficina']; // #1013 oficina: cuenta interna (sólo /oficina)
 const isAdminRole = (role) => ADMIN_ROLES.includes(role);
 
 // Rutas que un publisher_admin puede tocar. Cualquier otra ruta devuelve 403.
@@ -6041,7 +6041,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     // JavaScript (XSS-safe) and is scoped to the admin path only.
     // publisher_admin también entra al panel /adminprivado2026 (vista limitada),
     // por eso recibe la misma cookie que los otros roles administrativos.
-    const adminRoles = ['admin', 'depositor', 'withdrawer', 'publisher_admin', 'comunidad'];
+    const adminRoles = ['admin', 'depositor', 'withdrawer', 'publisher_admin', 'comunidad', 'oficina']; // #1013
     if (adminRoles.includes(userObj.role)) {
       // Set two httpOnly cookies: one for page access, one for API calls.
       // Neither can be read by client-side scripts (XSS-safe).
@@ -6219,7 +6219,7 @@ app.get('/api/admin/me', async (req, res) => {
     const decoded = jwt.verify(cookieToken, JWT_SECRET, { algorithms: ['HS256'] });
     // publisher_admin también accede al panel (vista limitada) y por eso entra
     // en la lista de roles permitidos para /api/admin/me.
-    const adminRoles = ['admin', 'depositor', 'withdrawer', 'publisher_admin', 'comunidad'];
+    const adminRoles = ['admin', 'depositor', 'withdrawer', 'publisher_admin', 'comunidad', 'oficina']; // #1013
     if (!adminRoles.includes(decoded.role)) {
       return res.status(403).json({ error: 'Acceso denegado' });
     }
@@ -7292,7 +7292,7 @@ app.post('/api/auth/login-otp-verify', authLimiter, async (req, res) => {
 
     // Set admin cookies if applicable (incluye publisher_admin que también
     // usa la UI del panel administrativo en /adminprivado2026, en vista limitada).
-    const adminRoles = ['admin', 'depositor', 'withdrawer', 'publisher_admin', 'comunidad'];
+    const adminRoles = ['admin', 'depositor', 'withdrawer', 'publisher_admin', 'comunidad', 'oficina']; // #1013
     if (adminRoles.includes(userObj.role)) {
       const adminCookieToken = jwt.sign(
         { userId: userId, username: userObj.username, role: userObj.role, tokenVersion: userObj.tokenVersion ?? 0 },
@@ -28883,7 +28883,21 @@ app.post('/api/admin/inicio/weekly-closes/run', authMiddleware, adminMiddleware,
 const OfficeDay = require('./src/models/OfficeDay');
 const office = require('./src/services/office');
 const OFFICE_SHIFTS = ['mañana', 'tarde', 'noche', 'completo'];
-const OFFICE_STAFF_ROLES = ['admin', 'depositor', 'withdrawer', 'comunidad'];
+const OFFICE_STAFF_ROLES = ['admin', 'depositor', 'withdrawer', 'comunidad', 'oficina'];
+// #1013: rol 'oficina' = SÓLO la Oficina (adminMiddleware lo rechaza: ninguna ruta del panel ni de plata). Con clave provisoria
+// (User.officeMustChange) no puede hacer nada salvo cambiarla.
+async function officeMiddleware(req, res, next) {
+  if (!OFFICE_STAFF_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Acceso denegado.' });
+  if (req.user.role === 'admin') return next();
+  try {
+    const u = await User.findOne({ id: req.user.userId }).select('officeMustChange isActive isBlocked').lean();
+    if (!u || u.isActive === false || u.isBlocked === true) return res.status(401).json({ error: 'Sesión expirada' });
+    req.officeMustChange = !!u.officeMustChange;
+    const p = String(req.originalUrl || '').split('?')[0].replace(/\/+$/, '');
+    if (req.officeMustChange && p !== '/api/admin/office/password' && p !== '/api/admin/office/mine') return res.status(403).json({ error: 'Primero cambiá tu clave.', code: 'OFFICE_MUST_CHANGE' });
+    next();
+  } catch (_) { return res.status(503).json({ error: 'La base tardó en responder', code: 'DB_BUSY' }); }
+}
 const _offKey = (u) => encodeURIComponent(String(u || '')).replace(/\./g, '%2E'); // claves de Mongo sin puntos
 async function getOfficeConfig() {
   const c = (await getConfig('officeConfig', null)) || {}; const desks = {};
@@ -29063,15 +29077,16 @@ app.post('/api/admin/inicio/office/config', authMiddleware, adminMiddleware, asy
   } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
 });
 // Equipo: sus puestos (y el admin también puede usarla para tildar sin clave).
-app.get('/api/admin/office/mine', authMiddleware, adminMiddleware, async (req, res) => {
+app.get('/api/admin/office/mine', authMiddleware, officeMiddleware, async (req, res) => {
   try {
+    if (req.officeMustChange) return res.json({ success: true, mustChange: true, me: req.user.username, desks: [], feed: [] });
     const cfg = await getOfficeConfig(); const mine = _officeDesksOf(cfg, req.user.username);
     if (!mine.length) return res.json({ success: true, admin: req.user.role === 'admin', me: req.user.username, desks: [], feed: [], date: _schedArtKey(new Date()), today: _schedArtKey(new Date()) });
     const v = await _officeView(_offDate(req.query.date), mine, false);
     res.set('Cache-Control', 'no-store'); res.json(Object.assign({ success: true, admin: req.user.role === 'admin', me: req.user.username }, v));
   } catch (e) { logger.error('[oficina] mine ' + e.message); res.status(500).json({ error: 'Error del servidor' }); }
 });
-app.post('/api/admin/office/ping', authMiddleware, adminMiddleware, async (req, res) => {
+app.post('/api/admin/office/ping', authMiddleware, officeMiddleware, async (req, res) => {
   try {
     const desk = office.DESK_KEYS.includes(String((req.body || {}).desk)) ? String(req.body.desk) : null;
     await Config.collection.updateOne({ key: 'officePresence' }, { $set: { ['value.' + _offKey(req.user.username)]: { at: new Date(), desk, username: req.user.username }, updatedAt: new Date() } }, { upsert: true });
@@ -29079,7 +29094,7 @@ app.post('/api/admin/office/ping', authMiddleware, adminMiddleware, async (req, 
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: 'Error' }); }
 });
-app.post('/api/admin/office/task', authMiddleware, adminMiddleware, async (req, res) => {
+app.post('/api/admin/office/task', authMiddleware, officeMiddleware, async (req, res) => {
   try {
     const b = req.body || {}; const desk = String(b.desk || ''); const dk = _offDate(b.date);
     if (!office.DESK_KEYS.includes(desk)) return res.status(400).json({ error: 'Puesto inválido' });
@@ -29097,8 +29112,38 @@ app.post('/api/admin/office/task', authMiddleware, adminMiddleware, async (req, 
     res.json({ success: true });
   } catch (e) { logger.warn('[oficina] task ' + e.message); res.status(500).json({ error: 'Error del servidor' }); }
 });
+// Cambiar la propia clave desde la Oficina (obligatorio la primera vez para las cuentas creadas acá). La provisoria no se puede repetir.
+app.post('/api/admin/office/password', authMiddleware, officeMiddleware, authLimiter, async (req, res) => {
+  try {
+    const b = req.body || {}; const cur = String(b.currentPassword || ''), nw = String(b.newPassword || '');
+    if (nw.length < 8) return res.status(400).json({ error: 'La clave nueva tiene que tener al menos 8 caracteres' });
+    if (nw === cur || /^asd123$/i.test(nw)) return res.status(400).json({ error: 'Elegí una clave nueva distinta (no la provisoria)' });
+    const u = await User.findOne({ id: req.user.userId }); if (!u) return res.status(404).json({ error: 'Usuario no encontrado' });
+    if (!(await bcrypt.compare(cur, u.password))) return res.status(400).json({ error: 'La clave actual no es correcta' });
+    u.password = nw; u.passwordChangedAt = new Date(); u.officeMustChange = false; u.mustChangePassword = false;
+    await u.save();
+    logger.info(`[oficina] ${u.username} cambió su clave`);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+// Admin: crear una cuenta de la Oficina (rol 'oficina', clave provisoria que se cambia al entrar) y asignarla a un puesto.
+app.post('/api/admin/inicio/office/users', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const b = req.body || {}; const username = String(b.username || '').trim(); const password = String(b.password || '');
+    if (!/^[a-zA-Z0-9_.]{3,30}$/.test(username)) return res.status(400).json({ error: 'Usuario: 3 a 30 letras, números, punto o guion bajo' });
+    if (password.length < 6) return res.status(400).json({ error: 'La clave provisoria tiene que tener al menos 6 caracteres' });
+    if (await findUserByUsernameCI(username)) return res.status(400).json({ error: 'Ese usuario ya existe' });
+    const desk = office.DESK_KEYS.includes(String(b.desk)) ? String(b.desk) : null; const shift = OFFICE_SHIFTS.includes(b.shift) ? b.shift : 'completo';
+    await User.create({ id: uuidv4(), username, password, role: 'oficina', accountNumber: generateAccountNumber(), balance: 0, createdAt: new Date(), isActive: true,
+      giroxSyncStatus: 'not_applicable', giroxPasswordSynced: false, officeMustChange: true });
+    if (desk) { const cfg = await getOfficeConfig(); if (!cfg.desks[desk].people.some((p) => p.username === username)) cfg.desks[desk].people.push({ username, shift }); cfg.desks[desk].people = cfg.desks[desk].people.slice(0, 6); await Config.set('officeConfig', cfg, req.user.username); }
+    logger.info(`[oficina] ${req.user.username} creó la cuenta de oficina ${username}${desk ? ' (' + desk + ')' : ''}`);
+    res.json({ success: true, username, desk });
+  } catch (e) { logger.warn('[oficina] alta ' + e.message); res.status(500).json({ error: 'Error del servidor' }); }
+});
 // Marketing: cargar el gasto en pauta del día (mismo registro que Datos IA → gasto).
-app.post('/api/admin/office/spend', authMiddleware, adminMiddleware, async (req, res) => {
+app.post('/api/admin/office/spend', authMiddleware, officeMiddleware, async (req, res) => {
   try {
     if (req.user.role !== 'admin' && !_officeDesksOf(await getOfficeConfig(), req.user.username).includes('marketing')) return res.status(403).json({ error: 'Sólo el puesto de Marketing o un admin' });
     const b = req.body || {}; const day = String(b.date || '').slice(0, 10); const amount = Math.round(Number(b.amount));

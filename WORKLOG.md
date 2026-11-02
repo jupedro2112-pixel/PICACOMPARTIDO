@@ -20,6 +20,11 @@
   Cada uno: 🤖 informe (últimas 24 h) + tareas del día (alertas + rutina + extras del admin) que la persona tilda con nota.
 - `OfficeDay` (dateKey+desk único, TTL 120 d), `_officeTick` 07 h ART y cada 6 h (lock `office`), `_officeBuild` single-flight y conserva lo tildado
   (`office.mergeTasks`). Personas y turnos: `Config['officeConfig']`. Presencia (🟢 / titila = trabajando en ese puesto): `Config['officePresence']` (ping 60 s).
+- Ingreso con el estilo del panel (logo, PICA ROJA oficial). Botón "🏢 Oficina ↗" en Principal del panel (admin SW v232).
+- ROL `oficina` (owner: "ingreso oficina con clave asd123 y adentro cambiar acceso"): la cuenta se crea DESDE la Oficina (➕ Crear usuario, admin +
+  clave) con clave provisoria que escribe el owner (nunca en el código: repo público) y `User.officeMustChange` ⇒ `officeMiddleware` no deja hacer nada
+  hasta cambiarla (`POST /api/admin/office/password`, mínimo 8, no puede ser asd123). `adminMiddleware` rechaza el rol ⇒ sin panel ni plata; si entra
+  al panel lo manda a /oficina. 🔑 Mi clave siempre disponible.
 - Rutas: GET `/api/admin/inicio/office`, POST `.../rebuild`, `.../config` (admin + clave) · GET `/api/admin/office/mine`, POST `/api/admin/office/ping|task|spend`
   (la persona del puesto o admin; tareas sólo de hoy/ayer).
 
