@@ -370,6 +370,7 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`). Git user: j
 - **BONOS SÓLO EN SLOTS (#1007):** los textos viejos aclaran "se juega en slots"; desde #1010 el owner pidió NO agregarlo en los avisos nuevos.
 - **OFICINA (#1013):** página aparte `/oficina` (no es sección del panel; mismo login). Puestos en `src/services/office.js` (test `scripts/test-office.js`),
   ROL `oficina` = sólo /oficina (`officeMiddleware`; `adminMiddleware` lo rechaza: NO agregarlo ahí). Clave provisoria ⇒ `User.officeMustChange`.
+  NUNCA llamar `_officeBuild` desde una ruta de lectura (#1015: saturó la base a las 00 h); sólo cron con lock o botón del admin.
   datos en `_officeGather`, guardado en `OfficeDay` + `Config['officeConfig'|'officePresence'|'officeRecontacted']`. Admin con clave de INICIO; equipo, sus puestos.
 - **BANCO AUTOMÁTICO BLINDADO (#1012):** `getConfig` devuelve el default si la base falla ⇒ NUNCA leer→mezclar→guardar `Config['hgcash']` entero
   (lo apagaba solo). Cambios puntuales con `_hgcashSetFields`; sólo el panel guarda el objeto (con `confirmOff` para apagar). `_hgcashGuardTick`

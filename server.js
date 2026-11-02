@@ -28916,7 +28916,7 @@ async function _officeGather(now) {
   const DAY = 86400000; const from = new Date(now.getTime() - DAY); const W = { $gte: from, $lt: now };
   const todayKey = _schedArtKey(now), yKey = _schedArtKey(new Date(now.getTime() - DAY));
   const safe = async (p, dflt) => { try { return await p; } catch (e) { logger.warn('[oficina] ' + e.message); return dflt; } };
-  const [money, prevMoney, monthMoney, stalls] = await Promise.all([_bizMoney(from, now), safe(_bizMoney(new Date(from.getTime() - DAY), from), {}),
+  const [money, prevMoney, monthMoney, stalls] = await Promise.all([safe(_bizMoney(from, now), {}), safe(_bizMoney(new Date(from.getTime() - DAY), from), {}),
     safe(_bizMoney(new Date(todayKey.slice(0, 7) + '-01T00:00:00-03:00'), now), {}), safe(_bizStalls(from, now), {})]);
   // SISTEMA
   const t0 = Date.now(); await safe(Config.findOne({ key: 'officeConfig' }).select('_id').lean(), null); const dbMs = Date.now() - t0;
@@ -28957,8 +28957,8 @@ async function _officeGather(now) {
   const spendArr = (await safe(getConfig('adSpend', []), [])) || [];
   const yNoon = new Date(yKey + 'T12:00:00-03:00');
   const firstDepsSince = async (since) => {
-    const ids = await Transaction.distinct('userId', Object.assign({ timestamp: { $gte: since, $lt: now } }, _BIZ_REAL)); if (!ids.length) return [];
-    const rows = await Transaction.aggregate([{ $match: Object.assign({ userId: { $in: ids } }, _BIZ_REAL) }, { $group: { _id: '$userId', first: { $min: '$timestamp' } } }, { $match: { first: { $gte: since } } }]).allowDiskUse(true);
+    const ids = await Transaction.distinct('userId', Object.assign({ timestamp: { $gte: since, $lt: now } }, _BIZ_REAL)).maxTimeMS(20000); if (!ids.length) return [];
+    const rows = await Transaction.aggregate([{ $match: Object.assign({ userId: { $in: ids } }, _BIZ_REAL) }, { $group: { _id: '$userId', first: { $min: '$timestamp' } } }, { $match: { first: { $gte: since } } }]).allowDiskUse(true).option({ maxTimeMS: 20000 });
     return rows.map((r) => r._id);
   };
   const [spendY, spend7, fd24, fd7, regs] = await Promise.all([safe(_diaSpendFor(yNoon, yNoon, null), 0), safe(_diaSpendFor(new Date(now.getTime() - 7 * DAY), now, null), 0),
@@ -28973,7 +28973,7 @@ async function _officeGather(now) {
   const rc = await safe(Transaction.aggregate([{ $match: Object.assign({ timestamp: { $gte: new Date(now.getTime() - 120 * DAY) } }, _BIZ_REAL) },
     { $group: { _id: '$userId', n: { $sum: 1 }, total: { $sum: '$amount' }, last: { $max: '$timestamp' } } },
     { $match: { n: { $gte: 2 }, last: { $lt: new Date(now.getTime() - 5 * DAY), $gte: new Date(now.getTime() - 30 * DAY) } } },
-    { $facet: { cooling: [{ $match: { last: { $gte: new Date(now.getTime() - 14 * DAY) } } }, { $count: 'n' }], lost: [{ $match: { last: { $lt: new Date(now.getTime() - 14 * DAY) } } }, { $count: 'n' }], top: [{ $sort: { total: -1 } }, { $limit: 80 }] } }]).allowDiskUse(true), [{}]);
+    { $facet: { cooling: [{ $match: { last: { $gte: new Date(now.getTime() - 14 * DAY) } } }, { $count: 'n' }], lost: [{ $match: { last: { $lt: new Date(now.getTime() - 14 * DAY) } } }, { $count: 'n' }], top: [{ $sort: { total: -1 } }, { $limit: 80 }] } }]).allowDiskUse(true).option({ maxTimeMS: 20000 }), [{}]);
   const rf = rc[0] || {}; const top = rf.top || [];
   const done7 = (await safe(getConfig('officeRecontacted', null), null)) || {};
   const ru = top.length ? await safe(User.find({ id: { $in: top.map((x) => x._id) } }).select('id username isBlocked duplicateOf fcmToken fcmTokens').lean(), []) : [];
@@ -29034,7 +29034,9 @@ async function _officeTick() {
 setTimeout(() => { _officeTick(); setInterval(() => { _officeTick(); }, 15 * 60000); }, 4 * 60000);
 async function _officeView(dk, deskKeys, isAdmin) {
   let docs = await OfficeDay.find({ dateKey: dk, desk: { $in: deskKeys } }).lean();
-  if (!docs.length && dk === _schedArtKey(new Date())) { await _officeBuild(); docs = await OfficeDay.find({ dateKey: dk, desk: { $in: deskKeys } }).lean(); }
+  // #1015: NUNCA armar los informes dentro de un pedido (a las 00 h no hay del día nuevo y cada refresco de /oficina relanzaba las consultas
+  // pesadas ⇒ base saturada). Sin informe de hoy se muestra el último que haya; lo arma sólo el cron de las 07 h o el botón del admin.
+  if (!docs.length) { const last = await OfficeDay.findOne({ dateKey: { $lt: dk } }).sort({ dateKey: -1 }).select('dateKey').lean(); if (last) docs = await OfficeDay.find({ dateKey: last.dateKey, desk: { $in: deskKeys } }).lean(); }
   const cfg = await getOfficeConfig(); const pres = (await getConfig('officePresence', null)) || {}; const now = Date.now();
   const D = new Map(docs.map((x) => [x.desk, x]));
   const desks = deskKeys.map((k) => {
@@ -29060,7 +29062,7 @@ app.get('/api/admin/inicio/office', authMiddleware, adminMiddleware, async (req,
   } catch (e) { logger.error('[oficina] ' + e.message); res.status(500).json({ error: 'No se pudo armar la oficina: ' + e.message }); }
 });
 app.post('/api/admin/inicio/office/rebuild', authMiddleware, adminMiddleware, async (req, res) => {
-  try { if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' }); await _officeBuild(); res.json({ success: true }); }
+  try { if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' }); if (!(await _cronClaim('office', 10 * 60000))) return res.status(409).json({ error: 'Ya se está armando, esperá unos minutos' }); try { await _officeBuild(); } finally { _cronRelease('office'); } res.json({ success: true }); }
   catch (e) { res.status(500).json({ error: 'No se pudo rehacer: ' + e.message }); }
 });
 app.post('/api/admin/inicio/office/config', authMiddleware, adminMiddleware, async (req, res) => {

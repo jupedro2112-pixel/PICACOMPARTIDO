@@ -8,6 +8,12 @@
 
 ## Sesión 2026-11-01
 
+### 1015. 🚑 La Oficina ya no arma informes dentro de un pedido (2026-11-02)
+- Incidente 00:07 ART: errores 5xx y cortes con la base justo al cambiar el día. A las 00 h no hay `OfficeDay` del día nuevo y `_officeView`
+  llamaba `_officeBuild` en CADA refresco de /oficina (cada 60 s, por pestaña y por instancia) ⇒ consultas pesadas en loop (sospecha fuerte).
+  Ahora sin informe de hoy muestra el último que haya; sólo arma el cron (07 h, con lock) o el botón del admin (con lock, 409 si ya corre).
+  `maxTimeMS` 20 s en las consultas pesadas de `_officeGather` y el primer `_bizMoney` envuelto en `safe`.
+
 ### 1014. 💸 Retiros "en proceso" en el banco ya se ven en Pagos a confirmar (2026-11-02)
 - Owner: "está fallando pero no aparece en pagos pendientes". La lista `/api/admin/payouts/review` sólo traía `pending_review`/`failed`: un retiro
   que quedó `paying` (enviado a hg sin confirmación, o sin número de operación) no salía en ningún lado. Ahora entran los `paying` de más de 10 min
