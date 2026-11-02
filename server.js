@@ -23119,7 +23119,7 @@ app.post('/api/admin/support/:userId/quick', authMiddleware, async (req, res) =>
     if (q.dynamic === 'sorteo') text = String(text || '').replace(/\{(mensual|gran|pts|ptsper|puntos|tickets|requisitos|pago|extra)\}/g, (m0, k) => vars[k] == null ? '' : vars[k]).replace(/\n{3,}/g, '\n\n').trim(); // #944: por si el texto editado no pasó por renderSystemCommand
     if (!text) return res.status(400).json({ error: 'Esa respuesta está vacía en COMANDOS' });
     const now = new Date();
-    await User.updateOne({ id: u.id }, { $set: { supportSessionSince: now } });
+    await User.updateOne({ id: u.id }, { $set: { supportSessionSince: now } }); _spConvCache = null;
     try { io.to('user_' + u.id).emit('support_session_reset', { since: now.toISOString() }); } catch (_) {}
     await new Promise((r) => setTimeout(r, 40));
     const agentName = (await getSupportAgentName().catch(() => null)) || 'Soporte';
@@ -23136,7 +23136,7 @@ app.post('/api/admin/support/:userId/close', authMiddleware, async (req, res) =>
     const u = await User.findOne({ id: String(req.params.userId) }).select('id username').lean();
     if (!u) return res.status(404).json({ error: 'Usuario no encontrado' });
     const now = new Date();
-    await User.updateOne({ id: u.id }, { $set: { supportSessionSince: now } });
+    await User.updateOne({ id: u.id }, { $set: { supportSessionSince: now } }); _spConvCache = null;
     // #604: el aviso va DESPUÉS del corte, así el cliente lo ve en el chat ("el agente cerró el chat…") y abajo el selector.
     await new Promise((r) => setTimeout(r, 30));
     await _sendUserSystemMessage(u, await renderSystemCommand('/sys_support_closed', '🔒 El agente cerró el chat. Para cualquier consulta, volvé a seleccionar una opción.', {}), { metadata: { kind: 'support_closed', channel: 'support' } }).catch(() => {});
@@ -23155,9 +23155,23 @@ function _supportNeedsHuman(text) {
   const onlyWithdrawRule = /(no (me )?(deja|dejan|puedo|permite)|como|cuando|por que no( puedo)?) (retirar|sacar|cobrar)|cuanto (me )?falta|rollover|apostar|desbloque|retirable|bloquead|minimo (de|para) retir/;
   return !onlyWithdrawRule.test(t);
 }
+// #1016 (incidente 2026-11-02): cada mensaje de un cliente hacía que CADA pestaña del panel relanzara esta agregación pesada (en el log:
+// 12 iguales en el mismo segundo) ⇒ el resultado se comparte 8 s entre todos los agentes y hay una sola consulta en curso por instancia.
+let _spConvCache = null, _spConvInflight = null;
+function _supportConversationsShared() {
+  if (_spConvCache && Date.now() - _spConvCache.at < 8000) return Promise.resolve(_spConvCache.data);
+  if (_spConvInflight) return _spConvInflight;
+  _spConvInflight = _supportConversationsBuild().then((data) => { _spConvCache = { at: Date.now(), data }; return data; }).finally(() => { _spConvInflight = null; });
+  return _spConvInflight;
+}
 app.get('/api/admin/support/conversations', authMiddleware, async (req, res) => {
   try {
     if (!SUPPORT_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Acceso denegado' });
+    res.json(await _supportConversationsShared());
+  } catch (e) { logger.error(`/api/admin/support/conversations: ${e.message}`); res.status(500).json({ error: 'Error del servidor' }); }
+});
+async function _supportConversationsBuild() {
+  {
     const since = new Date(Date.now() - 72 * 3600 * 1000);
     const rows = await Message.aggregate([
       { $match: { channel: 'support', timestamp: { $gte: since } } },
@@ -23195,9 +23209,9 @@ app.get('/api/admin/support/conversations', authMiddleware, async (req, res) => 
     // #900 (owner): "si quieren retirar y no pueden, no hace falta respuesta": si TODO lo que escribió es la consulta de no poder retirar /
     // cuánto falta apostar (ya contestada sola y explicada en Retirar premio) no ocupa Soporte; un retiro que NO LLEGÓ o un descuento sí.
     const _rows = rows.filter((r) => (r.userTextList || []).some(_supportNeedsHuman)).map((r) => { delete r.userTextList; return r; });
-    res.json({ conversations: _rows, unreadTotal: _rows.filter((r) => !r.closed).reduce((s, r) => s + (r.unread || 0), 0), pending: _rows.filter((r) => !r.closed).length, closed: _rows.filter((r) => r.closed).length });
-  } catch (e) { logger.error(`/api/admin/support/conversations: ${e.message}`); res.status(500).json({ error: 'Error del servidor' }); }
-});
+    return { conversations: _rows, unreadTotal: _rows.filter((r) => !r.closed).reduce((s, r) => s + (r.unread || 0), 0), pending: _rows.filter((r) => !r.closed).length, closed: _rows.filter((r) => r.closed).length };
+  }
+}
 
 app.get('/api/admin/hgcash/movements', authMiddleware, adminMiddleware, async (req, res) => {
   try {
