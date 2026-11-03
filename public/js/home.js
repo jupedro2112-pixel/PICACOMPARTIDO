@@ -2278,9 +2278,30 @@
         // primera carga (body.nodep) el panel entra desplegado; después de la primera carga entra cerrado como antes (#723).
         // #843 (owner): "que no tape toda la pantalla: cuando la gente entra por pauta, que aparezca abierto; después, ya cerrado, que lo abran
         // ellos" ⇒ abierto solo UNA vez (primera entrada desde la landing, `vip_from_pauta`), después arranca cerrado (queda la burbuja).
-        setTimeout(() => { _setCasinoTestMode(test); _setupCasinoQuick(); if (!test) { _quickDismissed = false;
+        setTimeout(() => { _setCasinoTestMode(test); _setupCasinoQuick(); if (!test) { try { _giroxNewsShow(); setTimeout(() => { try { if (VIP.ui && VIP.ui._casinoOpen) _giroxNewsShow(); } catch (_) {} }, 3000); } catch (_) {} _quickDismissed = false;
             let first = false; try { first = sessionStorage.getItem('vip_from_pauta') === '1' && localStorage.getItem('vip_cq_auto_done') !== '1'; if (first) { localStorage.setItem('vip_cq_auto_done', '1'); sessionStorage.removeItem('vip_from_pauta'); } } catch (_) {}
             try { toggleCasinoLoad(first); } catch (_) {} try { if (!first) _cqTipShow(); } catch (_) {} } }, 60);
+    }
+    // #1019 (owner): "¡Actualizamos!" adentro de Girox para los clientes que YA estaban (el server decide `show`; los nuevos de la landing no).
+    // Arriba, chico, se cierra con la ✕ y no vuelve (si cambian el texto en COMANDOS /sys_girox_news, aparece una vez más). Al cerrarlo
+    // queda Girox con la burbuja de Carga rápida como siempre.
+    function _gnHash(t) { let h = 5381; for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0; return String(h >>> 0); }
+    function _giroxNewsShow() {
+        const ov = _el('casinoOverlay'); if (!ov) return;
+        const gn = _platforms && _platforms.giroxNews; const old = _el('giroxNews');
+        if (!gn || !gn.show || !gn.text) { if (old) old.remove(); return; }
+        const key = _gnHash(gn.text); let closed = null; try { closed = localStorage.getItem('vip_gnews_x'); } catch (_) {}
+        if (closed === key) { if (old) old.remove(); return; }
+        if (old) return;
+        const box = document.createElement('div');
+        box.id = 'giroxNews'; box.setAttribute('role', 'status');
+        box.style.cssText = 'position:absolute;z-index:7;left:12px;right:12px;top:calc(var(--sat, env(safe-area-inset-top, 0px)) + 10px);max-width:460px;margin:0 auto;' +
+            'background:#fff;color:#1a1a1a;border-radius:14px;box-shadow:0 8px 26px rgba(0,0,0,0.45);border-left:5px solid #e60023;padding:12px 40px 12px 14px;font-size:13.5px;line-height:1.45;';
+        const tx = document.createElement('div'); tx.textContent = gn.text;
+        const x = document.createElement('button'); x.type = 'button'; x.setAttribute('aria-label', 'Cerrar'); x.textContent = '✕';
+        x.style.cssText = 'position:absolute;top:6px;right:6px;width:30px;height:30px;border:none;border-radius:50%;background:#f1f1f1;color:#333;font-size:15px;font-weight:800;cursor:pointer;';
+        x.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); try { localStorage.setItem('vip_gnews_x', key); } catch (_) {} box.remove(); });
+        box.appendChild(tx); box.appendChild(x); ov.appendChild(box);
     }
     function playOn(platformId) { openPlatform(platformId); }
     // #673 (owner): INSTALAR EN iPHONE CON LA SESIÓN. iOS no comparte el localStorage de Safari con la app instalada: el manifest

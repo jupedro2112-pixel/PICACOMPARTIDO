@@ -8,6 +8,13 @@
 
 ## Sesión 2026-11-01
 
+### 1019. Cartel "¡Actualizamos!" adentro de Girox para los clientes que ya estaban (2026-11-03)
+- Owner: mensaje informativo al entrar a Girox ("Actualizamos! Contás con muchos beneficios y sorteos, en nuestro menú podés revisar todo")
+  para los que ya están, NO para los nuevos de la landing; simple, se saca con la ✕ y sigue Girox con la burbuja de Carga rápida.
+- Texto editable `/sys_girox_news` (vacío = no se muestra). `Config['giroxNewsSince']` (lo fija una migración al primer arranque) ⇒
+  `GET /api/platforms` devuelve `giroxNews.show` sólo si `User.createdAt` es anterior. Front `_giroxNewsShow` (home.js) arriba del casino;
+  cerrado = `localStorage vip_gnews_x` (hash del texto: si cambian el texto vuelve a salir una vez). PWA v659.
+
 ### 1018. Actualizar estando adentro de Girox vuelve a abrir Girox (2026-11-03)
 - Owner: "si actualizan para arriba, que siempre quede dentro de Girox". #1017 cubría el menú Girox directo; faltaba quien abrió Girox desde
   otro menú. `openPlatform` marca `sessionStorage vip_casino_was` (cerrar el casino la borra) y `maybeShowMenuChooser` lo reabre tras elegir

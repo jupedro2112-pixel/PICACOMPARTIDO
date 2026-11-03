@@ -6895,9 +6895,10 @@ app.get('/api/platforms', authMiddleware, async (req, res) => {
   try {
     const list = await platforms.listEnabled();
     const s = await platforms.getSettings();
-    let lastPlatform = null, preferredPlatform = null;
+    let lastPlatform = null, preferredPlatform = null, _userCreatedAt = null;
     try {
-      const u = await User.findOne({ id: req.user.userId }).select('lastPlatform preferredPlatform').lean();
+      const u = await User.findOne({ id: req.user.userId }).select('lastPlatform preferredPlatform createdAt').lean();
+      _userCreatedAt = u && u.createdAt ? new Date(u.createdAt) : null;
       lastPlatform = (u && u.lastPlatform) || null;
       preferredPlatform = (u && platforms.normalizeId(u.preferredPlatform)) || null;
       if (preferredPlatform && !list.some((p) => p.id === preferredPlatform)) preferredPlatform = null; // fijó una que ya no está habilitada
@@ -6912,13 +6913,14 @@ app.get('/api/platforms', authMiddleware, async (req, res) => {
     const money = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
     const btnVars = { min: money(minDep), retiro_min: money(wdMin) };
     const rc = (name, def, vars) => renderSystemCommand(name, def, vars).catch(() => def);
-    const [load, loadSub, withdraw, withdrawSub, homeText, newsText, refundPromo, supText, supSla] = await Promise.all([
+    const [load, loadSub, withdraw, withdrawSub, homeText, newsText, refundPromo, supText, supSla, giroxNewsText, giroxNewsSince] = await Promise.all([
       rc('/sys_load_btn', LOAD_BTN_DEFAULT, btnVars), rc('/sys_load_btn_sub', LOAD_BTN_SUB_DEFAULT, btnVars),
       rc('/sys_withdraw_btn', WITHDRAW_BTN_DEFAULT, btnVars), rc('/sys_withdraw_btn_sub', WITHDRAW_BTN_SUB_DEFAULT, btnVars),
       rc('/sys_home_banner', HOME_BANNER_DEFAULT, { pct: autoPct }),
       dailyPct > 0 ? rc('/sys_entry_news', ENTRY_NEWS_DEFAULT, { pct: dailyPct }) : Promise.resolve(null),
       rc('/sys_refund_promo', REFUND_PROMO_DEFAULT, { pct: dailyPct }),
-      rc('/sys_support_intro', SUPPORT_INTRO_DEFAULT, { nombre: supportName }), rc('/sys_support_sla', SUPPORT_SLA_DEFAULT, {})
+      rc('/sys_support_intro', SUPPORT_INTRO_DEFAULT, { nombre: supportName }), rc('/sys_support_sla', SUPPORT_SLA_DEFAULT, {}),
+      rc('/sys_girox_news', GIROX_NEWS_DEFAULT, {}), getConfig('giroxNewsSince', null) // #1019
     ]);
     res.json({
       platforms: list.map((p) => { const ad = platforms.getAdapter(p.id); const play = (ad && typeof ad.getPlayUrl === 'function' && ad.getPlayUrl()) || p.externalUrl || null;
@@ -6932,7 +6934,9 @@ app.get('/api/platforms', authMiddleware, async (req, res) => {
       homeBanner: { pct: autoPct, text: homeText },
       entryNews: { pct: dailyPct, text: dailyPct > 0 ? newsText : null },
       refundPromo,
-      supportIntro: { name: supportName, text: supText || '', sla: supSla || '' }
+      supportIntro: { name: supportName, text: supText || '', sla: supSla || '' },
+      // #1019: sólo para quien ya tenía cuenta antes de lanzar el cartel (los nuevos de la landing no lo ven).
+      giroxNews: { text: giroxNewsText || '', show: !!(giroxNewsText && giroxNewsSince && _userCreatedAt && _userCreatedAt < new Date(giroxNewsSince)) }
     });
   } catch (e) {
     logger.warn(`[platforms] GET /api/platforms: ${e.message}`);
@@ -13349,6 +13353,8 @@ async function initializeData() {
   try { if (!(await getConfig('mig968GiftBoost', null))) { await Config.set('storyAutoMatches', true, 'mig#968'); const r = await ScheduledCampaign.deleteMany({ autoKey: { $regex: '^ap-2026-(10|11)-' }, status: 'scheduled', runAt: { $gt: new Date() } }); await Config.set('mig968GiftBoost', new Date().toISOString(), 'mig#968'); console.log('✅ #968: partidos en historias ON · ' + (r.deletedCount || 0) + ' campañas futuras del autopiloto se reprograman con el refuerzo'); } } catch (e) { console.warn('[startup-migration] #968:', e.message); }
   // #954 (owner 2026-10-24): "dejá fino el cierre a partir de hoy, ya que está el botón de pago de otro banco": los cierres valen desde hoy.
   try { if (!(await getConfig('mig954CloseSince', null))) { const cur = String((await getConfig('closeSince', null)) || ''); if (!cur || cur < '2026-10-24') await Config.set('closeSince', '2026-10-24', 'mig#954'); await Config.set('mig954CloseSince', new Date().toISOString(), 'mig#954'); console.log('✅ #954: cierres desde 2026-10-24'); } } catch (e) { console.warn('[startup-migration] #954:', e.message); }
+  // #1019 (owner): cartel "¡Actualizamos!" dentro de Girox SÓLO para los clientes que ya estaban: los creados antes de esta fecha.
+  try { if (!(await getConfig('giroxNewsSince', null))) await Config.set('giroxNewsSince', new Date().toISOString(), 'mig#1019'); } catch (_) {}
   // #955 (owner): "la ruleta diaria: un tiro con cargas de $5.000" (los textos de la app leen el valor: se actualizan solos).
   try { if (!(await getConfig('mig955RouletteMin5000', null))) { const r = (await getConfig('dailyRoulette', null)) || {}; if (r && typeof r === 'object') { r.minDepositArs = 5000; await Config.set('dailyRoulette', r, 'mig#955'); } await Config.set('mig955RouletteMin5000', new Date().toISOString(), 'mig#955'); console.log('✅ #955: ruleta diaria con $5.000 cargados en el día'); } } catch (e) { console.warn('[startup-migration] #955:', e.message); }
   // #1010 (owner 2026-11-01): "100% en la primera carga con tope de $15.000 y el 50% extra a las 24 h, que vuelva al otro día". Una sola vez:
@@ -13634,6 +13640,13 @@ async function initializeData() {
       description: 'Servicio "Retiros a tu CBU" en la landing y en el ingreso de la app (#555). Formato: "Título | detalle". Variables: {diario} {semanal} {mensual} (% de reembolso), {min_carga}, {min_retiro}, {pct} (% referidos), {niveles} (VIP), {misiones} (cantidad por semana), {premio_max} (premio mayor de la ruleta o de las misiones).',
       type: 'message',
       response: 'Retiros a tu CBU | Pagos automáticos desde {min_retiro}, sin límites, en el acto.'
+    },
+    {
+      // #1019 (owner): cartel dentro de Girox para los clientes que ya estaban (no los nuevos de la landing). Se cierra con la ✕.
+      name: '/sys_girox_news',
+      description: 'Cartel "¡Actualizamos!" que ven ADENTRO de Girox los clientes que ya tenían cuenta (los nuevos no). Se cierra con la ✕ y no vuelve; si cambiás el texto, vuelve a aparecer una vez. Vacío = no se muestra.',
+      type: 'message',
+      response: GIROX_NEWS_DEFAULT
     },
     {
       // #349 (2026-10-17): cartel NOVEDAD del Inicio (debajo del titular de la app). {pct} = % del reembolso diario.
@@ -14997,6 +15010,7 @@ async function getMinDepositArs() {
   return MIN_DEPOSIT_ARS_DEFAULT;
 }
 const HOME_BANNER_DEFAULT = 'Cargando de forma automática tenés un {pct}% en todas tus cargas.'; // #271: corto (arriba del chat)
+const GIROX_NEWS_DEFAULT = '¡Actualizamos! Ahora contás con muchos beneficios y sorteos. En nuestro MENÚ podés revisar todo: reembolsos, ruleta, sorteos, niveles VIP y más.'; // #1019
 const ENTRY_NEWS_DEFAULT = 'NOVEDAD: aprovechá reembolso {pct}% hasta diciembre'; // #523/#525 // #349: cartel del Inicio, {pct} = % máximo de la escalera diaria
 const REFUND_PROMO_DEFAULT = 'Promoción válida hasta diciembre. Los porcentajes pueden cambiar.'; // #372: aviso bajo los reembolsos (/sys_refund_promo)
 // #373: SOPORTE (ex "Carga manual") — la persona que se presenta al entrar al chat (/sys_support_*).
