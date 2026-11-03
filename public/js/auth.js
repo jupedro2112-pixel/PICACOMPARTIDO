@@ -694,6 +694,8 @@ VIP.auth = (function () {
             if (tok) { VIP.state.currentToken = tok; localStorage.setItem('userToken', tok); try { sessionStorage.removeItem('vip_signup_creds'); } catch (_) {} }
             else if (!(await _loginWithSignupCreds())) { fallback(errMsg || 'No pudimos entrar automáticamente. Entrá con tu usuario y clave.'); return; }
             _quickAccess = null;
+            // #1017 (owner): el alta rápida entra igual que la landing: Girox directo con la burbuja de Carga rápida abierta.
+            try { VIP.state._openGiroxAfterLogin = true; sessionStorage.setItem('vip_from_pauta', '1'); } catch (_) {}
             await verifyToken();
             if (ld) ld.style.display = 'none';
         } catch (_) { fallback('Error de conexión. Probá de nuevo.'); }
@@ -770,6 +772,7 @@ VIP.auth = (function () {
                 if (r.ok && d && d.token) {
                     VIP.state.currentToken = d.token; localStorage.setItem('userToken', d.token);
                     try { sessionStorage.removeItem('vip_signup_creds'); } catch (_) {}
+                    try { VIP.state._openGiroxAfterLogin = true; sessionStorage.setItem('vip_from_pauta', '1'); } catch (_) {} // #1017: recién registrado ⇒ Girox directo
                     return true;
                 }
                 if (d && (r.status === 400 || r.status === 401)) break;

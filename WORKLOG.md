@@ -8,6 +8,16 @@
 
 ## Sesión 2026-11-01
 
+### 1017. Girox se mantiene al actualizar + alta rápida a Girox + botones de Píxeles de Meta (2026-11-03)
+- Owner: "si está en la página de Girox y actualiza, que no vaya al menú completo". Sin menú elegido a mano, #980 mandaba al completo
+  hasta la 1ª carga ⇒ quien entraba por la landing a Girox volvía al completo al recargar. Ahora `localStorage vip_menu_last` guarda el
+  último menú (lo escribe `setMenuPref`) y `maybeShowMenuChooser` respeta Girox antes del default.
+- Owner: "desde la landing que entre a Girox con la burbuja abierta": la landing ya mandaba `ir=girox`; faltaba el alta RÁPIDA de la página
+  principal (`/api/auth/quick-entry`) y el respaldo con usuario+clave (#831), que entraban sin ese flag ⇒ al completo. Ahora los tres entran a
+  Girox directo con la burbuja de Carga rápida abierta la primera vez (`vip_from_pauta`, #843).
+- Píxeles de Meta por publicista: Probar / ✏️ / 🗑️ no hacían nada: el `onclick` llevaba `JSON.stringify(...)` con comillas dobles dentro de
+  un atributo con comillas dobles (cortaba el HTML). Ahora va con `escapeHtml(JSON.stringify(...))`. PWA v659, admin SW v235.
+
 ### 1016. 🛟 La base espera al primario nuevo en vez de fallar (2026-11-02)
 - Logs del incidente: `not primary and secondaryOk=false` y `connection ... timed out` ⇒ MongoDB Atlas cambiando de primario una y otra vez
   (no es el código: siguió igual con la versión vieja y sin la Oficina). `serverSelectionTimeoutMS` 5 s → 15 s en config/database.js: una

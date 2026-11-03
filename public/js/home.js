@@ -78,6 +78,9 @@
     function _isInstalledApp() { try { return document.documentElement.classList.contains('is-app') || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true; } catch (_) { return false; } }
     // #980 (owner): "completo hasta la primera carga, Girox directo después": el flag se guarda al saber que ya cargó (promo de 1ª carga / carga acreditada).
     const HAS_DEP_KEY = 'vip_has_dep';
+    // #1017 (owner): "si está en la página de Girox y actualiza, que no vaya al menú completo": último menú en el que estuvo.
+    const MENU_LAST_KEY = 'vip_menu_last';
+    function _lastWasGirox() { try { return localStorage.getItem(MENU_LAST_KEY) === 'girox'; } catch (_) { return false; } }
     function _hasDeposit() { try { return localStorage.getItem(HAS_DEP_KEY) === '1'; } catch (_) { return false; } }
     function _defaultPref() { return (_hasDeposit() || !_menuOn('full')) && _menuOn('girox') ? 'girox' : (_menuOn('full') ? 'full' : 'girox'); }
     function _userPickedMenu() { try { return localStorage.getItem(MENU_USER_KEY) === '1' && !!localStorage.getItem(MENU_PREF_KEY); } catch (_) { return false; } }
@@ -200,6 +203,7 @@
         // #836: lo que elige la PERSONA se recuerda (también Girox) y es donde arranca la próxima vez; lo automático (entrada por defecto
         // a Girox, un solo menú activo) no pisa una elección suya. 🪦 #678: antes Girox directo no se guardaba.
         if (!opts || !opts.auto) { try { localStorage.setItem(MENU_PREF_KEY, pref); localStorage.setItem(MENU_USER_KEY, '1'); } catch (_) {} }
+        try { localStorage.setItem(MENU_LAST_KEY, pref); } catch (_) {} // #1017: dónde estaba (para que al actualizar la página no lo saque de Girox)
         closeMenuChooser();
         setHomeMode(_modeFor(pref));
         _afterPref(pref); // #670
@@ -418,6 +422,7 @@
         if (pref && _userPickedMenu()) { setHomeMode(_modeFor(pref)); _afterPref(pref); return; } // #836: el menú que eligió la persona
         // #733 (owner): "el menú seleccionado para todos (landing o común) cuando abran la app sea el de Girox, y después lo pueden cambiar
         // desde Menú; la idea es que todos entren directo a cargar". Sin menú fijo → Girox directo, sin selector (si ese menú está activo).
+        if (_lastWasGirox() && _menuOn('girox')) { setMenuPref('girox', { quiet: true, auto: true }); return; } // #1017: estaba en Girox ⇒ sigue en Girox
         if (_menuOn(_defaultPref())) { setMenuPref(_defaultPref(), { quiet: true, auto: true }); return; } // #980: completo hasta la 1ª carga, Girox después
         setTimeout(openMenuChooser, 350);
     }
