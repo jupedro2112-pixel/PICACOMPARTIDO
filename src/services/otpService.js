@@ -36,25 +36,16 @@ function generateCode() {
  * @returns {string} Texto del SMS listo para enviar
  */
 function buildOtpMessage(purpose, code) {
-  // El espacio en "vipcargas .com" es intencional: rompe la detección de URL
-  // que usan los filtros antispam de los carriers LATAM (sobre todo Tigo/Claro
-  // en Paraguay y Argentina), evitando que el SMS caiga en spam. El usuario
-  // sigue entendiendo el dominio sin problema. Sigue siendo 1 SMS (GSM-7,
-  // ~80 chars, muy por debajo del límite de 160).
-  if (purpose === 'register') {
-    return `VIPCARGAS: codigo de verificacion ${code}. Valido 5 min. vipcargas .com`;
-  } else if (purpose === 'reset') {
-    return `VIPCARGAS: codigo para restablecer contrasena ${code}. Valido 5 min. vipcargas .com`;
-  } else if (purpose === 'change-password') {
-    return `VIPCARGAS: codigo para cambiar contrasena ${code}. Valido 5 min. vipcargas .com`;
-  } else if (purpose === 'login') {
-    return `VIPCARGAS: codigo de inicio de sesion ${code}. Valido 5 min. vipcargas .com`;
-  } else if (purpose === 'withdraw') {
-    // #382: confirmacion de CADA retiro (anti-estafa). ASCII puro, 1 SMS.
-    return `PICAROJA: codigo para confirmar tu RETIRO ${code}. Si no fuiste vos NO lo compartas. Valido 5 min.`;
-  } else {
-    return `VIPCARGAS: codigo de verificacion ${code}. Valido 5 min. vipcargas .com`;
-  }
+  // #1021 (owner 2026-11-03): marca PICA ROJA (la misma que muestra el sitio) y SIN link. Antes decia "VIPCARGAS" con
+  // "vipcargas .com" partido a proposito para esquivar los filtros antispam: no coincidia con la marca y AWS rechaza mensajes
+  // armados para esquivar filtros. El texto tiene que ser el MISMO que se declara en el pedido de SMS a AWS: si se cambia aca,
+  // avisar en ese pedido. ASCII puro (GSM-7, 1 sola parte).
+  const tail = `es ${code}. Vence en 5 minutos. No lo compartas.`;
+  if (purpose === 'reset') return `PICA ROJA: tu codigo para restablecer la clave ${tail}`;
+  if (purpose === 'change-password') return `PICA ROJA: tu codigo para cambiar la clave ${tail}`;
+  if (purpose === 'login') return `PICA ROJA: tu codigo para iniciar sesion ${tail}`;
+  if (purpose === 'withdraw') return `PICA ROJA: tu codigo para confirmar tu retiro ${tail} Si no fuiste vos, no lo uses.`;
+  return `PICA ROJA: tu codigo de verificacion ${tail}`; // register y cualquier otro
 }
 
 /**

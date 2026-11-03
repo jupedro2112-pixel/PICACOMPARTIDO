@@ -8,7 +8,7 @@
 const { buildOtpMessage } = require('../otpService');
 
 const ASCII_REGEX = /^[\x00-\x7F]*$/;
-const PURPOSES = ['register', 'reset', 'change-password', 'login', 'unknown'];
+const PURPOSES = ['register', 'reset', 'change-password', 'login', 'withdraw', 'unknown'];
 const SAMPLE_CODE = '123456';
 
 describe('OTP SMS message templates', () => {
@@ -20,10 +20,9 @@ describe('OTP SMS message templates', () => {
       expect(ASCII_REGEX.test(message)).toBe(true);
       expect(message.length).toBeLessThanOrEqual(160);
       expect(message).toContain(SAMPLE_CODE);
-      // Espacio intencional para evitar detección como URL por filtros antispam
-      // de los carriers (sobre todo en Paraguay y Argentina).
-      expect(message).toContain('vipcargas .com');
-      expect(message).toContain('VIPCARGAS');
+      // #1021: marca del sitio (PICA ROJA) y sin links ni dominios partidos para esquivar filtros.
+      expect(message.startsWith('PICA ROJA: ')).toBe(true);
+      expect(message).not.toMatch(/\.com|https?:|www/i);
     }
   );
 });

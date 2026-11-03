@@ -8,6 +8,13 @@
 
 ## Sesión 2026-11-01
 
+### 1021. SMS de códigos con la marca PICA ROJA y sin link (2026-11-03)
+- Owner: AWS rechazó el acceso a SMS (cuenta de pautanuevasantino, caso del 2026-10-06) y se va a volver a pedir con rapidogirox.com.
+  Los SMS decían "VIPCARGAS … vipcargas .com" (el espacio era para esquivar filtros antispam: AWS rechaza eso y no coincidía con el sitio
+  "PICA ROJA oficial"). `buildOtpMessage` (src/services/otpService.js): todos "PICA ROJA: tu codigo … es NNNNNN. Vence en 5 minutos. No lo
+  compartas." (ASCII, ≤ 123 caracteres, 1 SMS; el de retiro agrega "Si no fuiste vos, no lo uses."). Test `otpService.messages.test.js`
+  actualizado (suma 'withdraw', exige marca y prohíbe links). El texto tiene que ser el MISMO que se declara en el pedido a AWS.
+
 ### 1020. Landing de Vercel (carpeta `landing/`) apunta a rapidogirox.com (2026-11-03)
 - Owner: "la landing de la carpeta landing, que apunte a rapidogirox.com para que funcione". `API_BASE_DEFAULT` = `https://rapidogirox.com`
   (antes picaroja.com, #570). Con eso info, píxel, alta, redirección a la app y "Entrar a mi cuenta" van a ese dominio.
