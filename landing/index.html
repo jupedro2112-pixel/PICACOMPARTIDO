@@ -7,7 +7,7 @@
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; overflow-x: hidden; }
+  html, body { height: 100%; }
   body {
     font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
     background:
@@ -21,60 +21,58 @@
 
   /* Header */
   .top {
-    width: 100%; max-width: 460px; margin: 0 auto; display: flex; align-items: center;
-    justify-content: space-between; padding: 16px 20px calc(4px + env(safe-area-inset-top,0px));
+    width: 100%; max-width: 460px; display: flex; align-items: center;
+    justify-content: space-between; padding: 8px 20px calc(0px + env(safe-area-inset-top,0px));
   }
-  .logo { display: flex; align-items: center; gap: 10px; }
-  .logo img { width: 42px; height: 42px; border-radius: 12px; object-fit: cover; }
-  .logo b { display: block; font-size: 19px; font-weight: 900; letter-spacing: 1.2px; color: #f3f5f1; line-height: 1.1; }
-  .logo small { display: block; font-size: 11px; font-weight: 600; color: #8fa090; letter-spacing: .3px; }
+  .logo { display: flex; align-items: center; gap: 9px; }
+  .logo img { width: 40px; height: 40px; border-radius: 12px; object-fit: cover; }
+  .logo b { display: block; font-size: 17px; font-weight: 900; letter-spacing: 1.2px; color: #f3f5f1; line-height: 1.1; }
+  .logo small { display: block; font-size: 10.5px; font-weight: 600; color: #8fa090; letter-spacing: .3px; }
   .plus18 {
     font-size: 11px; font-weight: 800; color: #cbd8cb;
     border: 1px solid rgba(255,255,255,0.22); border-radius: 999px; padding: 3px 9px;
   }
 
   main {
-    width: 100%; max-width: 460px; margin: 0 auto; flex: 1;
-    padding: 8px 20px calc(28px + env(safe-area-inset-bottom,0px));
+    width: 100%; max-width: 460px; flex: 1;
+    padding: 4px 16px calc(20px + env(safe-area-inset-bottom,0px));
     display: flex; flex-direction: column;
   }
 
   /* Banner de bono */
   .promo {
-    margin-top: 12px; border-radius: 18px; overflow: hidden;
+    margin-top: 8px; border-radius: 18px; overflow: hidden;
     border: 1px solid rgba(212,175,55,0.3);
     background:
       linear-gradient(160deg, rgba(227,189,72,0.14), rgba(15,122,61,0.10)),
       #0e140e;
-    padding: 22px 20px; text-align: center;
+    padding: 8px 14px 8px; text-align: center;
   }
   .promo .eyebrow {
-    font-size: 12px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase;
+    font-size: 10.5px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase;
     color: #7bd39b;
   }
   .promo .big {
-    font-size: 62px; font-weight: 900; line-height: 1; letter-spacing: -1px;
-    color: #e3bd48; text-shadow: 0 4px 30px rgba(227,189,72,0.28); margin: 6px 0 2px;
+    font-size: 32px; font-weight: 900; line-height: 1; letter-spacing: -1px;
+    color: #e3bd48; text-shadow: 0 4px 30px rgba(227,189,72,0.28); margin: 2px 0 0;
   }
-  .promo .sub { font-size: 15px; font-weight: 800; color: #f3f5f1; letter-spacing: .5px; }
-  .promo .note { font-size: 12px; font-weight: 700; color: #8fa090; margin-top: 6px; }
+  .promo .sub { font-size: 11.5px; font-weight: 800; color: #f3f5f1; letter-spacing: .5px; }
+  .promo .note { font-size: 10.5px; font-weight: 700; color: #8fa090; margin-top: 2px; }
 
   /* Copy */
-  .pitch { text-align: center; color: #a7b7a8; font-size: 14.5px; line-height: 1.5; margin: 20px 4px 16px; }
+  .pitch { text-align: center; color: #a7b7a8; font-size: 11.5px; line-height: 1.35; margin: 7px 4px 6px; }
 
   /* Form */
-  .refhint { display: none; margin: 0 0 10px; text-align: center; font-size: 12px; font-weight: 800; color: #e3bd48; background: rgba(227,189,72,0.10); border: 1px solid rgba(227,189,72,0.35); border-radius: 999px; padding: 6px 10px; }
-  .refhint.on { display: block; }
-  .qname { text-align: center; font-size: 14px; font-weight: 800; color: #eaf2ea; margin-bottom: 10px; }
+  .qname { text-align: center; font-size: 12.5px; font-weight: 800; color: #eaf2ea; margin-bottom: 5px; }
   input {
-    width: 100%; padding: 16px 18px; font-size: 17px; color: #fff; text-align: center;
+    width: 100%; padding: 10px 12px; font-size: 15px; color: #fff; text-align: center;
     background: #0a0f0a; border: 1px solid rgba(255,255,255,0.15); border-radius: 14px; outline: none;
     transition: border-color .2s, box-shadow .2s;
   }
   input::placeholder { color: #667766; }
   input:focus { border-color: #25d366; box-shadow: 0 0 0 3px rgba(37,211,102,0.16); }
   .cta {
-    width: 100%; margin-top: 12px; padding: 17px; font-size: 17px; font-weight: 900; letter-spacing: .4px;
+    width: 100%; margin-top: 7px; padding: 11px; font-size: 14px; font-weight: 900; letter-spacing: .4px;
     color: #05230f; background: linear-gradient(135deg, #2ce06e, #0f9a4b);
     border: none; border-radius: 14px; cursor: pointer;
     display: flex; align-items: center; justify-content: center; gap: 9px;
@@ -83,8 +81,8 @@
   .cta:hover { filter: brightness(1.06); }
   .cta:active { transform: scale(0.99); }
   .cta:disabled { filter: saturate(.5) brightness(.85); cursor: default; }
-  .hint { text-align: center; font-size: 12px; color: #6b786c; margin-top: 9px; }
-  .msg { text-align: center; font-size: 13px; min-height: 16px; margin-top: 8px; }
+  .hint { text-align: center; font-size: 11px; color: #6b786c; margin-top: 5px; margin-bottom: 4px; }
+  .msg { text-align: center; font-size: 13px; min-height: 0; margin-top: 0; } .msg.err { margin-top: 6px; }
   .msg.err { color: #ff9090; }
 
   .spin {
@@ -97,18 +95,11 @@
   /* Trust */
   .trust {
     display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap;
-    margin-top: 22px; font-size: 12.5px; color: #8fa090;
+    margin-top: 12px; font-size: 11.5px; color: #8fa090;
   }
   .trust span { display: inline-flex; align-items: center; gap: 6px; }
   .trust .d { width: 5px; height: 5px; border-radius: 50%; background: #25d366; }
-  /* Carga automática: cómo funciona (PICA ROJA no tiene agente: se acredita sola) */
-  .auto {
-    margin-top: 16px; background: #0e140e; border: 1px solid rgba(255,255,255,0.10); border-radius: 14px;
-    padding: 12px 14px; font-size: 12.5px; color: #a7b7a8; line-height: 1.5; text-align: center;
-  }
-  .auto b { color: #eaf2ea; }
-  .auto .min { color: #e3bd48; font-weight: 800; }
-  .legal { text-align: center; font-size: 11px; color: #5d6a5e; line-height: 1.6; margin-top: 24px; }
+  .legal { text-align: center; font-size: 10px; color: #5d6a5e; line-height: 1.5; margin-top: 12px; }
 
   /* Pantalla de credenciales */
   .done { display: none; text-align: center; margin-top: 24px; }
@@ -129,12 +120,12 @@
 
   /* Popup de enganche */
   .pop {
-    position: fixed; inset: 0; width: 100vw; background: rgba(4,6,4,0.72);
+    position: fixed; inset: 0; background: rgba(4,6,4,0.72);
     display: none; align-items: center; justify-content: center; padding: 24px; z-index: 50;
   }
   .pop.on { display: flex; animation: fade .25s ease; }
   .pop .box {
-    width: min(100%, 360px); margin: 0 auto; background: #10160f; border: 1px solid rgba(212,175,55,0.35);
+    width: 100%; max-width: 360px; background: #10160f; border: 1px solid rgba(212,175,55,0.35);
     border-radius: 20px; padding: 26px 22px; text-align: center; box-shadow: 0 24px 70px rgba(0,0,0,0.6);
   }
   .pop h3 { font-size: 20px; font-weight: 900; margin-bottom: 6px; }
@@ -144,25 +135,111 @@
     text-decoration: underline; cursor: pointer; background: none; border: none;
   }
   @media (prefers-reduced-motion: reduce) { .spin { animation: none; } .done.on, .pop.on { animation: none; } }
+
+  /* ── Plataformas (3 íconos) y servicios resumidos (sólo título) — pedido del owner 2026-10-19 ── */
+  /* #552: carrusel de juegos (como el Inicio de la app) */
+  .games-h { display: flex; align-items: baseline; justify-content: space-between; margin-top: 8px; padding: 0 2px; }
+  .games-h b { font-size: 13px; font-weight: 900; color: #eaf2ea; } .games-h small { font-size: 11px; color: #8fa090; display: inline-flex; align-items: center; gap: 5px; }
+  .games-h .d { width: 6px; height: 6px; border-radius: 50%; background: #25d366; box-shadow: 0 0 0 3px rgba(37,211,102,.2); display: inline-block; }
+  .games { display: flex; gap: 8px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; margin: 6px -4px 0; padding: 0 4px 4px; }
+  .games::-webkit-scrollbar { display: none; }
+  .game { flex: 0 0 29%; max-width: 128px; scroll-snap-align: start; border-radius: 14px; overflow: hidden; background: #161622; border: 1px solid rgba(255,255,255,0.08); }
+  .game img { width: 100%; aspect-ratio: 300 / 330; height: auto; object-fit: contain; display: block; background: #161622; }
+  .game .gn { display: block; padding: 5px 7px 1px; font-size: 10.5px; font-weight: 800; color: #eaf2ea; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .game .gp { display: flex; align-items: center; gap: 4px; padding: 0 7px 6px; font-size: 10px; color: #8fa090; }
+  .game .gp i { width: 6px; height: 6px; border-radius: 50%; background: #25d366; display: inline-block; } .game .gp b { color: #eaf2ea; transition: opacity .25s; } .game .gp b.tick { opacity: .35; }
+  /* #554: "Todo nuestro servicio" plegable arriba + plataformas en una fila afuera */
+  details.svc { margin-top: 6px; border-radius: 14px; border: 1.5px solid rgba(227,189,72,0.55); background: linear-gradient(160deg, rgba(227,189,72,0.16), rgba(15,122,61,0.10)), #0e140e; padding: 0; }
+  details.svc summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 12px; }
+  details.svc summary::-webkit-details-marker { display: none; }
+  .svc-t { font-size: 13.5px; font-weight: 900; color: #e3bd48; letter-spacing: .3px; }
+  .svc-more { font-size: 11px; font-weight: 800; color: #0b0f0b; background: #e3bd48; border-radius: 999px; padding: 4px 9px; display: inline-flex; align-items: center; gap: 4px; }
+  .svc-more i { font-style: normal; transition: transform .2s; } details[open] .svc-more i { transform: rotate(180deg); }
+  .svc-more .on-open { display: none; } details[open] .svc-more .on-open { display: inline; } details[open] .svc-more .on-closed { display: none; }
+  .svc-body { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 0 10px 10px; }
+  .sv { display: flex; gap: 7px; align-items: flex-start; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.08); border-radius: 11px; padding: 7px 8px; }
+  .sv i { width: 22px; height: 22px; flex: 0 0 22px; border-radius: 50%; background: rgba(227,189,72,0.16); color: #e3bd48; display: inline-flex; align-items: center; justify-content: center; } .sv i svg { width: 12px; height: 12px; }
+  .sv b { display: block; font-size: 11px; font-weight: 900; color: #eaf2ea; line-height: 1.2; } .sv b span { color: #25d366; }
+  .sv small { display: block; font-size: 9.5px; color: #8fa090; line-height: 1.3; margin-top: 1px; }
+  .plats-box { margin-top: 6px; }
+  .plats-k { text-align: center; font-size: 11px; font-weight: 900; color: #eaf2ea; margin-bottom: 5px; }
+  .plats-box .plats { grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 0; }
+  .plats-box .plat { padding: 7px 4px 6px; border-radius: 12px; font-size: 10.5px; gap: 4px; }
+  .plats-box .plat img, .plats-box .plat .ini { width: 28px; height: 28px; border-radius: 9px; }
+  /* centrado robusto (la página y el popup se veían corridos) */
+  html, body { overflow-x: hidden; }
+  .top, main { margin: 0 auto; }
+  .pop { width: 100vw; padding: 20px; }
+  .pop .box { width: min(100%, 340px); margin: 0 auto; }
+  /* (viejo bloque unificado, ya no se usa) */
+  .svc { margin-top: 10px; background: #0e140e; border: 1px solid rgba(255,255,255,0.10); border-radius: 16px; padding: 10px 10px 10px; }
+  .svc-h { text-align: center; margin-bottom: 8px; } .svc-h b { display: block; font-size: 13px; font-weight: 900; color: #eaf2ea; } .svc-h small { font-size: 10.5px; color: #8fa090; }
+  .plats-h { display: none; }
+  .plats-h b { display: block; font-size: 13px; font-weight: 800; color: #eaf2ea; }
+  .plats-h small { font-size: 11px; color: #8fa090; }
+  .plats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 0; }
+  /* #545 (owner): fondo BLANCO en las plataformas (sobre el fondo oscuro los logos se veían tapados) */
+  .plat { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; background: #ffffff; border: 1px solid rgba(255,255,255,0.35); border-radius: 12px; padding: 8px 4px 6px; font-size: 10.5px; font-weight: 800; color: #111; }
+  .plat img, .plat .ini { width: 30px; height: 30px; border-radius: 9px; object-fit: cover; background: #fff; }
+  .plat .ini { display: inline-flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #e3bd48, #9c853a); color: #0b0f0b; font-size: 18px; font-weight: 900; }
+  .plat small { position: absolute; top: 6px; right: 6px; font-size: 8px; font-weight: 800; letter-spacing: .3px; text-transform: uppercase; color: #6f6f6f; background: #f1f1f1; border-radius: 999px; padding: 2px 6px; }
+  .plat.soon { color: #6f6f6f; } .plat.soon img { filter: grayscale(.4); opacity: .85; }
+  .sys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; margin-top: 8px; }
+  .sy { display: inline-flex; align-items: center; justify-content: center; gap: 4px; background: #0a0f0a; border: 1px solid rgba(255,255,255,0.10); border-radius: 999px; padding: 5px 4px; font-size: 9.5px; font-weight: 700; color: #eaf2ea; white-space: nowrap; overflow: hidden; }
+  .sy i { width: 16px; height: 16px; flex: 0 0 16px; border-radius: 50%; background: rgba(227,189,72,0.14); color: #e3bd48; display: inline-flex; align-items: center; justify-content: center; }
+  .sy i svg { width: 10px; height: 10px; }
+  .sy b { color: #25d366; font-weight: 900; }
+  /* Barra de progreso: nombre → cuenta creada → entra solo */
+  .prog { display: none; margin-top: 14px; text-align: center; }
+  .prog.on { display: block; }
+  .prog b { display: block; font-size: 15px; font-weight: 900; color: #eaf2ea; margin-bottom: 8px; }
+  .bar { width: 100%; max-width: 300px; height: 10px; margin: 0 auto; border-radius: 999px; background: #0a0f0a; border: 1px solid rgba(255,255,255,0.10); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 35%; margin-left: -35%; border-radius: 999px; background: linear-gradient(135deg, #2ce06e, #0f9a4b); animation: bar 1.6s ease-in-out infinite; }
+  .prog.in .bar i { width: 95%; margin-left: 0; animation: none; transition: width .9s ease; }
+  @keyframes bar { to { margin-left: 100%; } }
+  .prog small { display: block; margin-top: 8px; font-size: 11.5px; color: #8fa090; }
+  .refhint { display: none; margin: 0 0 10px; text-align: center; font-size: 12px; font-weight: 800; color: #e3bd48; background: rgba(227,189,72,0.10); border: 1px solid rgba(227,189,72,0.35); border-radius: 999px; padding: 6px 10px; }
+  .refhint.on { display: block; }
+  /* #800 (owner): "crear usuario más grande" */
+  .cta#cta { padding: 17px 16px !important; font-size: 18px !important; letter-spacing: .6px !important; border-radius: 16px !important; box-shadow: 0 8px 24px rgba(15, 154, 75, .35); animation: ctaPulse 1.6s ease-in-out infinite; }
+  @keyframes ctaPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.03); } }
+  @media (prefers-reduced-motion: reduce) { .cta#cta { animation: none; } }
 </style>
 </head>
 <body>
   <div class="top">
-    <div class="logo"><img id="brandLogo" src="img/picaroja.png" alt="PICA ROJA"><span><b>PICA ROJA</b><small>oficial · cargas automáticas</small></span></div>
+    <div class="logo"><img id="brandLogo" src="" alt="PICA ROJA" style="display:none;"><span><b>PICA ROJA</b><small>oficial · cargas automáticas</small></span></div>
     <div class="plus18">+18</div>
   </div>
 
   <main>
+    <!-- #554 (owner): "Todo nuestro servicio" ARRIBA, bien remarcado y plegable (Ver todo = el detalle); las plataformas debajo, afuera -->
+    <details class="svc" id="svc">
+      <summary><span class="svc-t">⭐ Todo nuestro servicio</span><span class="svc-more"><b class="on-closed">Ver todo</b><b class="on-open">Cerrar</b> <i>▾</i></span></summary>
+      <div class="svc-body">
+        <div class="sv" data-s="carga"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4.5 13.5H11l-1 8.5 8.5-11.5H12z"/></svg></i><div><b>Carga automática 24 hs</b><small>Transferís, mandás el comprobante y se acredita solo.</small></div></div>
+        <div class="sv" data-s="reembolso"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/></svg></i><div><b>Reembolso diario <span id="sysRefund"></span></b><small>Sobre lo que perdés con tu plata, todos los días. Se cobra desde la app.</small></div></div>
+        <div class="sv" data-s="ruleta"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h18M6.4 6.4l11.2 11.2M17.6 6.4L6.4 17.6"/></svg></i><div><b>Ruleta diaria</b><small>Un giro por día con % extra y premios en plata.</small></div></div>
+        <div class="sv" data-s="misiones"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v4a8 8 0 0 1-16 0z"/><path d="M12 16v4M8 20h8"/><path d="M4 6H2.5a2 2 0 0 0 0 4H4M20 6h1.5a2 2 0 0 1 0 4H20"/></svg></i><div><b>Misiones semanales</b><small>Cumplís objetivos y cobrás regalos automáticos.</small></div></div>
+        <div class="sv" data-s="referidos"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><circle cx="17" cy="9" r="2.6"/><path d="M3 19c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M15.5 14.2c2.6.3 4.5 2.4 4.5 4.8"/></svg></i><div><b>Referidos <span id="sysRef"></span></b><small>Invitás amigos y cobrás un % de su actividad, todos los meses.</small></div></div>
+        <div class="sv" data-s="vip"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 10H5z"/><path d="M5 20h14"/></svg></i><div><b>Niveles VIP</b><small>Subís de nivel con bonos y rakeback.</small></div></div>
+        <div class="sv" data-s="soporte"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12.5a7.5 7.5 0 0 1-11 6.6L4 20l1.2-4.4A7.5 7.5 0 1 1 20 12.5z"/></svg></i><div><b>Soporte real</b><small>Una persona te responde en minutos, por chat.</small></div></div>
+        <div class="sv" data-s="retiros"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18M7 15h3"/></svg></i><div><b>Retiros a tu CBU</b><small>Pagos automáticos, sin límites, en el acto.</small></div></div>
+      </div>
+    </details>
+    <!-- #557 (owner): "Elegí dónde jugar" arriba y las 3 plataformas debajo, en 3 columnas (la fila horizontal se salía de la pantalla) -->
+    <div class="plats-box"><div class="plats-k">Elegí dónde jugar</div><div class="plats" id="plats"></div></div>
+
     <!-- Pantalla 1: bono + form -->
     <section id="scForm">
       <div class="promo">
         <div class="eyebrow">Bono de bienvenida</div>
         <div class="big" id="bonusBig">100%</div>
         <div class="sub" id="bonusSub">EN TU PRIMERA CARGA</div>
-        <div class="note" id="bonusNote"></div>
+        <div class="note" id="bonusNote">+50% EXTRA instalando la app y activando notificaciones</div>
       </div>
 
-      <p class="pitch">Creá tu cuenta en un click y entrá a jugar. Transferís, mandás el comprobante y la carga se acredita <b style="color:#eaf2ea;">sola</b>, a cualquier hora.</p>
+      <p class="pitch">Creá tu cuenta en un click y entrá a jugar. Sin formularios, sin esperas.</p>
 
       <form id="form" autocomplete="off">
         <div class="refhint" id="refHint">🤝 Te invitó un amigo · código <span id="refCode"></span> · queda vinculado a tu cuenta</div>
@@ -173,16 +250,18 @@
         <div class="msg" id="msg" role="status" aria-live="polite"></div>
       </form>
 
-      <div class="trust">
-        <span><i class="d"></i>Carga automática 24 hs</span>
-        <span><i class="d"></i>Retiros a tu CBU</span>
-        <span><i class="d"></i>Soporte por chat</span>
+      <!-- Barra de progreso: la cuenta se crea y ENTRA solo (usuario y clave quedan en Perfil, dentro de la app) -->
+      <div class="prog" id="prog" aria-live="polite">
+        <b id="progTxt">Creando tu cuenta…</b>
+        <div class="bar"><i></i></div>
+        <small>Tu usuario y tu clave quedan en Perfil. Es la misma clave para la app y para la plataforma.</small>
       </div>
 
-      <div class="auto">
-        <b>Sin agente, sin esperas:</b> transferís al CBU que te muestra la app, mandás el comprobante y la carga entra sola.
-        <br>Carga mínima para la acreditación automática: <span class="min minAmt">$2.000</span>. Con menos, la carga <b>no se acredita</b>.
-      </div>
+      <!-- #546 (owner): se sacó la línea de confianza (acreditación · retiros · soporte) -->
+
+      <!-- #552 (owner): carrusel de juegos (las fotos del Inicio de la app) y debajo TODO el servicio en un solo bloque -->
+      <div class="games-h"><b>Top juegos</b><small><i class="d"></i><span id="gamesLive">0</span> jugando ahora</small></div>
+      <div class="games" id="games"></div>
 
       <p class="legal">
         Bono sujeto a términos: aplica sobre la primera carga. Solo nuevos jugadores.<br>
@@ -190,7 +269,7 @@
       </p>
     </section>
 
-    <!-- Pantalla 2: credenciales (no se usa en el flujo normal: la landing redirige a la app con ir=creds) -->
+    <!-- Pantalla 2: credenciales -->
     <section class="done" id="scDone">
       <h2>¡Listo! <span class="em">Tu cuenta está creada</span></h2>
       <p class="p">Anotá tus datos y entrá a jugar.</p>
@@ -199,6 +278,8 @@
         <div class="row"><span class="k">Clave</span><span class="v gold" id="outPass">—</span></div>
       </div>
       <div class="save-note">📌 Guardá tu usuario y clave para volver a entrar cuando quieras.</div>
+      <!-- #686 (owner): carga mínima IMPORTANTE apenas se registra -->
+      <div class="save-note" style="background:#fff7d6;border-left:5px solid #ffb300;color:#111;font-size:14px;line-height:1.4;"><b style="font-size:16px;">💵 Carga mínima: <span class="minAmt">$2.000</span></b><br>Con <span class="minAmt">$2.000</span> o más la carga se acredita <b>sola</b>. <b>Con una carga menor a <span class="minAmt">$2.000</span>, tu carga NO va a ser acreditada</b>: escribinos por <b>Soporte</b> en la app.</div>
       <button class="cta" id="enterBtn" type="button">ENTRAR A MI CUENTA →</button>
     </section>
   </main>
@@ -216,25 +297,25 @@
 <script>
 (function () {
   // ==== CONFIGURAR ====
-  // #1023 (owner 2026-11-03): landing = la de CARGASGIROXactivo (bono grande + nombre + botón), adaptada a PICA ROJA (carga
-  // AUTOMÁTICA, sin agente). El cableado al backend es el de PICA: rapidogirox.com (#1020), referido ?ref=, mínimo de carga
-  // desde /api/landing/info, override de API sólo al entorno de prueba (#553) y redirección sólo al backend (#553).
-  var API_BASE_DEFAULT = 'https://rapidogirox.com'; // #1020: la landing de Vercel apunta a rapidogirox.com (antes picaroja.com, #570). ⚠️ vipcargas.com es VIPCARGAS (OTRA página: ahí no existe la pauta y Cloudflare bloquea el preflight → "Sin conexión"); chat1girox.com es otra más. NO usar el host .elasticbeanstalk.com (solo HTTP → mixed content).
+  var API_BASE_DEFAULT = 'https://rapidogirox.com'; // #1020 (owner 2026-11-03): la landing de Vercel apunta a rapidogirox.com (antes picaroja.com, #570). ⚠️ vipcargas.com es VIPCARGAS (OTRA página: ahí no existe la pauta y Cloudflare bloquea el preflight → "Sin conexión"); chat1girox.com es otra más. NO usar el host .elasticbeanstalk.com (solo HTTP → mixed content).
   var CAMPAIGN_CODE = '';                            // fijo, o vacío = tomar de la URL
-  var BONUS_BIG = '100%';                             // ⚠️ tu oferta REAL (Meta penaliza el cloaking)
+  var BONUS_BIG = '100%';                             // ⚠️ tu oferta REAL
   var BONUS_SUB = 'EN TU PRIMERA CARGA';
-  var BONUS_NOTE = '+50% EXTRA instalando la app y activando notificaciones'; // #832: línea chica debajo (vacío = no se muestra)
+  var BONUS_NOTE = '+50% EXTRA instalando la app y activando notificaciones'; // #832          // línea chica debajo (vacío = no se muestra); si el backend responde, se pisa con los % reales
   // ====================
 
-  // Override del backend por URL (para PROBAR contra otro entorno sin editar el archivo): ?api=...
-  // #553 (seguridad): sólo se acepta el entorno de PRUEBA conocido; antes aceptaba cualquier https:// y la landing
-  // podía usarse como fachada para mandar los datos a otro servidor y redirigir a donde quisiera.
+  // Override del backend por URL (para PROBAR contra otro entorno sin editar el
+  // archivo): agregá ?api=https://tuapp.onrender.com a la URL. Sin ese parámetro
+  // usa el backend de producción. Solo se acepta https://.
   var API_BASE = API_BASE_DEFAULT;
   try {
+    // #553 (seguridad): el override sólo acepta el entorno de PRUEBA conocido; antes aceptaba cualquier https:// y la landing
+    // podía usarse como fachada para mandar los datos a otro servidor y redirigir a donde quisiera.
     var _apiOverride = new URLSearchParams(location.search).get('api');
     if (_apiOverride === 'https://fabrioctubre.onrender.com') API_BASE = _apiOverride;
   } catch (e) {}
 
+  try { var bl = document.getElementById('brandLogo'); bl.src = 'img/picaroja.png'; bl.style.display = ''; } catch (e) {}
   document.getElementById('bonusBig').textContent = BONUS_BIG;
   document.getElementById('bonusSub').textContent = BONUS_SUB;
   document.getElementById('bonusNote').textContent = BONUS_NOTE; document.getElementById('bonusNote').style.display = BONUS_NOTE ? '' : 'none';
@@ -244,11 +325,64 @@
   try { REF_CODE = String(new URLSearchParams(location.search).get('ref') || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 12); } catch (e) {}
   if (REF_CODE) { try { document.getElementById('refCode').textContent = REF_CODE; document.getElementById('refHint').classList.add('on'); } catch (e) {} }
 
-  // ── Mínimo de carga REAL desde el backend (#686): si no responde queda el fijo de arriba. El bono es FIJO (#581). ──
+  // ── #552: carrusel de juegos (fotos del Inicio de la app) con "N jugando" que varía rato a rato ──
+  (function games() {
+    var LIST = [['fortune-garuda-1000', 'Fortune Garuda 1000'], ['jokers-jewel', "Joker's Jewel"], ['fortune-garuda-500', 'Fortune Garuda 500'], ['fortune-tiger', 'Fortune Tiger'], ['fortune-gems-2', 'Fortune Gems 2'], ['fortune-rabbit', 'Fortune Rabbit'], ['fortune-gems', 'Fortune Gems'], ['fortune-dragon', 'Fortune Dragon'], ['golden-joker', 'Golden Joker']];
+    var box = document.getElementById('games'); if (!box) return;
+    var n = {}; LIST.forEach(function (g) { n[g[0]] = 50 + Math.floor(Math.random() * 151); });
+    box.innerHTML = LIST.map(function (g) { return '<div class="game" data-g="' + g[0] + '"><img src="img/games/' + g[0] + '.jpg" alt="' + g[1].replace(/"/g, '') + '" loading="lazy"><span class="gn">' + g[1].replace(/</g, '') + '</span><span class="gp"><i></i><b>' + n[g[0]] + '</b> jugando</span></div>'; }).join('');
+    function total() { var t = 0; LIST.forEach(function (g) { t += n[g[0]]; }); var e = document.getElementById('gamesLive'); if (e) e.textContent = t; }
+    total();
+    setInterval(function () {
+      if (document.hidden) return;
+      LIST.forEach(function (g) {
+        if (Math.random() > 0.45) return;
+        var d = (Math.random() < 0.5 ? -1 : 1) * (1 + Math.floor(Math.random() * 9));
+        var v = Math.max(50, Math.min(200, n[g[0]] + d)); if (v === n[g[0]]) return; n[g[0]] = v;
+        var el = box.querySelector('.game[data-g="' + g[0] + '"] b'); if (!el) return;
+        el.textContent = v; el.classList.remove('tick'); void el.offsetWidth; el.classList.add('tick');
+      });
+      total();
+    }, 9000);
+  })();
+
+  // ── Las 3 plataformas + % reales (desde el backend; si no responde quedan los fijos) ──
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function paintPlats(list) {
+    var box = document.getElementById('plats'); if (!box) return;
+    var nm = function (n) { return /^jugaygana$/i.test(String(n || '')) ? 'Jugaygana' : String(n || ''); };
+    box.innerHTML = list.map(function (p) {
+      var soon = p.connected === false && p.id !== 'girox';
+      var src = LOCAL_LOGOS[p.id] || (p.logoUrl ? (/^https?:/.test(p.logoUrl) ? p.logoUrl : API_BASE + p.logoUrl) : '');
+      var ico = src ? '<img src="' + esc(src) + '" alt="">' : '<span class="ini">' + esc(String(p.name || '?').charAt(0).toUpperCase()) + '</span>';
+      return '<span class="plat' + (soon ? ' soon' : '') + '">' + ico + esc(nm(p.name)) + (soon ? '<small>Pronto</small>' : '') + '</span>';
+    }).join('');
+  }
+  // Logos LOCALES (carpeta img/ de la landing): no dependen del backend. Si el backend responde, sólo actualiza nombres/"Pronto".
+  var LOCAL_LOGOS = { girox: 'img/girox.png', ganamos: 'img/ganamos.png', jugaygana: 'img/jugaygana.png' };
+  paintPlats([
+    { id: 'girox', name: 'Girox', connected: true },
+    { id: 'ganamos', name: 'Ganamos', connected: false },
+    { id: 'jugaygana', name: 'Jugaygana', connected: false }
+  ]);
   try {
     fetch(API_BASE + '/api/landing/info').then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
       if (!d) return;
-      try { var md = Number(d.minDepositArs); if (md > 0) { var t = '$' + md.toLocaleString('es-AR'); document.querySelectorAll('.minAmt').forEach(function (e) { e.textContent = t; }); } } catch (e) {}
+      try { var md = Number(d.minDepositArs); if (md > 0) { var t = '$' + md.toLocaleString('es-AR'); document.querySelectorAll('.minAmt').forEach(function (e) { e.textContent = t; }); } } catch (e) {} // #686
+      if (Array.isArray(d.platforms) && d.platforms.length) paintPlats(d.platforms);
+      // #555: títulos y detalles de los servicios desde el panel (los que están apagados no se muestran)
+      if (Array.isArray(d.services)) {
+        var by = {}; d.services.forEach(function (x) { by[x.id] = x; });
+        document.querySelectorAll('.sv[data-s]').forEach(function (el) {
+          var x = by[el.getAttribute('data-s')];
+          if (!x) { el.style.display = 'none'; return; }
+          var b = el.querySelector('b'), sm = el.querySelector('small');
+          if (b) b.textContent = x.title; if (sm) sm.textContent = x.detail || '';
+        });
+      }
+      // #581 (owner): el bono de la landing es FIJO (BONUS_BIG/BONUS_NOTE de arriba); antes el backend lo pisaba y se veía 50 → 100.
+      try { var rf = d.refunds || {}; if (rf.dailyMax) document.getElementById('sysRefund').textContent = rf.dailyMax + '%'; } catch (e) {}
+      try { var rp = Number(d.referralPct); if (rp > 0) document.getElementById('sysRef').textContent = rp + '%'; } catch (e) {}
     }).catch(function () {});
   } catch (e) {}
 
@@ -327,9 +461,9 @@
     else document.addEventListener('DOMContentLoaded', mount);
   })();
 
-  // #797: píxel de Meta por campaña/publicista. El backend dice qué píxeles cargar (GET /api/meta-pixel-id?c=<campaña>);
-  // si no hay ninguno para esta campaña no se carga fbq. El registro dispara CompleteRegistration con el eventID que
-  // devuelve el backend (metaEventId) para que Meta deduplique con la CAPI server-side.
+  // #797: píxel de Meta por campaña/publicista. El backend dice qué píxeles cargar (GET /api/meta-pixel-id?c=<campaña>, ids
+  // configurados en SSM); si no hay ninguno para esta campaña no se carga fbq. El registro dispara CompleteRegistration con el
+  // eventID que devuelve el backend (metaEventId) para que Meta deduplique con la CAPI server-side.
   (function loadMetaPixel() {
     var _inited = false;
     function initPixels(ids) {
@@ -345,7 +479,7 @@
     try {
       var _pixCampaign = '';
       try { _pixCampaign = resolveCampaign() || ''; } catch (e) {}
-      if (!_pixCampaign) return; // sin campaña → sin pixel
+      if (!_pixCampaign) return;
       fetch(API_BASE + '/api/meta-pixel-id?c=' + encodeURIComponent(_pixCampaign))
         .then(function (r) { return r.json(); })
         .then(function (d) { initPixels(d && d.pixelIds ? d.pixelIds : []); })
@@ -372,9 +506,10 @@
   // ATRIBUCIÓN DE PAUTA: la cookie _fbc la crea el pixel de navegador, pero puede
   // NO haber cargado aún cuando el cliente se registra (fetch async del Pixel ID).
   // Fallback: sin esto, el click del anuncio (?fbclid=...) se PERDÍA y la
-  // conversión no se atribuía a la campaña. Se construye el fbc a mano con el
-  // formato oficial (fb.1.<timestamp>.<fbclid>) y el backend lo persiste en el
-  // usuario → TODOS los eventos del embudo viajan atribuidos al anuncio.
+  // conversión no se atribuía a la campaña. Se
+  // construye el fbc a mano con el formato oficial (fb.1.<timestamp>.<fbclid>)
+  // y el backend lo persiste en el usuario → TODOS los eventos del embudo
+  // (registro, carga, retiro) viajan atribuidos al anuncio que trajo al lead.
   function fbcFromUrl() {
     var existing = cookie('_fbc');
     if (existing) return existing;
@@ -385,10 +520,13 @@
     return null;
   }
 
-  // fbp: identificador de navegador que crea el pixel de Meta. El fetch del Pixel ID
-  // es async y puede no haber creado la cookie _fbp cuando el cliente se registra.
-  // Fallback: se genera uno válido (fb.1.<timestamp>.<random>) y se PERSISTE en la
-  // cookie, así se reusa el MISMO valor siempre y la PWA lo reutiliza al entrar.
+  // fbp: identificador de navegador que crea el pixel de Meta. Ahora el pixel se
+  // carga (loadMetaPixel), pero el fetch del Pixel ID es async y puede no haber
+  // creado la cookie _fbp cuando el cliente se registra. Fallback: si _fbp no
+  // está todavía, se genera uno válido
+  // (fb.1.<timestamp>.<random>) y se PERSISTE en la cookie, así se reusa el MISMO
+  // valor siempre — y el pixel de la PWA lo reutiliza al entrar, correlacionándolo
+  // con el navegador. Mismo criterio que fbcFromUrl(). owner 2026-08-25.
   function fbpFromCookieOrGen() {
     var existing = cookie('_fbp');
     if (existing) return existing;
@@ -419,6 +557,10 @@
     cta.disabled = true;
     ctaLabel.textContent = 'Creando tu cuenta';
     var sp = document.createElement('span'); sp.className = 'spin'; cta.appendChild(sp);
+    // Barra de progreso: se ve mientras se crea la cuenta y hasta que entra a la app.
+    var prog = document.getElementById('prog'), progTxt = document.getElementById('progTxt');
+    form.style.display = 'none'; prog.classList.remove('in'); prog.classList.add('on'); progTxt.textContent = 'Creando tu cuenta…';
+    var progFail = function () { prog.classList.remove('on'); form.style.display = ''; };
 
     fetch(API_BASE + '/api/landing/signup', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -428,34 +570,43 @@
     .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
     .then(function (res) {
       if (res.ok && res.d && res.d.accessUrl) {
-        // FLUJO SOLAPADO (owner 2026-08-19): la landing NO muestra las credenciales —
-        // redirige YA a la PWA, que muestra el recuadro de usuario+clave apenas carga
-        // (`ir=creds`) mientras por atrás canjea el link y deja la sesión lista.
-        // Las credenciales viajan en el FRAGMENTO (#lc=...) — no llega al servidor.
+        // FLUJO SOLAPADO (owner 2026-08-19): la landing NO muestra más las
+        // credenciales — redirige YA a la PWA, que muestra el recuadro de
+        // usuario+clave apenas carga (`ir=creds`) mientras por atrás canjea el
+        // link, conecta el chat y deja el SSO listo. Al tocar "ENTRAR AL
+        // CASINO" 1girox abre al instante: la espera se solapa con la lectura.
+        // Las credenciales viajan en el FRAGMENTO (#lc=...) — el fragmento no
+        // llega al servidor ni queda en logs; la PWA lo lee y limpia la URL.
         var dest = res.d.accessUrl || res.d.enterUrl;
         if (!(dest === API_BASE || String(dest).indexOf(API_BASE + '/') === 0)) dest = API_BASE + '/'; // #553: sólo al backend
         try {
           dest += '#lc=' + encodeURIComponent((res.d.username || '') + ':' + (res.d.password || ''));
         } catch (e) {}
-        // DEDUP (pedido del partner Pulse, 2026-08-22): recordar en ESTE dispositivo
-        // que ya se registró → si vuelve a la landing NO crea otra cuenta.
+        // DEDUP (pedido del partner Pulse, 2026-08-22): recordar en ESTE
+        // dispositivo que ya se registró → si vuelve a la landing NO crea otra
+        // cuenta ni dispara otro evento de registro a Meta.
         try { localStorage.setItem('girox_signed', res.d.username || '1'); } catch (e) {}
         // Registro en el NAVEGADOR con el MISMO event_id que la CAPI (reg_<id>)
-        // → Meta DEDUPLICA browser+server. fbq usa sendBeacon: sobrevive a la redirección.
+        // → Meta DEDUPLICA browser+server. fbq usa sendBeacon: sobrevive a la
+        // redirección de abajo (owner 2026-08-26).
         try {
           if (window.fbq && res.d.metaEventId) {
             fbq('track', 'CompleteRegistration', { content_name: 'signup_landing' }, { eventID: res.d.metaEventId });
           }
         } catch (e) {}
         ctaLabel.textContent = 'Entrando';
+        progTxt.textContent = 'Entrando a tu cuenta…'; prog.classList.add('in');
+        // Entra DIRECTO a la sesión: el link de acceso loguea solo; usuario y clave quedan en Perfil dentro de la app.
         window.location.href = dest;
       } else {
+        progFail();
         cta.disabled = false; sp.remove(); ctaLabel.textContent = 'CREAR MI CUENTA';
         msg.className = 'msg err';
         msg.textContent = (res.d && res.d.error) || 'No pudimos crear tu cuenta. Probá de nuevo.';
       }
     })
     .catch(function () {
+      progFail();
       cta.disabled = false; sp.remove(); ctaLabel.textContent = 'CREAR MI CUENTA';
       msg.className = 'msg err'; msg.textContent = 'Sin conexión. Probá de nuevo.';
     });

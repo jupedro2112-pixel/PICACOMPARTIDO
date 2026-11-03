@@ -4,24 +4,9 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-11-03** (#1023 landing nueva)
+> **Última actualización: 2026-11-03**
 
 ## Sesión 2026-11-01
-
-### 1023. Landing de Vercel = la de CARGASGIROXactivo, adaptada a carga AUTOMÁTICA (2026-11-03)
-- Owner: "cambiá la landing de PICACOMPARTIDO y reemplazala por la que tenemos en CARGASGIROXactivo; adaptala teniendo en cuenta que
-  CARGASGIROXactivo es carga manual con un agente 24 hs, mientras que PICACOMPARTIDO sólo es carga automática".
-- `landing/index.html` reescrita con el diseño de CARGASGIROXactivo (bono grande 100% + "¿Cuál es tu nombre?" + CREAR MI CUENTA + línea de
-  confianza + legal; sin carrusel de juegos #552, sin "Todo nuestro servicio" #554/#555, sin plataformas #557, sin barra de progreso).
-  Adaptación a PICA ROJA (sin agente): pitch "Transferís, mandás el comprobante y la carga se acredita sola, a cualquier hora", confianza
-  "Carga automática 24 hs · Retiros a tu CBU · Soporte por chat", bloque "Sin agente, sin esperas" con la carga mínima real
-  (`.minAmt` ← `minDepositArs` de `/api/landing/info`, #686; fijo $2.000 si no responde) y "con menos, la carga no se acredita".
-- Cableado de PICA conservado: logo `img/picaroja.png`, `API_BASE_DEFAULT` rapidogirox.com (#1020), `?ref=` → `referralCode` con aviso 🤝,
-  `BONUS_NOTE` "+50% EXTRA instalando la app" (#832), override `?api=` sólo a fabrioctubre.onrender.com (#553), `accessUrl` sólo al backend
-  (#553), píxel por campaña `/api/meta-pixel-id` + `CompleteRegistration` con `metaEventId` (#797), escape del webview (#260), dedup
-  `girox_signed`. NO se trajo `/api/landing/touch` (CARGAS lo tiene; este backend no). `vercel.json` sin cambios (#553: sin geo-bloqueo).
-- Borrados `landing/img/games/` y los logos de Ganamos/Jugaygana (ya no se referencian). Vercel redeploya solo si está conectado al repo
-  con root `landing/`; si no, subir la carpeta a mano.
 
 ### 1022. 📲 SMS on/off y prefijo del nombre automático desde el panel (2026-11-03)
 - Owner: "que desde Configuración se pueda habilitar/deshabilitar SMS: está habilitado pero sin la habilitación de AWS no llega ningún código" +

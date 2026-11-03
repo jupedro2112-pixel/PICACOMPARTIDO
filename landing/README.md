@@ -3,13 +3,9 @@
 Es la landing que el owner tiene publicada en Vercel (vino en `landing2.zip`, 2026-10-19). NO la sirve este
 backend: se sube a Vercel a mano (arrastrar la carpeta en el proyecto `picaroja-landing`, o `vercel deploy`).
 
-**#1023 (2026-11-03):** la landing es la de **CARGASGIROXactivo** (bono grande + nombre + botón, sin carrusel de juegos ni lista de
-servicios ni plataformas), adaptada a PICA ROJA = **carga AUTOMÁTICA sin agente**: pitch "transferís, mandás el comprobante y la carga
-se acredita sola", línea de confianza (carga automática 24 hs · retiros a tu CBU · soporte por chat) y bloque "Sin agente, sin
-esperas" con la **carga mínima** real (`minDepositArs` de `GET /api/landing/info`; fijo $2.000 si no responde). Se conservó TODO el
-cableado de PICA: `?ref=` (referido), `API_BASE_DEFAULT` rapidogirox.com, override `?api=` sólo al entorno de prueba (#553),
-redirección sólo al backend (#553), píxel por campaña (#797), escape del webview de IG/FB/TikTok (#260), dedup por dispositivo.
-Sólo queda `img/picaroja.png` (logo); se borraron los logos de plataformas y las fotos de juegos que ya no se usan.
+Cambios de este repo sobre la original (#535): aviso del código de referido (`?ref=`), las 3 plataformas con logo
+(Girox · Ganamos Pronto · Jugaygana Pronto; se actualizan solas desde `GET /api/landing/info` del backend), los servicios sólo
+con título, barra de progreso y entrada DIRECTA a la sesión (sin pantalla de credenciales: quedan en Perfil, dentro de la app).
 
 `vercel.json` (#553): SÓLO reescrituras para que `picaroja-landing.vercel.app/CODIGO` sirva la landing (Vercel sirve primero los
 archivos reales, `img/` incluido). ⚠️ NO subir el `vercel.json`/`blank.html` del zip original: mandaban a una página en blanco a todo visitante fuera de Argentina (y a quien

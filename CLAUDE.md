@@ -39,7 +39,7 @@ notificaciones push (FCM).
 **Stack:** Node 20 · Express · MongoDB (Atlas) · Mongoose · Socket.IO (+ Redis adapter
 para multi-instancia en AWS EB) · Firebase Admin (FCM) · AWS SNS (SMS OTP).
 Deploy: AWS Elastic Beanstalk. **Dominio público de ESTE backend: picaroja.com** (#570; vipcargas.com es OTRA página, VIPCARGAS).
-Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`; desde #1020 su `API_BASE_DEFAULT` apunta a **rapidogirox.com**, otro deploy; desde #1023 es la landing de CARGASGIROXactivo adaptada a carga AUTOMÁTICA sin agente — ver `landing/README.md`). Git user: jupedro2112-pixel.
+Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`; desde #1020 su `API_BASE_DEFAULT` apunta a **rapidogirox.com**, otro deploy). Git user: jupedro2112-pixel.
 
 ## Estructura
 
