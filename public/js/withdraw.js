@@ -15,6 +15,7 @@ VIP.withdraw = (function () {
     let _otpPhone = null;        // teléfono al que se envió el OTP
     let _pendingWithdraw = null; // { titular, cbu, alias, amount, saveData }
     let _otpMode = 'phone';      // #382: 'phone' = verificar teléfono (una vez) · 'withdraw' = código de ESTE retiro
+    function _smsOff() { try { const d = VIP.home && VIP.home.platformsData; return !!(d && d.smsEnabled === false); } catch (_) { return false; } } // #1022
     function _otpRequired() { try { const d = VIP.home && VIP.home.platformsData; return !(d && d.withdrawOtp === false); } catch (_) { return true; } }
 
     function _el(id) { return document.getElementById(id); }
@@ -213,7 +214,7 @@ VIP.withdraw = (function () {
         // Para retirar, la cuenta debe tener el teléfono verificado por SMS.
         // Si todavía no lo verificó, se abre el paso de verificación SMS antes
         // de procesar el retiro (el registro de inicio es sin SMS, opcional).
-        const verified = VIP.state.currentUser && VIP.state.currentUser.phoneVerified === true;
+        const verified = (VIP.state.currentUser && VIP.state.currentUser.phoneVerified === true) || _smsOff(); // #1022: SMS apagado ⇒ sin verificación
         if (!verified) {
             _otpMode = 'phone';
             _clearError('withdrawOtpPhoneError');

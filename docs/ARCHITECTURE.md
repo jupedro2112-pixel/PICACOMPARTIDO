@@ -1767,3 +1767,10 @@ lote fijo. Excluidos: Bonificación manual, devolución de retiro, referidos, c�
   cada cliente queda con `rouletteNudge.lastAt` al avisarle (nunca dos el mismo día). Ambos sueltan el lock al terminar (`_cronRelease`), igual que
   `_weeklyCloseTick`. Negocio / análisis: `fresh=1` siempre recalcula; sin fresh, los pedidos simultáneos esperan la misma cuenta.
 
+### SMS on/off y prefijo del nombre automático #1022 (2026-11-03)
+- `Config['smsEnabled']` (default true) → `getSmsEnabled()` (server.js, junto a los requires de otpService/smsService). `generateAndSendOTP` y `sendSMS`
+  dentro de server.js son ENVOLTURAS (las crudas son `_otpSendRaw` / `_sendSmsRaw`): un envío nuevo de SMS tiene que usar esas envolturas. Con el SMS
+  apagado ningún chequeo puede exigir `phoneVerified`: un candado NUEVO por teléfono verificado va con `&& (await getSmsEnabled())`. Rutas que sólo
+  mandan códigos: `_SMS_ONLY_PATHS` (503 `SMS_DISABLED`). La app lee `smsEnabled` de `/api/platforms` (`_smsOff()` en auth.js y withdraw.js).
+- `Config['usernamePrefix']` (default 'pica') → `getUsernamePrefix()` → `_deriveUniqueUsername` (landing y entrada rápida). El panel lo precarga en
+  `newUserUsername` / `paNewUsername` (`_prefillUsernameInputs`, `GET /api/admin/username-prefix`). Config: `GET/POST /api/admin/sms-config`.

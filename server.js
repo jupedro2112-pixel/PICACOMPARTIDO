@@ -85,8 +85,32 @@ const _periodKey = require('./src/utils/periodKey');
 const { setGlobalReferralRate, getGlobalReferralRate, refreshReferralRateFromCommand, REFERRAL_PCT_COMMAND } = require('./src/utils/referralRate');
 const referralTiers = require('./src/services/referralTierService');
 const { setRedisClient, getRedisClient } = require('./src/utils/redisClient');
-const { generateAndSendOTP, verifyOTP } = require('./src/services/otpService');
-const { sendSMS } = require('./src/services/smsService');
+const { generateAndSendOTP: _otpSendRaw, verifyOTP } = require('./src/services/otpService');
+const { sendSMS: _sendSmsRaw } = require('./src/services/smsService');
+// #1022 (owner 2026-11-03): INTERRUPTOR GENERAL DE SMS (Config['smsEnabled'], default ON; panel → Configuración → "📲 SMS y nombres
+// de usuario"). Apagado = no sale NINGÚN SMS (códigos y SMS masivo) y nada exige un teléfono verificado por SMS: el registro desde el
+// inicio no pide celular, el retiro no pide verificar ni código, y las rutas que mandan códigos responden 503 SMS_DISABLED.
+// Pensado para cuando AWS todavía no habilitó el envío (los códigos no llegaban y la gente quedaba trabada).
+const SMS_OFF_MSG = 'Por ahora no estamos enviando códigos por SMS. Si necesitás ayuda, escribinos por Soporte.';
+let _smsEnabledCache = { v: true, at: 0 };
+async function getSmsEnabled() {
+  if (Date.now() - _smsEnabledCache.at < 15000) return _smsEnabledCache.v;
+  try {
+    const raw = await getConfig('smsEnabled', null);
+    // getConfig devuelve el default (null) también si la base falla (#1012): en ese caso se mantiene el último valor conocido.
+    const v = (raw === null || raw === undefined) ? (_smsEnabledCache.at ? _smsEnabledCache.v : true) : !(raw === false || raw === 'false' || raw === 0);
+    _smsEnabledCache = { v, at: Date.now() };
+    return v;
+  } catch (_) { return _smsEnabledCache.v; }
+}
+async function generateAndSendOTP(phone, purpose) {
+  if (!(await getSmsEnabled())) return { success: false, smsDisabled: true, code: 'SMS_DISABLED', error: SMS_OFF_MSG };
+  return _otpSendRaw(phone, purpose);
+}
+async function sendSMS(phone, message) {
+  if (!(await getSmsEnabled())) return { success: false, smsDisabled: true, error: SMS_OFF_MSG };
+  return _sendSmsRaw(phone, message);
+}
 const { validateInternationalPhone, normalizePhoneKey } = require('./src/middlewares/security');
 
 // ============================================
@@ -789,6 +813,14 @@ app.use((req, res, next) => {
   return _corsMw(req, res, next);
 });
 app.use('/api/', generalLimiter);
+// #1022: con el SMS apagado, las rutas que sólo sirven para mandar un código responden claro en vez de "te enviamos el código"
+// (login y reset respondían éxito siempre por anti-enumeración y la persona esperaba un SMS que nunca llegaba).
+const _SMS_ONLY_PATHS = new Set(['/api/auth/send-register-otp', '/api/auth/login-otp-request', '/api/auth/request-password-reset', '/api/auth/verify-phone/send-otp', '/api/auth/change-password/send-otp']);
+app.use(async (req, res, next) => {
+  if (req.method !== 'POST' || !_SMS_ONLY_PATHS.has(req.path.replace(/\/+$/, ''))) return next();
+  try { if (!(await getSmsEnabled())) return res.status(503).json({ error: SMS_OFF_MSG, code: 'SMS_DISABLED' }); } catch (_) {}
+  return next();
+});
 // Guardamos el body CRUDO (Buffer) en req.rawBody para poder validar firmas
 // HMAC de webhooks (ej. hgcash) sobre los bytes exactos. No cambia el parseo
 // normal: req.body sigue siendo el JSON parseado.
@@ -829,6 +861,7 @@ const PUBLISHER_ADMIN_ALLOWED_PATHS = [
   '/api/admin/me',
   '/api/admin/change-own-password',
   '/api/admin/publisher-admin',
+  '/api/admin/username-prefix', // #1022: precarga el prefijo en el alta rápida
   '/api/health'
 ];
 
@@ -1252,7 +1285,7 @@ app.get('/api/landing/info', async (req, res) => {
     let welcome = null;
     try { const fd = await getFirstDepositBonusPct(); const ig = await getInstallGiftConfig(); welcome = { pct: fd, withApp: fd + (ig && ig.enabled ? ig.pct : 0) }; } catch (_) {}
     let services = []; try { services = await _landingServices(); } catch (_) {} // #555
-    res.json({ registerInviteText: await renderSystemCommand('/sys_register_invite', REGISTER_INVITE_DEFAULT, {}), /* #748 */ registerClosedText: await renderSystemCommand('/sys_register_closed', REGISTER_CLOSED_DEFAULT, {}), /* #993 */ baseUrl: getPublicBaseUrl(), platforms: plats, refunds, minDepositArs, withdrawMinArs, refundPromo, registrationMode: await getRegistrationMode(), referralPct, welcome, entryLogin: await getConfig('entryLogin', false) === true, quickEntrySms: (await getConfig('quickEntrySms', true)) === true, services }); // #421/#424/#530/#538/#541/#555
+    res.json({ registerInviteText: await renderSystemCommand('/sys_register_invite', REGISTER_INVITE_DEFAULT, {}), /* #748 */ registerClosedText: await renderSystemCommand('/sys_register_closed', REGISTER_CLOSED_DEFAULT, {}), /* #993 */ baseUrl: getPublicBaseUrl(), platforms: plats, refunds, minDepositArs, withdrawMinArs, refundPromo, registrationMode: await getRegistrationMode(), referralPct, welcome, entryLogin: await getConfig('entryLogin', false) === true, quickEntrySms: (await getConfig('quickEntrySms', true)) === true && (await getSmsEnabled()), services }); // #1022: SMS apagado ⇒ la app no pide celular // #421/#424/#530/#538/#541/#555
   } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
 });
 
@@ -5242,14 +5275,31 @@ function _sanitizeUsernameBase(name) {
 }
 // #802 (owner): "los usuarios que se registran desde la landing, que sea fácil: pica + su nombre + 2 números, o 3 si se repite".
 // Ej.: "Juan Pérez" → picajuan27 (si está tomado, picajuan418). Sólo el PRIMER nombre, sin tildes ni símbolos, hasta 10 letras.
-function _picaUsernameBase(name) {
+// #1022 (owner 2026-11-03): el prefijo ("pica") se cambia desde el panel → Configuración → "📲 SMS y nombres de usuario"
+// (Config['usernamePrefix'], 0-8 letras/números, vacío = sin prefijo). Lo usan la landing y la entrada rápida, y el panel lo precarga
+// en "Crear usuario" (admin y publicista). Las cuentas ya creadas NO cambian de nombre.
+const USERNAME_PREFIX_DEFAULT = 'pica';
+let _usernamePrefixCache = { v: USERNAME_PREFIX_DEFAULT, at: 0 };
+function _normUsernamePrefix(v) { return String(v == null ? '' : v).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8); }
+async function getUsernamePrefix() {
+  if (Date.now() - _usernamePrefixCache.at < 30000) return _usernamePrefixCache.v;
+  try {
+    const raw = await getConfig('usernamePrefix', null);
+    const v = (raw === null || raw === undefined) ? (_usernamePrefixCache.at ? _usernamePrefixCache.v : USERNAME_PREFIX_DEFAULT) : _normUsernamePrefix(raw);
+    _usernamePrefixCache = { v, at: Date.now() };
+    return v;
+  } catch (_) { return _usernamePrefixCache.v; }
+}
+function _picaUsernameBase(name, prefix) {
+  const pre = prefix === undefined ? USERNAME_PREFIX_DEFAULT : _normUsernamePrefix(prefix);
   const first = String(name || '').trim().split(/\s+/)[0] || '';
   let b = first.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (b.length > 10) b = b.slice(0, 10);
-  return 'pica' + b;
+  const maxName = Math.min(10, 15 - pre.length); // deja lugar para 3 números dentro de los 18 de 1girox
+  if (b.length > maxName) b = b.slice(0, maxName);
+  return (pre + b) || 'gx'; // sin prefijo y sin letras válidas en el nombre
 }
 async function _deriveUniqueUsername(name) {
-  const base = _picaUsernameBase(name);
+  const base = _picaUsernameBase(name, await getUsernamePrefix());
   const tries = [];
   for (let i = 0; i < 25; i++) tries.push(String(crypto.randomInt(10, 100)));      // 2 números
   for (let i = 0; i < 40; i++) tries.push(String(crypto.randomInt(100, 1000)));    // 3 números si se repite
@@ -5620,7 +5670,7 @@ app.post('/api/auth/quick-entry', authLimiter, landingIpLimiter, async (req, res
     // #553 (seguridad): sólo un código de PUBLICISTA (campaña activa distinta de INGRESO) exime del SMS. INGRESO es la campaña
     // orgánica que crea el boot y cualquiera la conoce: mandarla a mano no puede saltear la verificación.
     const isAdLink = !!code && code !== 'INGRESO';
-    const smsRequired = !isAdLink && (await getConfig('quickEntrySms', true)) === true;
+    const smsRequired = !isAdLink && (await getConfig('quickEntrySms', true)) === true && (await getSmsEnabled()); // #1022: SMS apagado ⇒ no se exige
     if (smsRequired && !verifiedPhone) return res.status(400).json({ code: 'SMS_REQUIRED', error: 'Verificá tu celular por SMS para crear la cuenta.' });
     if (mode !== 'quick' && !isAdLink && !verifiedPhone) return res.status(410).json({ error: 'La entrada rápida no está activa. Registrate con tu teléfono.' });
     req._allowNoApi = process.env.TESTER_ADMIN_PROMOTE === '1'; // #426: sólo entorno de prueba · #779: nunca por RENDER (base compartida)
@@ -5690,6 +5740,30 @@ app.post('/api/admin/public-base-url', authMiddleware, adminMiddleware, async (r
     await _loadPublicBaseUrlOverride(); _resetRenderedHtmlCaches();
     logger.info(`[public-base-url] ${url || '(default)'} por ${req.user.username}`);
     res.json({ success: true, url: getPublicBaseUrl(), source: _publicBaseUrlOverride ? 'panel' : (process.env.PUBLIC_BASE_URL ? 'env' : 'default') });
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+// #1022: SMS on/off + prefijo del nombre automático. GET para todo el staff (el panel precarga el prefijo en "Crear usuario"; el
+// publicista lo lee por /api/admin/username-prefix, que está en PUBLISHER_ADMIN_ALLOWED_PATHS). POST sólo admin general.
+app.get('/api/admin/username-prefix', authMiddleware, async (req, res) => {
+  if (!['admin', 'depositor', 'withdrawer', 'comunidad', 'publisher_admin'].includes(req.user.role)) return res.status(403).json({ error: 'Acceso denegado' });
+  res.json({ success: true, prefix: await getUsernamePrefix() });
+});
+app.get('/api/admin/sms-config', authMiddleware, adminMiddleware, async (req, res) => {
+  res.json({ success: true, smsEnabled: await getSmsEnabled(), usernamePrefix: await getUsernamePrefix(), canEdit: req.user.role === 'admin' });
+});
+app.post('/api/admin/sms-config', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador general.' });
+    const b = req.body || {};
+    if (typeof b.smsEnabled === 'boolean') { await Config.set('smsEnabled', b.smsEnabled, req.user.username); _smsEnabledCache = { v: b.smsEnabled, at: Date.now() }; }
+    if (typeof b.usernamePrefix === 'string') {
+      const raw = b.usernamePrefix.trim();
+      const pre = _normUsernamePrefix(raw);
+      if (raw && pre !== raw.toLowerCase()) return res.status(400).json({ error: 'El prefijo sólo puede tener letras y números (sin espacios, tildes ni símbolos), hasta 8.' });
+      await Config.set('usernamePrefix', pre, req.user.username); _usernamePrefixCache = { v: pre, at: Date.now() };
+    }
+    logger.info(`[sms-config] SMS ${(await getSmsEnabled()) ? 'ENCENDIDO' : 'APAGADO'} · prefijo "${await getUsernamePrefix()}" por ${req.user.username}`);
+    res.json({ success: true, smsEnabled: await getSmsEnabled(), usernamePrefix: await getUsernamePrefix() });
   } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
 });
 app.get('/api/admin/registration-mode', authMiddleware, adminMiddleware, async (req, res) => {
@@ -6926,7 +7000,7 @@ app.get('/api/platforms', authMiddleware, async (req, res) => {
       platforms: list.map((p) => { const ad = platforms.getAdapter(p.id); const play = (ad && typeof ad.getPlayUrl === 'function' && ad.getPlayUrl()) || p.externalUrl || null;
         return { id: p.id, name: p.name, emoji: p.emoji, connected: p.connected, externalUrl: p.externalUrl || null, playUrl: play, logoUrl: p.logoUrl || '', isDefault: p.isDefault }; }),
       askMode: s.askMode, askTimeoutMin: s.askTimeoutMin, defaultPlatform: s.defaultPlatform, lastPlatform, preferredPlatform,
-      choiceEnabled, minDeposit: minDep, withdrawMinArs: wdMin, withdrawOtp, // #299 / #379 / #382
+      choiceEnabled, minDeposit: minDep, withdrawMinArs: wdMin, withdrawOtp, smsEnabled: await getSmsEnabled(), // #299 / #379 / #382 · #1022
       depositRolloverX: await getDepositRolloverX().catch(() => 1), bonusRolloverX: await _giftRolloverX().catch(() => 5), // #885: avisos de rollover en la app
       // #385: textos de los botones de abajo de la carga automática (COMANDOS). #266 homeBanner · #349 entryNews · #372 refundPromo ·
       // #373 supportIntro (nombre de turno #377). text === null ⇒ el comando se vació en COMANDOS → la app no lo muestra.
@@ -11538,7 +11612,7 @@ app.post('/api/admin/withdrawal', authMiddleware, withdrawerMiddleware, async (r
     // Si el usuario destino vino por flujo rápido y aún no verificó teléfono,
     // el admin tampoco puede procesar el retiro: el usuario tiene que verificar
     // primero (decisión de negocio: anti-fraude).
-    if (user.phoneVerificationPending === true) {
+    if (user.phoneVerificationPending === true && (await getSmsEnabled())) { // #1022
       return res.status(403).json({
         error: `${user.username} debe verificar un teléfono antes de poder retirar.`,
         code: 'PHONE_VERIFICATION_REQUIRED'
@@ -14264,7 +14338,7 @@ app.post('/api/movements/withdraw', authMiddleware, async (req, res) => {
     // de teléfono antes de permitir el primer retiro. El frontend debe abrir el
     // modal de verify-phone cuando recibe este code.
     const userForCheck = await User.findOne({ id: req.user.userId }).lean();
-    if (userForCheck && userForCheck.phoneVerificationPending === true) {
+    if (userForCheck && userForCheck.phoneVerificationPending === true && (await getSmsEnabled())) { // #1022
       return res.status(403).json({
         error: 'Para retirar primero tenés que verificar un número de teléfono.',
         code: 'PHONE_VERIFICATION_REQUIRED'
@@ -14525,7 +14599,7 @@ async function _withdrawalRequestHandler(req, res) {
     // Para retirar, la cuenta debe tener el teléfono verificado por SMS.
     // El registro es sin SMS, pero el retiro siempre exige verificación.
     if (user.isBlocked === true || user.isActive === false) return res.status(403).json({ error: 'Tu cuenta no puede retirar en este momento. Escribinos por Soporte.', code: 'ACCOUNT_BLOCKED' }); // #954
-    if (user.phoneVerified !== true && !req._testBypass) { // #714: la prueba del tester no exige teléfono
+    if (user.phoneVerified !== true && !req._testBypass && (await getSmsEnabled())) { // #714: la prueba del tester no exige teléfono · #1022: SMS apagado ⇒ no se exige
       return res.status(400).json({
         error: 'Para retirar tu premio necesitás verificar tu teléfono por SMS.',
         code: 'PHONE_VERIFICATION_REQUIRED'
@@ -14988,6 +15062,7 @@ const WITHDRAW_BTN_DEFAULT = 'Retirar premio';
 const WITHDRAW_BTN_SUB_DEFAULT = 'Mínimo {retiro_min} · pago automático'; // #391: corto y legible
 // #382 (owner 2026-10-18): código SMS en CADA retiro (anti-estafa). Config['withdrawOtpRequired'], default true. #879: la migración lo apaga (verificación única).
 async function getWithdrawOtpRequired() {
+  if (!(await getSmsEnabled())) return false; // #1022: sin SMS no hay código por retiro
   try { const v = await getConfig('withdrawOtpRequired', null); if (v === false || v === 'false' || v === 0) return false; } catch (_) {}
   return true;
 }
@@ -15603,7 +15678,7 @@ app.post('/api/install-bonus/claim', authMiddleware, async (req, res) => {
     const _agentCreated = user.createdByAgent === true ||
       user.acquisitionSource === 'manual' ||
       !!user.accessLinkCreatedAt;
-    if (!_agentCreated && user.phoneVerified !== true) {
+    if (!_agentCreated && user.phoneVerified !== true && (await getSmsEnabled())) { // #1022
       return res.status(400).json({
         error: 'Para reclamar el bono necesitás tener tu teléfono verificado por SMS. Verificalo y volvé a tocar "Reclamar".',
         code: 'PHONE_VERIFICATION_REQUIRED'

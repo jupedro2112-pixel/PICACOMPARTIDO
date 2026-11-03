@@ -88,8 +88,12 @@ VIP.auth = (function () {
     // Muestra (una sola vez, al primer ingreso) el modal que ofrece verificar
     // el teléfono por SMS. Es 100% opcional: solo busca empujar a asegurar la
     // cuenta. No se muestra si el teléfono ya está verificado.
+    // #1022: SMS apagado desde el panel (Configuración → SMS) ⇒ no se pide ni se ofrece verificar el teléfono.
+    function _smsOff() { try { const d = VIP.home && VIP.home.platformsData; return !!(d && d.smsEnabled === false); } catch (_) { return false; } }
+
     function maybeOfferSmsVerification(user) {
         if (!user) return;
+        if (_smsOff()) return;
         if (user.role && user.role !== 'user') return;
         if (user.phoneVerified === true) return;
         if (user.firstLogin !== true) return;
@@ -905,8 +909,9 @@ VIP.auth = (function () {
             ? VIP.state.currentUser.phone
             : null;
 
+        const smsOff = _smsOff(); // #1022
         if (whatsappGroup) {
-            if (verifiedPhone) {
+            if (verifiedPhone || smsOff) {
                 whatsappGroup.style.display = 'none';
                 if (whatsappInput) whatsappInput.removeAttribute('required');
             } else {
@@ -924,7 +929,7 @@ VIP.auth = (function () {
         // la página; el retiro va a exigir la verificación por SMS igual.
         const skipPhoneBtn = document.getElementById('changePasswordSkipPhoneBtn');
         if (skipPhoneBtn) {
-            skipPhoneBtn.style.display = (!verifiedPhone && VIP.state.passwordChangePending) ? '' : 'none';
+            skipPhoneBtn.style.display = (!verifiedPhone && !smsOff && VIP.state.passwordChangePending) ? '' : 'none';
         }
 
         // Campo "contraseña actual": se pide solo en el cambio voluntario con
@@ -932,7 +937,7 @@ VIP.auth = (function () {
         // primer ingreso o en el alta de teléfono (con OTP) no se pide.
         const currentPwGroup = document.getElementById('currentPasswordGroup');
         const currentPwInput = document.getElementById('currentPasswordInput');
-        const needCurrentPw = !VIP.state.passwordChangePending && !!verifiedPhone;
+        const needCurrentPw = !VIP.state.passwordChangePending && (!!verifiedPhone || smsOff);
         if (currentPwGroup) currentPwGroup.style.display = needCurrentPw ? '' : 'none';
         if (currentPwInput) {
             currentPwInput.value = '';
@@ -1070,7 +1075,8 @@ VIP.auth = (function () {
 
         // Cambio voluntario con teléfono ya verificado → se exige la contraseña actual.
         const currentPassword = (document.getElementById('currentPasswordInput')?.value || '');
-        if (verifiedPhone && !VIP.state.passwordChangePending && !currentPassword) {
+        const smsOff = _smsOff(); // #1022: sin SMS se cambia la clave sin teléfono (con la actual si no es el cambio obligatorio)
+        if ((verifiedPhone || smsOff) && !VIP.state.passwordChangePending && !currentPassword) {
             errorDiv.textContent = 'Ingresá tu contraseña actual';
             errorDiv.classList.add('show');
             return;
@@ -1080,7 +1086,7 @@ VIP.auth = (function () {
 
         // CASO A: el usuario ya tiene un teléfono verificado y NO está cambiándolo.
         // No se requiere OTP. Solo se cambia la contraseña.
-        if (verifiedPhone && !whatsappFull) {
+        if ((verifiedPhone || smsOff) && !whatsappFull) {
             return _commitPasswordChange({
                 newPassword,
                 closeAllSessions,

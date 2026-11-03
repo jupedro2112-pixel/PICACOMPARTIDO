@@ -799,6 +799,21 @@ document.addEventListener('change', function (ev) {
                                 <span id="regModeState" style="font-size:11.5px;color:#9ab;"></span>
                             </div>
                         </div>
+                        <!-- #1022 (owner 2026-11-03): SMS on/off + prefijo del nombre automático -->
+                        <div class="cbu-form" id="smsConfigForm" style="margin-bottom:14px;">
+                            <h3 style="margin:0 0 6px;">📲 SMS y nombres de usuario</h3>
+                            <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 8px;"><b>SMS apagado</b> = no sale ningún SMS (códigos ni SMS masivo) y <b>nada pide verificar el celular</b>:
+                                el registro desde el inicio entra sólo con el nombre, el retiro no pide verificar el teléfono ni código, y "Olvidé mi contraseña por SMS" avisa que hay que escribir a Soporte.
+                                Usalo mientras AWS no tenga habilitado el envío (si no, los códigos no llegan y la gente queda trabada). Al encenderlo, todo vuelve a pedir el SMS como antes.</p>
+                            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                                <label style="margin:0;display:flex;align-items:center;gap:8px;cursor:pointer;flex:1 0 100%;"><input type="checkbox" id="smsEnabledChk" style="width:auto;"> <b>Enviar SMS</b> (códigos de verificación por mensaje de texto)</label>
+                                <label style="margin:0;display:flex;align-items:center;gap:8px;flex:1 0 100%;">Prefijo del nombre automático:
+                                    <input type="text" id="usernamePrefixInp" maxlength="8" placeholder="pica" autocomplete="off" style="width:110px;">
+                                    <span style="font-size:11.5px;color:#9ab;">ej. <b id="usernamePrefixEx">picajuan27</b> · hasta 8 letras/números, vacío = sin prefijo. Lo usan la landing, la entrada rápida y "Crear usuario". Las cuentas ya creadas no cambian.</span></label>
+                                <button class="btn-primary btn-small" id="smsCfgSaveBtn" onclick="saveSmsConfig()"><span class="icon icon-save"></span> Guardar</button>
+                                <span id="smsCfgState" style="font-size:11.5px;color:#9ab;"></span>
+                            </div>
+                        </div>
                         <!-- #197 WEBHOOKS SALIENTES (réplica del #334/#346 del gemelo): registro / primera carga / carga / retiro a publicistas (solo admin general) -->
                         <div class="panel-subheader" style="margin-top: 24px;" id="webhooksHeader">
                             <h3>🔗 Webhooks salientes (avisos a publicistas)</h3>
@@ -4233,7 +4248,7 @@ Responder 2xx. Con 5xx / timeout se reintenta; con 4xx no.</pre>
                                 <!-- Defaults del alta rápida (pedido owner 2026-08-07): el usuario
                                      arranca con "gx" (el agente completa: gxhector2) y la clave con
                                      "asd123" (editable). Tras crear, ambos VUELVEN a estos defaults. -->
-                                <input type="text" id="paNewUsername" value="gx" maxlength="30" placeholder="ej: gxhector2" autocomplete="off" style="width:100%;padding:10px;background:#1a1a2e;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;box-sizing:border-box;">
+                                <input type="text" id="paNewUsername" value="" maxlength="30" placeholder="ej: picahector2" autocomplete="off" style="width:100%;padding:10px;background:#1a1a2e;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;box-sizing:border-box;">
                                 <small style="color:#888;font-size:11px;">Completá después del "gx" (ej. gxhector2). 3-30 caracteres: letras, números, punto, guion o guion bajo.</small>
                             </div>
                             <div>
@@ -4573,7 +4588,7 @@ Responder 2xx. Con 5xx / timeout se reintenta; con 4xx no.</pre>
                     <label for="newUserUsername">Usuario:</label>
                     <!-- Arranca con "gx" precargado (pedido owner 2026-08-07) — es solo
                          un default, el agente lo completa (gxhector2) o lo borra. -->
-                    <input type="text" id="newUserUsername" value="gx" placeholder="gxnombre">
+                    <input type="text" id="newUserUsername" value="" placeholder="nombre">
                 </div>
                 <div class="form-group">
                     <label for="newUserPassword">Contraseña:</label>

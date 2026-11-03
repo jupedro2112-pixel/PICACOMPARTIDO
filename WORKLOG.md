@@ -8,6 +8,23 @@
 
 ## Sesión 2026-11-01
 
+### 1022. 📲 SMS on/off y prefijo del nombre automático desde el panel (2026-11-03)
+- Owner: "que desde Configuración se pueda habilitar/deshabilitar SMS: está habilitado pero sin la habilitación de AWS no llega ningún código" +
+  "que el prefijo del nombre automático (hoy 'pica') se pueda cambiar desde Configuración, por landing o en Crear usuario del admin".
+- Antes: no había interruptor general (sólo `quickEntrySms` del registro y `withdrawOtpRequired`); el prefijo 'pica' estaba fijo en
+  `_picaUsernameBase` (#802) y los formularios "Crear usuario" del panel precargaban 'gx' fijo.
+- `Config['smsEnabled']` (default ON) + `getSmsEnabled()` (cache 15 s; si la base falla mantiene el último valor). `generateAndSendOTP` y
+  `sendSMS` de server.js son envolturas que no mandan nada con el SMS apagado. Apagado: el registro desde el inicio no pide celular
+  (`quickEntrySms` efectivo en `/api/landing/info`), el retiro no exige teléfono verificado ni código (`getWithdrawOtpRequired` = false),
+  tampoco el retiro manual del agente, el retiro viejo ni el bono por instalar; las rutas que sólo mandan códigos (registro, login por SMS,
+  olvidé mi contraseña, verificar teléfono, cambio de clave) responden 503 `SMS_DISABLED` con aviso de escribir a Soporte. La app recibe
+  `smsEnabled` en `/api/platforms` (withdraw.js y el cambio de clave no piden teléfono; sin teléfono el cambio voluntario pide la clave actual).
+  El modo de registro 'sms' (usuario + clave + celular) NO se adapta: con SMS apagado usar la entrada rápida.
+- `Config['usernamePrefix']` (default 'pica', 0-8 letras/números) + `getUsernamePrefix()`; `_picaUsernameBase(name, prefix)` acorta el nombre
+  para que siempre entren 3 números en los 18 caracteres. Rutas `GET/POST /api/admin/sms-config` (POST sólo admin) y `GET /api/admin/username-prefix`
+  (todo el staff, también publisher_admin). Panel → Configuración → "📲 SMS y nombres de usuario"; "Crear usuario" (admin y publicista) precarga el
+  prefijo (antes 'gx'). PWA v660 · admin SW v236.
+
 ### 1021. SMS de códigos con la marca PICA ROJA y sin link (2026-11-03)
 - Owner: AWS rechazó el acceso a SMS (cuenta de pautanuevasantino, caso del 2026-10-06) y se va a volver a pedir con rapidogirox.com.
   Los SMS decían "VIPCARGAS … vipcargas .com" (el espacio era para esquivar filtros antispam: AWS rechaza eso y no coincidía con el sitio

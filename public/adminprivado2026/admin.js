@@ -604,7 +604,8 @@ function setupRoleBasedUI() {
         // Defaults del alta rápida (pedido owner 2026-08-07): usuario "gx" y
         // clave "asd123" precargados — solo si están vacíos, no pisa lo tipeado.
         const paU = document.getElementById('paNewUsername');
-        if (paU && !paU.value.trim()) paU.value = 'gx';
+        if (paU && !paU.value.trim()) { paU.value = _userPrefixNow(); paU.dataset.prefilled = paU.value; } // #1022: prefijo de Configuración
+        refreshUserPrefix();
         const paP = document.getElementById('paNewPassword');
         if (paP && !paP.value.trim()) paP.value = 'asd123';
         // Cargar stats iniciales + lista de usuarios paginada + influencers.
@@ -1052,9 +1053,9 @@ async function paCreateUser() {
     }
     // "gx" solo = quedó el default sin completar (el backend igual lo
     // rechazaría por mínimo 3 caracteres, pero avisamos claro acá).
-    if (username.toLowerCase() === 'gx') {
+    if (username.toLowerCase() === 'gx' || (_userPrefixNow() && username.toLowerCase() === _userPrefixNow())) { // #1022
         if (errBox) {
-            errBox.textContent = 'Completá el nombre de usuario después de "gx" (ej: gxhector2)';
+            errBox.textContent = 'Completá el nombre de usuario después de "' + username + '" (ej: ' + username + 'hector2)';
             errBox.style.display = 'block';
         }
         return;
@@ -1113,7 +1114,7 @@ async function paCreateUser() {
         }
         // Reset del alta rápida (pedido owner 2026-08-07): el usuario VUELVE al
         // default "gx" (listo para completar gxhector2) y la clave a "asd123".
-        usernameEl.value = 'gx';
+        usernameEl.value = _userPrefixNow(); usernameEl.dataset.prefilled = usernameEl.value; // #1022
         passwordEl.value = 'asd123';
         phoneEl.value = '';
         if (influencerEl) influencerEl.value = '';
@@ -5752,7 +5753,8 @@ function showCreateUserModal() {
     // el agente lo completa (ej. gxhector2). Solo si está vacío — no pisa lo
     // que haya quedado a medio tipear.
     const u = document.getElementById('newUserUsername');
-    if (u && !u.value.trim()) u.value = 'gx';
+    if (u && !u.value.trim()) { u.value = _userPrefixNow(); u.dataset.prefilled = u.value; } // #1022: prefijo de Configuración
+    refreshUserPrefix();
     showModal('createUserModal');
 }
 
@@ -5790,7 +5792,7 @@ async function handleCreateUser() {
             hideModal('createUserModal');
             loadUsers();
             // Limpiar formulario (el usuario vuelve al default "gx" para el próximo alta)
-            document.getElementById('newUserUsername').value = 'gx';
+            { const _nu = document.getElementById('newUserUsername'); _nu.value = _userPrefixNow(); _nu.dataset.prefilled = _nu.value; } // #1022
             document.getElementById('newUserPassword').value = '';
             document.getElementById('newUserEmail').value = '';
             document.getElementById('newUserPhone').value = '';
@@ -6208,6 +6210,49 @@ async function saveRegistrationMode() {
     } catch (_) { showToast('Error de conexión', 'error'); }
 }
 window.loadRegistrationMode = loadRegistrationMode; window.saveRegistrationMode = saveRegistrationMode;
+// #1022: SMS on/off + prefijo del nombre automático (Configuración → "📲 SMS y nombres de usuario").
+let _userPrefix = null; // null = todavía no se leyó del server
+function _userPrefixNow() { return _userPrefix === null ? 'pica' : _userPrefix; }
+async function refreshUserPrefix() {
+    try { const r = await authFetch('/api/admin/username-prefix'); if (!r.ok) return; const j = await r.json(); if (typeof j.prefix === 'string') _userPrefix = j.prefix; } catch (_) {}
+    _prefillUsernameInputs();
+}
+// Precarga el prefijo en los campos de "Crear usuario" sólo si están vacíos o tienen un prefijo sin completar (no pisa lo tipeado).
+function _prefillUsernameInputs(force) {
+    ['newUserUsername', 'paNewUsername'].forEach(function (id) {
+        const el = document.getElementById(id); if (!el) return;
+        const v = el.value.trim().toLowerCase();
+        if (force || !v || v === 'gx' || v === 'pica' || el.dataset.prefilled === v) { el.value = _userPrefixNow(); el.dataset.prefilled = el.value; }
+    });
+}
+async function loadSmsConfig() {
+    try {
+        const r = await authFetch('/api/admin/sms-config'); if (!r.ok) return; const j = await r.json();
+        const chk = document.getElementById('smsEnabledChk'), inp = document.getElementById('usernamePrefixInp'), btn = document.getElementById('smsCfgSaveBtn'), st = document.getElementById('smsCfgState');
+        if (chk) { chk.checked = j.smsEnabled !== false; chk.disabled = !j.canEdit; }
+        if (inp) { inp.value = j.usernamePrefix || ''; inp.disabled = !j.canEdit; inp.oninput = _smsCfgExample; }
+        if (btn) btn.style.display = j.canEdit ? '' : 'none';
+        if (st) st.textContent = 'Ahora: SMS ' + (j.smsEnabled !== false ? '✅ ENCENDIDO' : '⛔ APAGADO (nada pide verificar el celular)') + ' · prefijo "' + (j.usernamePrefix || '') + '"';
+        _userPrefix = j.usernamePrefix || ''; _smsCfgExample();
+    } catch (_) {}
+}
+function _smsCfgExample() {
+    const inp = document.getElementById('usernamePrefixInp'), ex = document.getElementById('usernamePrefixEx'); if (!inp || !ex) return;
+    ex.textContent = String(inp.value || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) + 'juan27';
+}
+async function saveSmsConfig() {
+    const chk = document.getElementById('smsEnabledChk'), inp = document.getElementById('usernamePrefixInp');
+    const smsEnabled = !!(chk && chk.checked); const usernamePrefix = inp ? inp.value.trim() : undefined;
+    if (!smsEnabled && !confirm('¿Apagar los SMS?\n\nNo va a salir ningún código y nada va a pedir verificar el celular (registro y retiros sin SMS).')) return;
+    try {
+        const r = await authFetch('/api/admin/sms-config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ smsEnabled, usernamePrefix }) });
+        const j = await r.json(); if (!r.ok) { showToast(j.error || 'No se pudo guardar', 'error'); return; }
+        _userPrefix = j.usernamePrefix || ''; _prefillUsernameInputs(true);
+        showToast('Guardado: SMS ' + (j.smsEnabled ? 'encendido' : 'apagado') + ' · prefijo "' + (j.usernamePrefix || '') + '"', 'success');
+        loadSmsConfig();
+    } catch (_) { showToast('Error de conexión', 'error'); }
+}
+window.loadSmsConfig = loadSmsConfig; window.saveSmsConfig = saveSmsConfig; window.refreshUserPrefix = refreshUserPrefix;
 // #589: Página de la app (dominio público) editable
 async function loadPublicBaseUrl() {
     try {
@@ -6788,6 +6833,7 @@ async function loadInstallBonusPct() {
     try { loadPublicBaseUrl(); } catch (_) {} // #589
     try { loadDatosIaPin(); } catch (_) {} // #590
     try { loadRegistrationMode(); } catch (_) {} // #421
+    try { loadSmsConfig(); } catch (_) {} // #1022
     try { loadBankOutage(); } catch (_) {} // #442
     try { loadWebhooksCard(); } catch (_) {} // #562 webhooks salientes
     const form = document.getElementById('installBonusPctForm');
