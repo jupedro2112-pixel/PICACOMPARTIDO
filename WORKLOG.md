@@ -8,6 +8,11 @@
 
 ## Sesión 2026-11-01
 
+### 1018. Actualizar estando adentro de Girox vuelve a abrir Girox (2026-11-03)
+- Owner: "si actualizan para arriba, que siempre quede dentro de Girox". #1017 cubría el menú Girox directo; faltaba quien abrió Girox desde
+  otro menú. `openPlatform` marca `sessionStorage vip_casino_was` (cerrar el casino la borra) y `maybeShowMenuChooser` lo reabre tras elegir
+  el menú (salvo en Girox directo, que ya lo abre). Va en la misma PWA v659 (todavía no publicada).
+
 ### 1017. Girox se mantiene al actualizar + alta rápida a Girox + botones de Píxeles de Meta (2026-11-03)
 - Owner: "si está en la página de Girox y actualiza, que no vaya al menú completo". Sin menú elegido a mano, #980 mandaba al completo
   hasta la 1ª carga ⇒ quien entraba por la landing a Girox volvía al completo al recargar. Ahora `localStorage vip_menu_last` guarda el

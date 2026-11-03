@@ -411,7 +411,14 @@
     // volvió después de 10 minutos en segundo plano. La preferencia guardada sólo define dónde arranca mientras tanto.
     const MENU_REASK_MS = 10 * 60 * 1000;
     let _hiddenAt = 0;
+    // #1018 (owner): "si actualizan la página estando adentro de Girox, que siempre quede adentro de Girox": el casino abierto se marca en
+    // sessionStorage (sobrevive al recargar la misma pestaña/app) y se vuelve a abrir después de elegir el menú; cerrarlo borra la marca.
     function maybeShowMenuChooser() {
+        let was = null; try { was = sessionStorage.getItem('vip_casino_was'); } catch (_) {}
+        _maybeShowMenuChooser();
+        if (was && _curPref !== 'girox') setTimeout(() => { try { if (!(VIP.ui && VIP.ui._casinoOpen)) openPlatform(was); } catch (_) {} }, 700); // en Girox directo ya lo abre _giroxDirect
+    }
+    function _maybeShowMenuChooser() {
         // #704 (owner): entrada desde la landing (`ir=girox`) → directo a la pantalla de Girox; el menú lo elige después desde "Menú".
         if (VIP.state && VIP.state._openGiroxAfterLogin) { VIP.state._openGiroxAfterLogin = false; setMenuPref('girox', { quiet: true, auto: true }); return; }
         const only = MENU_ORDER.filter(_menuOn); if (only.length === 1) { setMenuPref(only[0], { quiet: true, auto: true }); return; } // #635: un solo menú activo → directo
@@ -2248,6 +2255,7 @@
     }
     function openPlatform(platformId, opts) {
         const test = !!(opts && opts.test);
+        if (!test) { try { sessionStorage.setItem('vip_casino_was', String(platformId || 'girox')); } catch (_) {} } // #1018: estaba adentro de Girox
         // #695 (owner): "en Entrar a la página no figura el chat de carga rápida" → el casino con sesión se abre SIEMPRE ADENTRO
         // (overlay con Carga rápida, Retirar e Ir a Soporte), también en navegador. La pestaña aparte (/jugar.html) queda sólo
         // para el modo prueba (sitio público, sin sesión) fuera de la app instalada. Antes (#261) en navegador iba aparte.

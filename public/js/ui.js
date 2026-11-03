@@ -1623,6 +1623,7 @@ VIP.ui.closeCasinoFrame = function() {
   overlay.style.display = 'none';
   document.body.style.overflow = '';
   VIP.ui._casinoOpen = false;
+  try { sessionStorage.removeItem('vip_casino_was'); } catch (_) {} // #1018: lo cerró la persona ⇒ al actualizar no se reabre
 
   // Al volver, refrescar el saldo: es muy probable que haya cambiado jugando.
   if (VIP.ui.syncBalance) { try { VIP.ui.syncBalance(); } catch (e) {} }
