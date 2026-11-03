@@ -4,9 +4,18 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-11-01**
+> **Última actualización: 2026-11-03**
 
 ## Sesión 2026-11-01
+
+### 1020. Landing de Vercel (carpeta `landing/`) apunta a rapidogirox.com (2026-11-03)
+- Owner: "la landing de la carpeta landing, que apunte a rapidogirox.com para que funcione". `API_BASE_DEFAULT` = `https://rapidogirox.com`
+  (antes picaroja.com, #570). Con eso info, píxel, alta, redirección a la app y "Entrar a mi cuenta" van a ese dominio.
+- Verificado en vivo: rapidogirox.com responde `/api/landing/info` (v659, `baseUrl` = rapidogirox.com ⇒ el `accessUrl` del alta pasa el filtro de
+  #553) y el preflight CORS del signup abre a cualquier origen. OJO: es OTRO deploy/config que picaroja.com (reembolsos y SMS distintos,
+  registro en modo 'invite') ⇒ el código de campaña del link tiene que existir y estar activo en ESE backend.
+- Antes del cambio, picaroja-landing.vercel.app y grupospicaroja.com seguían con picaroja.com: hay que redeployar en Vercel (auto si está
+  conectado al repo con root `landing/`).
 
 ### 1019. Cartel "¡Actualizamos!" adentro de Girox para los clientes que ya estaban (2026-11-03)
 - Owner: mensaje informativo al entrar a Girox ("Actualizamos! Contás con muchos beneficios y sorteos, en nuestro menú podés revisar todo")

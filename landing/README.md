@@ -12,7 +12,8 @@ archivos reales, `img/` incluido). ⚠️ NO subir el `vercel.json`/`blank.html`
 entra por VPN/Tor, como el owner desde Tails). Se sacaron el 2026-10-19 (#543).
 
 Antes de subir, revisá en `index.html`:
-- `API_BASE_DEFAULT` = `https://picaroja.com` (backend real de PICA ROJA, #570). NO `vipcargas.com` (es VIPCARGAS, otra página) ni
+- `API_BASE_DEFAULT` = `https://rapidogirox.com` (#1020, owner 2026-11-03; antes `https://picaroja.com`, #570). El código de campaña
+  de la URL tiene que existir y estar ACTIVO en ESE backend (está en modo registro 'invite'). NO `vipcargas.com` (es VIPCARGAS, otra página) ni
   `chat1girox.com` ni el host `.elasticbeanstalk.com` (sólo HTTP).
 - Ese dominio tiene que tener el dominio de la landing en `ALLOWED_ORIGINS` (CORS), si no el registro falla en el navegador.
 - `BONUS_BIG` / `BONUS_SUB`: la oferta REAL (misma que ve el usuario; Meta penaliza el cloaking).
