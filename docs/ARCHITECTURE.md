@@ -5,7 +5,8 @@
 > verdad y este doc puede quedar viejo. Si encontrás algo desactualizado acá, corregilo
 > (regla permanente en CLAUDE.md: este doc se actualiza junto con WORKLOG.md).
 >
-> Última actualización: **2026-10-16** — MULTI-PLATAFORMA (#219): capa `src/platforms/` (girox +
+> Última actualización: **2026-11-04** — **hasta 3 CUENTAS hgcash con cuenta ACTIVA rotable (#1024, réplica #223/#223b de
+> CARGASGIROXactivo; ver "Cuentas hgcash múltiples" en la auto-carga del banco)**. Antes: **2026-10-16** — MULTI-PLATAFORMA (#219): capa `src/platforms/` (girox +
 > esqueleto de Ganamos), pregunta "¿dónde querés jugar?" en la auto-carga, derivación por link a la
 > plataforma sin API, `platform` en Transaction/PendingPayout/BankMovement (§2, §4.10, §5 AUTO-CARGA,
 > §7, §9; detalle operativo en `docs/PLATFORMS.md`). Antes: 2026-10-07 — hgcash desde el panel: credenciales cifradas
@@ -869,6 +870,22 @@ VIPCARGAS con su JWT, y el cliente nunca más necesita conocer su clave del casi
 - **SLA demoras**: reloj en ChatStatus (`delayClockOnUserMessage`/`delayClockResolve`);
   responder (mensaje/comando/carga/retiro/CBU) o cerrar lo resuelve; sobre-umbral →
   ChatDelay. Reporte `GET /api/admin/chat-delays` (solo admin).
+
+  **Cuentas hgcash múltiples (#1024, réplica #223/#223b de CARGASGIROXactivo):** `Config['hgcashAccounts'] = { accounts: [{ key, label,
+  tokenEnc, secretEnc, …Last4, accountId, accountName, cbu, alias, bank, titular, incomingEnabled }], activeKey, switchedBy/At, incomingMode }`,
+  cifrado igual que antes; cada instancia lo descifra en memoria a los 8 s y cada **15 s** (`_hgAccounts`, `_hgActiveKey`, `_hgIncomingMode`).
+  `Config['hgcashCredentials']` (una sola cuenta) se migra solo a `a1` la primera vez; panel > SSM (`HGCASH_API_TOKEN` / `HGCASH_WEBHOOK_SECRET`
+  valen solo sin cuentas en el panel). La **ACTIVA** paga (`hgcashPay.setTokenOverride`), responde el saldo y define lo que ve el cliente
+  (`_hgApplyActiveToConfigs` → `hgcash.accountName/cbu/accountId` y `Config['cbu']`). **TODAS reciben:** `_hgcashWebhookSecretEntries()` → el
+  webhook acepta la firma de cualquiera y guarda por cuál entró en `BankMovement.accountKey`; `_comprobanteToOurBank` reconoce el CBU/titular
+  de cualquiera que RECIBA. **Qué cuentas cargan solas:** `incomingMode 'all'|'active'` + `accounts[].incomingEnabled` → `_hgAccountReceives(a)`;
+  `_hgMovementAutoOff(m)` da el motivo y el movimiento queda `pending` con `chargeError` (`hgcashMatchFromMovement` lo saltea,
+  `hgcashMatchFromComprobante` no lo toma de candidato). **Cada pago recuerda su cuenta** (`PendingPayout.hgAccountKey`):
+  `hgcashService` acepta `token` opcional en todas las llamadas y las consultas de estado/recibo pasan `_hgTokenFor(key)`; el pago recarga las
+  cuentas antes de resolver (`_loadHgcashCredentials()`). Endpoints: `GET/POST /api/admin/hgcash/accounts`, `DELETE /:key`, `POST /:key/activate`,
+  `POST /accounts/incoming-mode`, `POST /:key/incoming` (ver/rotar/modo/pausa: admin, depositor, withdrawer; credenciales: solo admin); legacy
+  `POST/DELETE /api/admin/hgcash/credentials` siguen (escriben sobre la activa / borran todas). Panel: card "🏦 Cuentas hgcash (hasta 3)" en
+  Comandos → Banco automático; movimientos llevan `hgAccount {key,label,active}`.
 
 ## 6. Front-end: PWA cliente y panel admin
 

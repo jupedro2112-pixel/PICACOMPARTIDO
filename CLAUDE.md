@@ -164,6 +164,16 @@ Landing de pauta en Vercel: grupospicaroja.com (carpeta `landing/`; desde #1020 
   **panel > SSM**; el webhook acepta la firma con cualquiera de los dos secretos). El
   reenvío de avisos a otras páginas sale de `Config['hgcashFanout']` (si existe) o de
   `HGCASH_FANOUT_URL`. Rotar `JWT_SECRET` ⇒ recargar las credenciales en el panel.
+- **Cuentas hgcash (hasta 3, #1024 — réplica #223/#223b de CARGASGIROXactivo):** hasta 3 cuentas cargadas desde el
+  panel (cifradas en `Config['hgcashAccounts']` con clave derivada de JWT_SECRET; panel > SSM; lo de una sola cuenta de antes se
+  migra solo a `a1`) y UNA activa que se rota con el botón "USAR ESTA" (card "🏦 Cuentas hgcash" de Comandos → Banco automático;
+  la pueden tocar admin/depositor/withdrawer). La activa paga y es lo que ve el cliente (al activar se reescribe `Config['cbu']`);
+  **las cargas entran por TODAS** (el webhook acepta cualquiera de los secretos y etiqueta `BankMovement.accountKey`) salvo que el
+  panel diga "solo la en uso" o pause una cuenta (`incomingMode` / `incomingEnabled` → `_hgAccountReceives`; lo pausado queda pendiente en Movimientos del banco,
+  no se carga solo — todo matcheo automático nuevo tiene que respetar `_hgMovementAutoOff(m)`). Un pago recuerda su cuenta
+  (`hgAccountKey`): toda consulta nueva a hgcash sobre un pago existente tiene que pasar `_hgTokenFor(x.hgAccountKey)`, y todo
+  flujo nuevo que pague tiene que guardar `hgAccountKey: _hgActiveKey`. No volver a leer `process.env.HGCASH_API_TOKEN` directo:
+  usar `hgcashPay.getToken()` / `_hgcashWebhookSecretEntries()`. Las escrituras puntuales sobre `Config['hgcash']` siguen yendo por `_hgcashSetFields` (#1012).
 - **Transaction** (cargas/retiros) es permanente (sin TTL). **Message** tiene TTL de 3
   días. La analítica de clientes se basa en Transaction.
 - **Montos en PESOS.** ⚠️ Ojo si mirás código o docs viejos: JUGAYGANA trabajaba en
