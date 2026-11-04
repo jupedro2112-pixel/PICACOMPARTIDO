@@ -5,7 +5,7 @@
 > verdad y este doc puede quedar viejo. Si encontrás algo desactualizado acá, corregilo
 > (regla permanente en CLAUDE.md: este doc se actualiza junto con WORKLOG.md).
 >
-> Última actualización: **2026-11-04** — **hasta 3 CUENTAS hgcash con cuenta ACTIVA rotable (#1024, réplica #223/#223b de
+> Última actualización: **2026-11-04** — **sección propia "🏛️ Bancos — Configuración" en el panel (#1025, réplica #224 de CARGASGIROXactivo: todo lo de bancos salió de COMANDOS; mismos ids/endpoints)** y **hasta 3 CUENTAS hgcash con cuenta ACTIVA rotable (#1024, réplica #223/#223b de
 > CARGASGIROXactivo; ver "Cuentas hgcash múltiples" en la auto-carga del banco)**. Antes: **2026-10-16** — MULTI-PLATAFORMA (#219): capa `src/platforms/` (girox +
 > esqueleto de Ganamos), pregunta "¿dónde querés jugar?" en la auto-carga, derivación por link a la
 > plataforma sin API, `platform` en Transaction/PendingPayout/BankMovement (§2, §4.10, §5 AUTO-CARGA,
@@ -885,7 +885,7 @@ VIPCARGAS con su JWT, y el cliente nunca más necesita conocer su clave del casi
   cuentas antes de resolver (`_loadHgcashCredentials()`). Endpoints: `GET/POST /api/admin/hgcash/accounts`, `DELETE /:key`, `POST /:key/activate`,
   `POST /accounts/incoming-mode`, `POST /:key/incoming` (ver/rotar/modo/pausa: admin, depositor, withdrawer; credenciales: solo admin); legacy
   `POST/DELETE /api/admin/hgcash/credentials` siguen (escriben sobre la activa / borran todas). Panel: card "🏦 Cuentas hgcash (hasta 3)" en
-  Comandos → Banco automático; movimientos llevan `hgAccount {key,label,active}`.
+  sección **🏛️ Bancos — Configuración** del panel (#1025, debajo de Comandos, solo admin general; antes en Comandos → Banco automático); movimientos llevan `hgAccount {key,label,active}`.
 
 ## 6. Front-end: PWA cliente y panel admin
 
